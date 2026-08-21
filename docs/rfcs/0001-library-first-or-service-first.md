@@ -4,7 +4,7 @@
 
 Discussion — opened 2026-08-21. clanker's RFC 0019 (option T, Packaging)
 names this as "the new project's first design decision". Blocking question
-for [PRD 0005](../prds/0005-embedding-and-clanker-plugin.md) phases 1 and 3;
+for [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md) phases 1 and 3;
 the core ([PRD 0001](../prds/0001-ledger-core.md)) can start before it is
 decided.
 
@@ -29,10 +29,12 @@ equals doubles the stable surface before there is one user.
 
 **Drivers.**
 
-1. clanker is the first and designing consumer: a Zig 0.16 musl static binary
-   with two fetched dependencies, a rule that `serve` owns sockets, a sandbox
-   whose guests never get a path or a socket, and a stated non-goal of a
-   second daemon (clanker PRD 0011).
+1. Any Zig host must be able to use it with nothing stood up beside it
+   ([ADR 0003](../adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
+   The first host, clanker, is the strictest known instance of that: a Zig
+   0.16 musl static binary with two fetched dependencies, a rule that `serve`
+   owns sockets, a sandbox whose guests never get a path or a socket, and a
+   stated non-goal of a second daemon (clanker PRD 0011).
 2. Public release: non-Zig consumers and operators need *some* way in that
    does not require linking Zig.
 3. One implementation of every rule: whichever surface is secondary must be a
@@ -180,9 +182,10 @@ unmaintainable for a host on a different toolchain pin; a non-Zig consumer
 arriving before clanker's `ck_state`, which would make B's day-one HTTP the
 faster path.
 
-**Rationale.** Driver 1 is decisive today: the one designing consumer forbids
-a second daemon and cannot scope a guest to a port, so B's strengths are
-unusable by it. A keeps the size-1 case a function call (driver 4) and makes
+**Rationale.** Driver 1 is decisive: "nothing stood up beside the host" is
+the project's defining property (ADR 0003), and the strictest known host
+additionally forbids a second daemon and cannot scope a guest to a port, so
+B's strengths are unusable by it. A keeps the size-1 case a function call (driver 4) and makes
 driver 3 structural rather than disciplinary. C pays for a consumer that does
 not exist. D is attractive and is kept open by specifying the protocol, but
 a client that must sign and verify is too heavy to be the *only* way in for
@@ -217,5 +220,5 @@ the protocol clean enough that D stays possible".
 - clanker PRD 0011 (mesh) — "no second daemon", "serve owns sockets".
 - [Research 0001](../research/0001-evidence-carried-from-clanker-rfc-0019.md)
   — dqlite/rqlite/etcd shapes as surveyed there.
-- [PRD 0005](../prds/0005-embedding-and-clanker-plugin.md) — the two routes
+- [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md) — the two routes
   into clanker.

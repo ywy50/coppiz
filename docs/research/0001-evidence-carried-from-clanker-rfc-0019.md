@@ -60,10 +60,17 @@ inherit as requirements?
 - **Freshness:** clanker verified most external claims at source on
   2026-08-18 and 2026-08-19. Licences and release states age fast.
 
-## Findings that become spine requirements
+## Findings that become spine constraints
+
+spine is general-purpose; these are the constraints of its *first* host,
+kept because they are the strictest known, not because clanker is the
+target. A row marked *general* would hold for any host; the rest are
+clanker-specific and must not leak into the library's API.
 
 | Finding (clanker's) | What spine does with it | Where |
 |---|---|---|
+| clanker vendors the SQLite amalgamation and writes per-session databases directly in-process; cross-process contention is SQLite file locking plus a 5 s busy timeout (read 2026-08-21: its ADR 0033, `src/util/sqlite.zig`) | the "several processes, one file" property is the one SQLite habit spine v1 lacks — *general* | PRD 0005, OQ 47 |
+| clanker's mesh already replicates a session's `events` stream to peers at `cursor + 1` over loopback HTTP (ADR 0033) | that stream is a one-author spine ledger; the first consumer shape — *general* (any single-writer stream) | PRD 0005 |
 | Guests reach state only through a `ck_*` host function under a manifest grant, never a path or socket | The library runs inside the host's `serve`; guests never see spine | PRD 0005 route A |
 | `networkAllowed` matches hostname and never port, so a loopback grant admits any local service | A sidecar + HTTP route is for experiments only | PRD 0005 route B, RFC 0001 |
 | "No second daemon" (PRD 0011 non-goal) | Library-first | RFC 0001 |

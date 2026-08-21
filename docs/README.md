@@ -11,11 +11,16 @@ and what we learn from an external project in [docs/digests/](digests/).
 Cross-cutting unknowns are numbered in [open-questions.md](open-questions.md);
 terms are defined once in [glossary.md](glossary.md).
 The operator's original brief (2026-08-21), which every PRD cites as "the brief",
-is [qnd-notes.md](../qnd-notes.md) at the repository root.
+is [qnd-notes.md](../qnd-notes.md) at the repository root. Clarified the same
+day, in conversation: spine is for anyone facing this class of problem, not
+for clanker specifically; it must be a library to "just use" the way SQLite,
+dqlite or rqlite are, with everything built in and no extra infrastructure;
+slim to start, expandable and naturally scalable. That clarification is
+[ADR 0003](adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md).
 
 The taxonomy is clanker's, deliberately: spine was founded by clanker's
 [RFC 0019](https://github.com/maci0/clanker/blob/main/docs/rfcs/0019-shared-state-store.md)
-and will be read by the same people. Neither `rfc` nor `research` requires
+and the conventions are already proven there. Neither `rfc` nor `research` requires
 the other, and a PRD is never a decision (that is an ADR) and never the
 shipped narrative (that is the roadmap).
 
@@ -28,13 +33,15 @@ shipped narrative (that is the roadmap).
 | how cleanup works in an append-only store | [PRD 0002](prds/0002-ttl-and-staleness.md), [ADR 0002](adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md) |
 | who is leader at 1, 2, 6 members, and what a partition does | [PRD 0003](prds/0003-membership-and-leadership.md), [RFC 0002](rfcs/0002-how-join-order-is-made-unspoofable.md) |
 | where settings live and why not in a config file | [PRD 0004](prds/0004-settings.md) |
-| how a program embeds it, and how clanker will | [PRD 0005](prds/0005-embedding-and-clanker-plugin.md), [RFC 0001](rfcs/0001-library-first-or-service-first.md) |
+| how a program embeds it, with clanker as the worked example | [PRD 0005](prds/0005-embedding-the-library-as-the-product.md), [RFC 0001](rfcs/0001-library-first-or-service-first.md) |
 | what is not decided | [open-questions.md](open-questions.md) |
 
 ## Architecture (as designed; nothing is implemented yet)
 
 spine is a replicated, append-only ledger written in Zig 0.16 with the
-standard library only ([ADR 0001](adrs/0001-zig-0-16-standard-library-only-for-the-core.md)).
+standard library only ([ADR 0001](adrs/0001-zig-0-16-standard-library-only-for-the-core.md)),
+and everything a cluster needs ships inside the library
+([ADR 0003](adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
 Every member holds every ledger in full. The design rests on one
 separation and one rule:
 
@@ -81,12 +88,20 @@ Pure logic (codecs, fold, election, merge, expiry) is kept I/O-free so it
 can be unit-tested and driven by a deterministic simulator
 ([OQ 27](open-questions.md)).
 
-## Relationship to clanker
+## Hosts
 
-clanker is the first consumer and the reason the project exists. Its RFC
-0019 (tier 1: a `ck_state` host channel in `serve`; tier 2 option T: this
-project) and its stage-1 spike note define the first integration: owner
-streams (`improvements.jsonl` and friends) as ledgers, replicated between
-instances, behind `ck_state`, with guests never seeing a path or a socket.
-Everything spine inherits from that work is listed with its read dates in
-[research 0001](research/0001-evidence-carried-from-clanker-rfc-0019.md).
+spine is a library any program links; the `spine` binary is that library
+wrapped for programs that would rather talk to a process. Nothing in `src/`
+knows about any particular host ([PRD 0005](prds/0005-embedding-the-library-as-the-product.md)).
+
+clanker is the first host and the origin of the project. Its RFC 0019 (tier
+1: a `ck_state` host channel in `serve`; tier 2 option T: this project)
+defines the first integration. What clanker does today — per-session SQLite
+written directly in-process, session event streams replicated to mesh peers
+over loopback HTTP at `cursor + 1`, JSONL streams with no replication — and
+how spine would slot in are worked through as the example host in PRD 0005.
+Everything spine inherits from clanker's survey is listed with its read dates
+in [research 0001](research/0001-evidence-carried-from-clanker-rfc-0019.md);
+its sandbox and single-binary constraints are the strictest known host
+constraints, which is why they are kept in view, not because they are the
+target.

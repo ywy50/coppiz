@@ -6,6 +6,13 @@ It is in the design phase: read [docs/README.md](docs/README.md) before
 touching anything, and [docs/open-questions.md](docs/open-questions.md)
 before deciding anything.
 
+spine is general-purpose. clanker is the first host and the origin, and its
+constraints (static musl binary, sandboxed guests, no second daemon) are kept
+in view because they are the strictest known — but nothing under `src/` may
+know about clanker or any other host, and no API shape may exist only to suit
+one ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md),
+[ADR 0003](docs/adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
+
 ## Build & test
 
 - `zig build` builds the `spine` node; `zig build run` runs it; `zig build

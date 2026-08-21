@@ -35,11 +35,13 @@ the phases.
    membership fold, election function, epochs and merge, wire protocol
    ([OQ 19](open-questions.md)), node loop, admission, reconfigure
    handover. Gate: e2e (a)–(e).
-7. **Embedding and the node binary** — [PRD 0005](prds/0005-embedding-and-clanker-plugin.md):
-   public library API, `examples/embed/`, the `spine` CLI, `doctor`, `status`.
-8. **clanker integration** — PRD 0005 phase 4: a clanker branch with
-   `ck_state` over spine, the improvements ledger replicated between two
-   instances, measured against the spike note's three journeys.
+7. **Embedding and the node binary** — [PRD 0005](prds/0005-embedding-the-library-as-the-product.md):
+   public library API, `examples/` (single, cluster, sidecar), the `spine`
+   CLI, `doctor`, `status`.
+8. **First host integration (clanker)** — PRD 0005 phase 5: a clanker branch
+   with `ck_state` over spine, one stream replicated between two instances,
+   measured against its spike note's three journeys. A second, unrelated
+   host example follows to keep the API general ([OQ 46](open-questions.md)).
 9. **First public release** — name ([OQ 16](open-questions.md)), licence
    ([OQ 18]), reopened claims ([OQ 40]), CI ([OQ 45]), rolling-upgrade
    procedure ([OQ 26]), backup runbook ([OQ 39]).

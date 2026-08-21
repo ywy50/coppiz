@@ -5,7 +5,7 @@
 Draft — 2026-08-21. Nothing is implemented; `src/root.zig` is a placeholder.
 This PRD is the data model every other PRD builds on: [0002](0002-ttl-and-staleness.md)
 (TTL and staleness), [0003](0003-membership-and-leadership.md) (membership,
-leadership), [0004](0004-settings.md) (settings), [0005](0005-embedding-and-clanker-plugin.md)
+leadership), [0004](0004-settings.md) (settings), [0005](0005-embedding-the-library-as-the-product.md)
 (embedding). Terms are defined once in [the glossary](../glossary.md).
 
 Source of truth once shipped: `src/ledger/` (entry and slot codecs, chain
@@ -14,15 +14,19 @@ verification, segment storage). Until then this document is the spec and
 
 ## Problem
 
-clanker's RFC 0019 surveyed seventeen stores and found no general-purpose,
-Zig-native, replicated store that a Zig program can embed the way it embeds
-SQLite, and that grows from one process to a fleet without an operator
-standing up a cluster first. The operator's direction (2026-08-19, recorded in
-RFC 0019 option T) was to found that store as its own public project. This is
-it.
+A Zig program that wants a replicated, durable, append-only log today has
+two choices: run infrastructure beside itself (etcd, a database cluster, a
+replication daemon), or write files and hope. There is no library that a Zig
+program embeds the way it embeds SQLite — open a directory, append, read —
+whose replication, election and cleanup are already inside, and which grows
+from one process to a fleet without an operator standing up a cluster first.
+clanker's RFC 0019 surveyed seventeen stores and confirmed that gap; the
+operator's direction (2026-08-19, clarified 2026-08-21) was to found the
+missing store as its own public, general-purpose project, with clanker as its
+first host rather than its owner. This is it.
 
-The constraints that shape the core, taken from the brief (2026-08-21) and
-from RFC 0019's drivers:
+The constraints that shape the core, taken from the brief (2026-08-21, with
+the clarification of the same day) and from RFC 0019's drivers:
 
 - **Append-only.** Entries are never edited in place. The only mutations are
   the two [PRD 0002](0002-ttl-and-staleness.md) allows — TTL expiry and an
@@ -38,9 +42,16 @@ from RFC 0019's drivers:
   join order). clanker's improve ledger has already had a prefix silently
   rewritten once by a defective writer (RFC 0019 open question 14), which is
   the concrete argument for a hash chain even under a single operator.
-- **Embeddable first.** A Zig library with no libc requirement beyond what the
-  host links, so clanker keeps its single static binary (ADR 0001 of this
-  repo: Zig 0.16; RFC 0001: library vs service).
+- **Embeddable, batteries included.** A Zig library with no libc requirement
+  beyond what the host links and no infrastructure beside it: storage,
+  replication, election and cleanup are inside the library, so a host that
+  links it has everything ([ADR 0001](../adrs/0001-zig-0-16-standard-library-only-for-the-core.md),
+  [ADR 0003](../adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md),
+  [RFC 0001](../rfcs/0001-library-first-or-service-first.md)). clanker's single
+  static musl binary is the strictest known host, not the only one.
+- **Slim at size 1, expandable by settings.** Every mechanism is absent or
+  trivial for one process and is switched on as members are added; nothing
+  has to be redeployed to grow.
 
 ## Goals
 

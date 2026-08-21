@@ -260,6 +260,26 @@ Ordering inside each section is by what blocks implementation first.
     and a lint step gate merges as clanker's `gate` does. *Blocks:* first PR
     after the initial commit.
 
+46. **Which non-clanker hosts are the design targets?** spine is
+    general-purpose by brief (clarified 2026-08-21), but every concrete
+    constraint so far comes from one host. Naming two or three other host
+    shapes — a CLI tool that runs in short processes, a long-lived service on
+    a few machines, an embedded/edge fleet with flaky links — would show
+    which API shapes are general and which are clanker's. A second example
+    host in `examples/` is the roadmap's way of keeping this honest. *Blocks:*
+    nothing; shapes PRD 0005's API before it freezes. *Answer from:* the
+    operator.
+47. **Several processes on one data directory, SQLite-style.** SQLite lets
+    N processes open one file (file locks, busy timeout); clanker relies on
+    that today for its session databases, with `run`/`repl` processes
+    writing beside `serve`. spine v1 flocks the directory to one process and
+    expects short-lived processes to talk to the long-lived one. Supporting
+    multi-process opens natively would mean: one process holds the listener
+    and leader role, others append through a local IPC the library provides
+    (unix socket in the data dir) — still no external infrastructure, but a
+    second transport to own. Is the SQLite habit important enough to hosts
+    to make this v1? *Blocks:* PRD 0005 phase 1 (`open` semantics). *Answer
+    from:* the operator; OQ 46's host shapes.
 ## What else might be missing
 
 Things no PRD has a home for yet; promote to a numbered question when one

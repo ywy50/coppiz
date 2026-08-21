@@ -31,4 +31,4 @@ Unfinished work first.
 | [0002](0002-ttl-and-staleness.md) | Draft | TTL and staleness: the only two mutations |
 | [0003](0003-membership-and-leadership.md) | Draft | Membership and leadership: seniority, configured authorities, scaling 1 → n |
 | [0004](0004-settings.md) | Draft | Settings: the ledger configures itself through its own chain |
-| [0005](0005-embedding-and-clanker-plugin.md) | Draft | Embedding: the library, the node binary, and plugging into clanker |
+| [0005](0005-embedding-the-library-as-the-product.md) | Draft | Embedding: the library, the node binary, and plugging into clanker |

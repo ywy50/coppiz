@@ -1,8 +1,9 @@
 # spine
 
-A replicated, append-only ledger you can embed like SQLite and grow from one
-process to a fleet without a quorum, a redeploy, or an odd member count.
-Written in Zig 0.16 with the standard library only.
+A replicated, append-only ledger you embed like SQLite — one dependency, one
+data directory, nothing to stand up beside it — and grow from one process to
+a fleet without a quorum, a redeploy, or an odd member count. Written in Zig
+0.16 with the standard library only.
 
 **Status: design phase.** Nothing stores anything yet. The repository holds a
 building skeleton and the design records; `spine` is a working codename
@@ -30,6 +31,18 @@ cat docs/README.md
 
 Everything below is detail.
 
+## Who it is for
+
+Any program that needs a durable, replicated, append-only record shared
+across processes or machines, and finds the existing answers don't fully
+cut it: the server-shaped stores (etcd, Postgres, NATS) want a cluster stood
+up first; the Raft stores (rqlite, dqlite) want a quorum and an odd member
+count, so two nodes can't elect; the gossip/CRDT stores converge but don't
+order. spine is for the gap between "write files and hope" and "run
+infrastructure" — slim at size 1, expandable by settings as members are
+added ([ADR 0003](docs/adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
+clanker is the first host; it is not the customer.
+
 ## What it is meant to be
 
 - **Append-only entries**, author-signed and hash-chained, replicated in full
@@ -50,9 +63,14 @@ Everything below is detail.
 - **Settings live in the ledger**, not in per-member config files, so two
   members cannot run different rules on one ledger
   ([PRD 0004](docs/prds/0004-settings.md)).
-- **Embeddable first**: a Zig library a host links, with the standalone
-  `spine` node built from the same tree; clanker is the first host
-  ([PRD 0005](docs/prds/0005-embedding-and-clanker-plugin.md),
+- **Batteries included**: storage, replication, failure detection, election
+  and cleanup are inside the library; no coordinator, daemon or broker beside
+  it, at any size
+  ([ADR 0003](docs/adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
+- **Embeddable first**: a Zig library any host links, with the standalone
+  `spine` node built from the same tree for hosts that would rather talk to a
+  process; clanker is the first host
+  ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md),
   [RFC 0001](docs/rfcs/0001-library-first-or-service-first.md)).
 
 ## Where things are
@@ -76,5 +94,8 @@ spine was founded from clanker's
 [RFC 0019](https://github.com/maci0/clanker/blob/main/docs/rfcs/0019-shared-state-store.md),
 which surveyed seventeen stores, found no general-purpose Zig-native
 replicated store, and recorded the decision to build one as a standalone
-public project. What that survey established, and what spine inherits from
-it, is in [research 0001](docs/research/0001-evidence-carried-from-clanker-rfc-0019.md).
+public project for anyone with the same problem. What that survey
+established, and what spine inherits from it, is in
+[research 0001](docs/research/0001-evidence-carried-from-clanker-rfc-0019.md);
+how clanker itself would embed it is one worked example in
+[PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md).

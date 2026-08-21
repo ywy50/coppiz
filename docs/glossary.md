@@ -53,7 +53,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **local config** | `spine.toml`: paths, identity, peers, fsync — things whose disagreement cannot fork the ledger | PRD 0004 |
 | **scope** | whether a setting is cluster-wide or per ledger | PRD 0004 |
 | **live-changeable** | a setting that a `settings` entry may alter; may depend on other settings | PRD 0004 |
-| **host** | the program that links the spine library (clanker's `serve`, the `spine` binary, an example) | PRD 0005 |
+| **host** | any program that links the spine library; the `spine` binary, the examples and clanker's `serve` are instances | PRD 0005 |
 | **service API** | the optional HTTP surface over the library for non-Zig hosts and operators | PRD 0005, RFC 0001 |
 | **observer** | a possible non-authoring client that speaks the replication protocol | RFC 0001 option D |
 | **OQ n** | open question *n* in [open-questions.md](open-questions.md) | — |
