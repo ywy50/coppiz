@@ -31,9 +31,12 @@ the clarification of the same day) and from RFC 0019's drivers:
 - **Append-only.** Entries are never edited in place. The only mutations are
   the two [PRD 0002](0002-ttl-and-staleness.md) allows — TTL expiry and an
   author marking its own entry stale — and both are opt-in by setting.
-- **Every member holds the full ledger.** A member that loses every peer still
-  has everything; a peer that dies strands nothing but its own unreplicated
-  tail.
+- **Every member of a group holds the group's ledgers in full.** A member that
+  loses every peer still has everything its group owns; a peer that dies
+  strands nothing but its own unreplicated tail. "Group" and "cluster" are
+  the same thing at this level; [PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)
+  is where a ledger may be owned by one group among many, and it lists what
+  this PRD must get right now for that to stay possible.
 - **Scale 1 → n without a redeploy.** One process is a complete, working
   ledger and is its own leader. Adding the second, third, sixth member must
   not require an odd count, a quorum, or a restart of the first.
@@ -119,7 +122,7 @@ frozen):
 | `magic` | 4 | `SPNE` |
 | `version` | 2 | entry format version; a reader refuses unknown values |
 | `kind` | 2 | `data` or one of the control kinds below |
-| `ledger` | 16 | ledger id (a cluster-unique 128-bit id; the name is a setting) |
+| `ledger` | 16 | ledger id: a *globally* unique 128-bit id (random at creation), never a per-cluster counter, so a ledger keeps its id when its owning group changes (PRD 0006); the name is a setting |
 | `author` | 16 | member id |
 | `author_seq` | 8 | dense per-(author, ledger) counter, starts at 1 |
 | `author_ts_ms` | 8 | author's wall clock at write; informational, never used for ordering or expiry |
@@ -215,7 +218,12 @@ reached the leader's head, and a `syncing` member is never leader-eligible
 **Storage.** One directory per member, one subdirectory per ledger, segment
 files of slots+entries in chain order, each record length-prefixed and
 CRC-checked so a torn tail write is detected and truncated at startup, and
-a sparse seq→offset index per segment. The unslotted queue is its own
+a sparse seq→offset index per segment. A segment's header carries the
+format version, the ledger id and the id of the group that sequenced it, so
+a segment is self-describing when it moves between groups (ownership
+transfer or parity reconstruction, PRD 0006); a **sealed** segment — one
+behind the head that will never be appended to — has a recorded hash and is
+the unit parity works on. The unslotted queue is its own
 small append file. Everything else — membership, settings, leader,
 stale/expired sets — is folded from the log at open, optionally from a
 snapshot (a verified fold at a named slot) to bound restart time.
@@ -227,6 +235,10 @@ the default is `every` on the leader and `batched` on followers
 own id, name, chain, and PRD 0002 settings ("schema"). Membership and
 leadership are cluster-level (one leader sequences all ledgers) in v1, to
 keep one fold; per-ledger leadership is [open question 8](../open-questions.md).
+The chain is per ledger, not per cluster, because a ledger is the unit
+PRD 0006 assigns to one group and encodes with parity — a cluster-wide chain
+could not be split ([open question 7](../open-questions.md) leans that way
+for this reason).
 
 **Dependencies.**
 

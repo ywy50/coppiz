@@ -63,10 +63,14 @@ would they diverge?* If yes, it is a ledger setting. `storage.fsync` is local
 (a member that fsyncs less is only risking its own tail); `ttl.action` is a
 ledger setting (members that disagree hold different ledgers).
 
-**Scope.** A ledger setting is either **cluster-scoped** (one value for the
+**Scope.** A ledger setting is **cluster-scoped** (one value for the
 cluster: everything under `leadership.*`, `cluster.*`, `membership.*`,
-`merge.*`) or **ledger-scoped** (one value per ledger: `ttl.*`, `stale.*`,
-`checkpoint.*`, `ledger.*`). A `settings` entry names its scope and, for
+`merge.*`), **ledger-scoped** (one value per ledger: `ttl.*`, `stale.*`,
+`checkpoint.*`, `ledger.*`), or — reserved now, populated by
+[PRD 0006](0006-scaling-to-groups-sharding-and-parity.md) —
+**federation-scoped** (the ownership map and federation leadership). The
+third scope is in the schema from the first release so that federating later
+is a new set of keys, not a schema break. A `settings` entry names its scope and, for
 ledger scope, the ledger. Cluster-scoped settings live in the cluster's
 control ledger — see [open question 7](../open-questions.md) on whether that
 is a separate chain or the first ledger.

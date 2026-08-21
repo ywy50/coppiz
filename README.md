@@ -2,7 +2,9 @@
 
 A replicated, append-only ledger you embed like SQLite — one dependency, one
 data directory, nothing to stand up beside it — and grow from one process to
-a fleet without a quorum, a redeploy, or an odd member count. Written in Zig
+a fleet without a quorum, a redeploy, or an odd member count; and from there
+to groups of groups, each group the same system with its own leader, so
+100,000 instances is an overlay on the design, not a rewrite. Written in Zig
 0.16 with the standard library only.
 
 **Status: design phase.** Nothing stores anything yet. The repository holds a
@@ -60,6 +62,11 @@ clanker is the first host; it is not the customer.
   runtime when the cluster allows it
   ([PRD 0003](docs/prds/0003-membership-and-leadership.md),
   [RFC 0002](docs/rfcs/0002-how-join-order-is-made-unspoofable.md)).
+- **Scales by recursion**: a group of up to ~32 members is the whole system;
+  past that, groups compose by the same membership and election code, a
+  ledger is owned by one group and routed from the others, and cold segments
+  can be stored with parity across groups instead of copied
+  ([PRD 0006](docs/prds/0006-scaling-to-groups-sharding-and-parity.md)).
 - **Settings live in the ledger**, not in per-member config files, so two
   members cannot run different rules on one ledger
   ([PRD 0004](docs/prds/0004-settings.md)).

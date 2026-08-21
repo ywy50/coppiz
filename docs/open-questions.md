@@ -280,6 +280,51 @@ Ordering inside each section is by what blocks implementation first.
     second transport to own. Is the SQLite habit important enough to hosts
     to make this v1? *Blocks:* PRD 0005 phase 1 (`open` semantics). *Answer
     from:* the operator; OQ 46's host shapes.
+## I. Scaling past one group (PRD 0006)
+
+48. **Grouping unit and range key.** Ownership by whole ledger is the
+    drafted unit; the drafted split key is the author-id prefix so each
+    author's stream stays in one group. Is that enough for hosts whose
+    ledgers have many authors and one hot range, or is a payload-derived
+    key needed (which breaks `author_seq` density)? *Blocks:* PRD 0006
+    phase 3. *Answer from:* OQ 46's host shapes; measurement.
+49. **When does the group count need to be uneven?** Under `seniority`,
+    `configured` and `combined` a federation of 2 or 4 groups elects like 2
+    or 4 members do; only a majority-vote (`quorum`) mode at the federation
+    level needs an odd count. The operator's expectation (2026-08-21) is an
+    uneven number of groups; confirm whether that is a requirement (implying
+    `quorum` at the federation level) or an assumption carried from Raft.
+    *Blocks:* PRD 0006 phase 1 defaults. *Answer from:* the operator.
+50. **Parity code and reconstruction cost.** Reed–Solomon over GF(2⁸) in
+    `std`-only Zig is feasible; k, m defaults, fragment size, and what a
+    read of a parity range costs (k network fetches + decode) against a
+    follower copy are unmeasured. Also: does parity apply to the chain's
+    *slots* or only to payloads, given `ttl.retain`? *Blocks:* PRD 0006
+    phase 4.
+51. **Cross-group routing and read semantics.** Forwarding an append to the
+    owner is drafted; a read of a non-owned ledger either forwards (one
+    round-trip, fresh) or hits a follower copy (local, lagging). Which is the
+    default, and does `write.ack` mean "owner slotted" or "local forwarded"?
+    Relates to OQ 3 and OQ 31. *Blocks:* PRD 0006 phase 2.
+52. **What group identity must the core headers carry now?** Drafted:
+    segment headers carry ledger id + sequencing group id; entry and slot
+    headers carry neither (the slot's `leader` member id implies the group
+    via that group's chain). Is the implication enough for a verifier in
+    another group, or should the slot carry the group id explicitly (16 more
+    bytes per slot, forever)? *Blocks:* PRD 0001 phase 1 — the format freeze.
+53. **Membership and discovery at 10⁵.** A new instance must find *a*
+    member of *some* group: seed lists in local config (drafted), a
+    directory ledger in the federation, or DNS. Which, and how does an
+    instance choose a group to join (operator-assigned, nearest, smallest)?
+    *Blocks:* PRD 0006 phase 1.
+54. **Measurements that replace the tier numbers.** 32 per group and
+    ~1,000 / ~100,000 per tier are intent. The first measurement set: size-1
+    append latency; per-member connection count and memory at 8, 16, 32
+    members; append-to-visible p50/p99 across one group; join/backfill time
+    for a 1 GB ledger; then the same at 3 × 8 and 10 × 8 in two groups of
+    groups. Where is the harness and what hardware counts? *Blocks:*
+    promoting any tier number from intent to claim.
+
 ## What else might be missing
 
 Things no PRD has a home for yet; promote to a numbered question when one
@@ -301,3 +346,9 @@ becomes concrete:
   exiting, so no epoch churn on a planned restart.
 - **Windows/macOS support** — `std.Io` covers them; flock semantics and
   fsync guarantees differ; untested.
+- **Locality and placement** — which group a consumer's appends go to when
+  several could own a new ledger; geography-aware placement is a federation
+  policy nobody has specified.
+- **Cross-group stale marks and checkpoints** — a `stale` is authored where
+  the author lives, but the ledger lives in its owning group; forwarding
+  makes it work, but the checkpoint cadence is the owner's clock.

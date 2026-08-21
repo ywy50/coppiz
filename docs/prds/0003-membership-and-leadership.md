@@ -128,7 +128,16 @@ for `cluster.suspect_after_ms` (default 5 s) is `unreachable`. A leader that
 becomes `unreachable` triggers an election on every member that noticed. Full
 mesh is the v1 topology and inherits clanker's reasoning for a small cap
 (`cluster.max_members`, default 32); the leader-star or gossip topology for
-larger clusters is [open question 25](../open-questions.md).
+larger clusters is [open question 25](../open-questions.md). The cap is per
+**group**: past it, the system scales by more groups, not a bigger one
+([PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)), and a member
+keeps per-member state only for its own group.
+
+**This cluster is a group.** Everything in this PRD — membership fold,
+`leader(...)`, epochs, merge — is written over an abstract member type so the
+same functions elect among *groups* when clusters federate (PRD 0006 G3). A
+group's identity is its genesis hash; its representative at the next level
+is whoever its own chain currently names leader.
 
 **Election: a pure function, not a protocol.** Given the folded state and this
 member's view of who is live, `leader(mode, settings, members, liveness)`

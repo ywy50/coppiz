@@ -11,6 +11,20 @@ to land. Update it when a PRD changes status.
   RFCs in discussion, two accepted ADRs, one carried research note, the
   open-questions register and the glossary. No store logic exists.
 
+## Scale tiers
+
+The same binary and settings schema at every tier; what changes is which
+mechanisms are on. The numbers are design intent, to be replaced by
+measurement ([OQ 54](open-questions.md)). Detail: [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md).
+
+| Tier | Instances | What it is |
+|---|---|---|
+| 0 | 1 | a directory and a process; own leader; no listener |
+| 1 | 2–32 | one group: membership, election, replication, merge (PRDs 0001–0004) |
+| 2 | 32–~1,000 | several groups; each a tier-1 group; ledgers owned by one group, routed from others |
+| 3 | ~1,000–100,000 | groups of groups by the same membership/election code |
+| parity | any, tier ≥ 2 | k-of-m storage of sealed segments across groups |
+
 ## Planned
 
 In dependency order. Each line names the PRD whose Implementation section has
@@ -48,8 +62,15 @@ the phases.
 
 ## Later
 
+- **Groups, ownership, sharding, parity** — [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md),
+  each phase behind a measured trigger: a deployment needing a second group;
+  a group at `max_members` or a ledger too hot for one group; storage cost
+  measured as binding. The core carries PRD 0006's "what must be right now"
+  table from step 1.
 - `quorum` leadership mode (Raft-style) as a fourth `leadership.mode` value,
-  for clusters at n ≥ 3 that want a strict single sequencer without stalling.
+  for clusters at n ≥ 3 that want a strict single sequencer without stalling;
+  also the only case in which a federation needs an uneven group count
+  ([OQ 49](open-questions.md)).
 - Archival chain checkpoints so slot count can be bounded ([OQ 24]).
 - Service API and/or observer clients (RFC 0001 options B/D), C ABI.
 - Leader-star or gossip topology past 32 members ([OQ 25]).

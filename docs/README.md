@@ -34,6 +34,7 @@ shipped narrative (that is the roadmap).
 | who is leader at 1, 2, 6 members, and what a partition does | [PRD 0003](prds/0003-membership-and-leadership.md), [RFC 0002](rfcs/0002-how-join-order-is-made-unspoofable.md) |
 | where settings live and why not in a config file | [PRD 0004](prds/0004-settings.md) |
 | how a program embeds it, with clanker as the worked example | [PRD 0005](prds/0005-embedding-the-library-as-the-product.md), [RFC 0001](rfcs/0001-library-first-or-service-first.md) |
+| how it gets to 1,000 or 100,000 instances | [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md) — groups, ownership, parity, and what the core must get right now |
 | what is not decided | [open-questions.md](open-questions.md) |
 
 ## Architecture (as designed; nothing is implemented yet)
@@ -80,10 +81,21 @@ yields a leader per side and a deterministic merge on heal; `configured` with
 can start as one member and change mode as it grows, gated by
 `leadership.reconfigurable` (PRD 0003).
 
+**Scaling by recursion.** A cluster is a *group*. Past `max_members`, the
+system grows by more groups, not a bigger one: a federation is a cluster
+whose members are groups, elected by the same `leader(...)` function; a
+ledger is owned by one group and routed to from the others; sealed segments
+can be stored k-of-m across groups. The core carries a short list of things
+it must get right today for that to stay possible — globally unique ledger
+ids, chain per ledger, self-describing segments, pure validation and
+election, a reserved federation settings scope
+([PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md)).
+
 **Source layout (planned).** `src/ledger/` entry/slot codecs, chain, storage;
 `src/cluster/` membership fold, election, epochs, merge, node loop;
 `src/settings/` schema, validation, fold; `src/net/` framing, heartbeats,
-backfill; `src/root.zig` the library API; `src/main.zig` the node binary.
+backfill; `src/root.zig` the library API; `src/main.zig` the node binary;
+`src/federation/` (later) group membership, ownership, routing, parity.
 Pure logic (codecs, fold, election, merge, expiry) is kept I/O-free so it
 can be unit-tested and driven by a deterministic simulator
 ([OQ 27](open-questions.md)).

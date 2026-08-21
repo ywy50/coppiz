@@ -56,4 +56,13 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **host** | any program that links the spine library; the `spine` binary, the examples and clanker's `serve` are instances | PRD 0005 |
 | **service API** | the optional HTTP surface over the library for non-Zig hosts and operators | PRD 0005, RFC 0001 |
 | **observer** | a possible non-authoring client that speaks the replication protocol | RFC 0001 option D |
+| **group** | a cluster, seen from the outside: its genesis hash is its identity; the unit of full replication and of federation membership | PRD 0006 |
+| **federation** | a cluster whose members are groups; run by the same membership and election code; holds the ownership map | PRD 0006 |
+| **representative** | the member that speaks for a group in a federation: whoever the group's own chain currently names leader | PRD 0006 |
+| **ownership** | the federation's map `ledger id → owning group`; only the owner sequences that ledger | PRD 0006 |
+| **follower copy** | a read-only replica of a ledger kept by a non-owning group; backfilled like a syncing member, never sequencing | PRD 0006 |
+| **range key** | the author-id prefix by which one ledger is split across groups, keeping each author's stream in one group | PRD 0006 |
+| **sealed segment** | a storage segment behind the head that will never be appended to; has a recorded hash; the unit of parity | PRD 0001, PRD 0006 |
+| **parity** | k-of-m erasure coding of sealed segments across groups; any k groups reconstruct | PRD 0006 |
+| **tier** | which scaling mechanisms are on: 0 (one process), 1 (one group), 2 (groups), 3 (groups of groups), parity | PRD 0006, ROADMAP |
 | **OQ n** | open question *n* in [open-questions.md](open-questions.md) | — |

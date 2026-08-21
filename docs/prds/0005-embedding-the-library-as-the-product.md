@@ -85,6 +85,10 @@ const sub = try ledger.follow(cursor, onSlot, ctx);  // called on the host's io
 _ = node.leader(); _ = node.members(); _ = ledger.settings();
 ```
 
+The API takes a ledger by name or id and never assumes the local group owns
+it: when a ledger lives in another group ([PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)),
+`append` and `read` forward, and the host's code does not change.
+
 `Node.open` with no `[[peers]]` and no listener is the SQLite case: a
 one-member cluster, the process is its own leader, every call is local. The
 listener, peers and admission are fields of the same `open` options or of

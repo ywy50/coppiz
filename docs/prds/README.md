@@ -11,7 +11,7 @@ PRDs: [`../adrs/`](../adrs/). Unknowns every PRD points into:
 Open a new PRD from the template, numbered after the last in the inventory:
 
 ```bash
-cp docs/prds/TEMPLATE.md docs/prds/0006-<slug>.md
+cp docs/prds/TEMPLATE.md docs/prds/0007-<slug>.md
 ```
 
 A Draft counts as planned only when its Design names dependencies and
@@ -31,4 +31,5 @@ Unfinished work first.
 | [0002](0002-ttl-and-staleness.md) | Draft | TTL and staleness: the only two mutations |
 | [0003](0003-membership-and-leadership.md) | Draft | Membership and leadership: seniority, configured authorities, scaling 1 → n |
 | [0004](0004-settings.md) | Draft | Settings: the ledger configures itself through its own chain |
-| [0005](0005-embedding-the-library-as-the-product.md) | Draft | Embedding: the library, the node binary, and plugging into clanker |
+| [0005](0005-embedding-the-library-as-the-product.md) | Draft | Embedding: the library as the product, the node binary, and hosts (clanker first) |
+| [0006](0006-scaling-to-groups-sharding-and-parity.md) | Draft (later work; names what the core must get right now) | Scaling 1 → n → groups: recursive groups, sharding, and parity |
