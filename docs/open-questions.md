@@ -291,10 +291,20 @@ Ordering inside each section is by what blocks implementation first.
 49. **When does the group count need to be uneven?** Under `seniority`,
     `configured` and `combined` a federation of 2 or 4 groups elects like 2
     or 4 members do; only a majority-vote (`quorum`) mode at the federation
-    level needs an odd count. The operator's expectation (2026-08-21) is an
-    uneven number of groups; confirm whether that is a requirement (implying
-    `quorum` at the federation level) or an assumption carried from Raft.
-    *Blocks:* PRD 0006 phase 1 defaults. *Answer from:* the operator.
+    level needs an odd count.
+    **Resolved 2026-08-21** (operator confirmed): groups use the same
+    leadership modes and the same concurrency model as members — election is
+    a pure function over an abstract member type, and a group supplies the
+    same five inputs (identity = genesis hash, seniority = its `join` slot in
+    the federation ledger, address, liveness and sync via its current
+    representative). An uneven group count is therefore **not** a
+    requirement; it would become one only if a `quorum` mode were chosen at
+    the federation level, which is roadmap and not designed. Recorded in
+    [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md) (*A group
+    is the system*). Two consequences of the derived liveness are design
+    rules there: federation validation checks a representative against its
+    group's own chain, and federation `suspect_after_ms` must exceed a
+    group's internal election time.
 50. **Parity code and reconstruction cost.** Reed–Solomon over GF(2⁸) in
     `std`-only Zig is feasible; k, m defaults, fragment size, and what a
     read of a parity range costs (k network fetches + decode) against a

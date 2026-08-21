@@ -11,6 +11,10 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   binary, both placeholders), clanker's documentation taxonomy under `docs/`,
   draft PRDs 0001–0005, RFCs 0001–0002, ADRs 0001–0002, research note 0001,
   the open-questions register and the glossary.
+- OQ 49 resolved: groups use the same leadership modes and concurrency
+  model as members; no uneven group count is required. PRD 0006 gains the
+  two federation rules that follow (representative validated against the
+  group's own chain; federation suspect timeout exceeds group election time).
 - PRD 0006 (scaling 1 → n → groups: recursive groups, ownership and
   sharding, parity) with the list of what the core must get right now;
   scale tiers in the roadmap; OQ 48–54; federation settings scope reserved

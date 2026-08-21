@@ -69,8 +69,8 @@ the phases.
   table from step 1.
 - `quorum` leadership mode (Raft-style) as a fourth `leadership.mode` value,
   for clusters at n ≥ 3 that want a strict single sequencer without stalling;
-  also the only case in which a federation needs an uneven group count
-  ([OQ 49](open-questions.md)).
+  also the only case in which a federation would need an uneven group count
+  (OQ 49, resolved: groups use the shipped modes, no count constraint).
 - Archival chain checkpoints so slot count can be bounded ([OQ 24]).
 - Service API and/or observer clients (RFC 0001 options B/D), C ABI.
 - Leader-star or gossip topology past 32 members ([OQ 25]).

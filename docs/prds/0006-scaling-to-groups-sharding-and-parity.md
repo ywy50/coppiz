@@ -21,8 +21,9 @@ everything — so the operator's later overlay is: **group** instances, where
 each group is *exactly the system built now* with its own leader election
 inside; make a group the leader for a specific part of the ledger
 (sharding); and, to save space, break the ledger down across groups with
-**data parity** instead of full copies. Groups would be an uneven number
-(see [OQ 49](../open-questions.md) for when that is actually required).
+**data parity** instead of full copies. Groups use the same leadership
+modes and concurrency model as members do, so no particular group count is
+required — confirmed 2026-08-21, [OQ 49](../open-questions.md) resolved.
 
 The risk this PRD exists to prevent: a core that quietly assumes "one
 cluster, one chain, every member has everything" in a place that is
@@ -102,9 +103,21 @@ not their data).
 
 This recursion is what makes the even/uneven question disappear at the
 group level too: a federation of 2 groups elects under `seniority` or
-`configured` exactly as 2 members do. The operator's "groups need to be an
-uneven amount" holds only if the federation's mode is the future `quorum`
-mode; under the three shipped modes it does not ([OQ 49](../open-questions.md)).
+`configured` exactly as 2 members do. An uneven group count would be needed
+only under a future majority-vote `quorum` mode at the federation level;
+under the three shipped modes it is not (OQ 49, resolved 2026-08-21).
+
+What *is* different one level up is that a group's liveness and leadership
+are derived, not direct, and two rules follow. **Validation looks into the
+group's chain:** a federation entry signed by group B's representative is
+accepted only if B's own membership chain, as the validator last saw it,
+names that member B's leader — otherwise any member of B could speak for B.
+Groups therefore exchange their *control* chains (membership, epochs), which
+are small, never their data. **Representative churn must not read as
+death:** a group re-electing internally is briefly silent at the federation
+level, so `federation.suspect_after_ms` must exceed a group's internal
+election time (`cluster.suspect_after_ms` plus one epoch handover), or a
+healthy group is marked unreachable every time its leader rotates.
 
 ### Ownership: a group is leader for part of the ledger space
 
@@ -203,7 +216,8 @@ roadmap):
 | Condition | Behaviour |
 |---|---|
 | Owning group entirely unreachable | appends to its ledgers return `owner_unreachable`; reads serve from a follower copy if one exists, else fail; other ledgers unaffected (G6: a dead group strands only its own ledgers) |
-| Owning group's leader changes | the group's internal epoch handles it; forwarders retry at the new leader; the federation's representative updates on the next heartbeat |
+| Owning group's leader changes | the group's internal epoch handles it; forwarders retry at the new leader; the federation's representative updates on the next heartbeat; the federation does not suspect the group because its `suspect_after_ms` exceeds the group's election time |
+| A non-leader member of a group signs a federation entry | refused `not_representative`: the validator's copy of that group's control chain does not name the signer as leader |
 | Ownership transfer interrupted | the chain is frozen at a slot on the old owner; the new owner either completes backfill and opens its epoch, or the federation reverts the map entry; the slot is never sequenced by two owners because the freeze is a chain event |
 | Fewer than k groups reachable for a parity range | reads of that range fail `insufficient_fragments`; the live tail and other ranges unaffected |
 | A group forks internally (partition + merge) | invisible to the federation, which only sees the group's chain after merge; a federation entry signed by a leader the post-merge chain does not name is refused |
