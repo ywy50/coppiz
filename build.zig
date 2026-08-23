@@ -113,9 +113,17 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// `zig build` invoked from anywhere under the project must still read this
 /// project's files. Symlinks are followed (statFile's default), so a
 /// linked-in source tree is analyzed like a real one.
-fn checkedFiles(root_dir: std.Io.Dir, io: std.Io, arena: std.mem.Allocator) ![][]const u8 {
+/// `gate_paths` is a parameter rather than a read of `checked_paths` so a
+/// test can drive the dispatch against a temporary tree, the same way `sep`
+/// is a parameter below; production hands in `&checked_paths`.
+fn checkedFiles(
+    root_dir: std.Io.Dir,
+    io: std.Io,
+    arena: std.mem.Allocator,
+    gate_paths: []const []const u8,
+) ![][]const u8 {
     var paths: std.ArrayListUnmanaged([]const u8) = .empty;
-    for (checked_paths) |path| {
+    for (gate_paths) |path| {
         if ((try root_dir.statFile(io, path, .{})).kind == .directory) {
             try appendZigFilesUnder(root_dir, io, path, arena, &paths);
         } else {
@@ -176,7 +184,7 @@ const LineLengthStep = struct {
         var report: std.ArrayListUnmanaged(u8) = .empty;
         var count: usize = 0;
         const root_dir = b.build_root.handle;
-        for (try checkedFiles(root_dir, io, arena)) |path| {
+        for (try checkedFiles(root_dir, io, arena, &checked_paths)) |path| {
             const bytes = try root_dir.readFileAlloc(io, path, arena, .unlimited);
             try checkBytes(arena, bytes, path, &report, &count);
         }
@@ -529,10 +537,100 @@ test "hasRealImport counts only a real @import call" {
         "sub/x.zig",
     ));
 
+    // Neither is a computed path (@import(a ++ b)): only a literal string
+    // argument matches, so such a module is reported by the gate — failing
+    // loudly, never half-matched.
+    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
+        arena,
+        "const dir = \"sub\"; _ = @import(dir ++ \"/x.zig\");\n",
+        "sub/x.zig",
+    ));
+
     // A different path does not match.
     try std.testing.expect(!try TestRegistrationStep.hasRealImport(
         arena,
         "_ = @import(\"other/y.zig\");\n",
         "sub/x.zig",
     ));
+}
+
+/// Orders path strings lexicographically, so tests can compare the walker's
+/// filesystem-dependent order as a sorted set.
+fn lessThanStrings(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.order(u8, a, b) == .lt;
+}
+
+test "checkedFiles expands directory entries and takes plain entries whole" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // A directory entry contributes its .zig descendants at any depth; a
+    // plain entry is taken whole even without a .zig suffix, which is what
+    // keeps build.zig.zon covered by both file-covering gates.
+    (try tmp.dir.createDirPathOpen(io, "lib/deep", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "lib/top.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "lib/deep/inner.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+    const gate_paths = [_][]const u8{ "lib", "build.zig.zon" };
+
+    const checked = try checkedFiles(tmp.dir, io, arena, &gate_paths);
+    std.mem.sort([]const u8, checked, {}, lessThanStrings);
+
+    try std.testing.expectEqual(@as(usize, 3), checked.len);
+    try std.testing.expectEqualStrings("build.zig.zon", checked[0]);
+    try std.testing.expectEqualStrings("lib/deep/inner.zig", checked[1]);
+    try std.testing.expectEqualStrings("lib/top.zig", checked[2]);
+}
+
+test "checkedFiles fails loudly when a checked path stops existing" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The documented alternative to silently checking nothing.
+    const gate_paths = [_][]const u8{"gone"};
+    try std.testing.expectError(
+        error.FileNotFound,
+        checkedFiles(tmp.dir, io, arena, &gate_paths),
+    );
+}
+
+test "appendZigFilesUnder collects every .zig file below the directory, and only files" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The layout: .zig files at the root and nested two levels deep, a
+    // non-.zig file, and — the false-pass direction a suffix-only filter
+    // would admit — a *directory* whose name ends in .zig.
+    (try tmp.dir.createDirPathOpen(io, "src/a/b", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "src/dir.zig", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/top.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/notes.md", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/a/inner.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/a/b/deep.zig", .data = "" });
+
+    var found: std.ArrayListUnmanaged([]const u8) = .empty;
+    try appendZigFilesUnder(tmp.dir, io, "src", arena, &found);
+    std.mem.sort([]const u8, found.items, {}, lessThanStrings);
+
+    // Each result is dir_path joined with the walker-relative path, the
+    // shape both gates report and read back through root_dir.
+    try std.testing.expectEqual(@as(usize, 3), found.items.len);
+    try std.testing.expectEqualStrings("src/a/b/deep.zig", found.items[0]);
+    try std.testing.expectEqualStrings("src/a/inner.zig", found.items[1]);
+    try std.testing.expectEqualStrings("src/top.zig", found.items[2]);
 }
