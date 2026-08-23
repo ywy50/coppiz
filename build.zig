@@ -209,7 +209,9 @@ const LineLengthStep = struct {
         self.* = .{
             .step = std.Build.Step.init(.{
                 .id = .custom,
-                .name = "100-column cap",
+                // Computed from max_columns so the displayed name cannot
+                // drift from the cap it describes.
+                .name = std.fmt.comptimePrint("{d}-column cap", .{max_columns}),
                 .owner = b,
                 .makeFn = make,
             }),
