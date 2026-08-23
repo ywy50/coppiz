@@ -112,7 +112,9 @@ as any other. How the allowlist learns the key out of band is [open question
 `sync.lag_slots`, layer and value [open question
 56](../open-questions.md)) ↔ `unreachable` (failure detector lost it) →
 `left` (a `leave` entry). Only `member` is leader-eligible. `syncing` is the brief's
-"definitely has the full state" made a state, not a heuristic.
+"definitely has the full state" made a state, not a heuristic; pinning that
+phrase to "at head of the chain" is [open question
+43](../open-questions.md).
 
 **Leave and seniority.** A `leave` entry — by the member itself, or by the
 leader evicting a member that has been `unreachable` for

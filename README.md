@@ -100,7 +100,8 @@ clanker is the first host; it is not the customer.
 
 spine was founded from clanker's
 [RFC 0019](https://github.com/maci0/clanker/blob/main/docs/rfcs/0019-shared-state-store.md),
-which surveyed seventeen stores, found no general-purpose Zig-native
+which surveyed seventeen candidates (stores and log/CRDT libraries alike),
+found no general-purpose Zig-native
 replicated store, and recorded the decision to build one as a standalone
 public project for anyone with the same problem. What that survey
 established, and what spine inherits from it, is in

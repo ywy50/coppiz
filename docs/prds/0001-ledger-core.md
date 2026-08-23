@@ -142,7 +142,10 @@ frozen):
 | `payload` | `payload_len` | opaque to spine; consumers define it |
 
 `entry_hash` = SHA-256 of the whole header including signature; it is what a
-slot references and what a stale-mark names.
+slot references. A `stale` mark names its target by *entry id*
+`(author, author_seq)`, not by this hash — the id carries the author, which
+is what lets every member validate who marked ([PRD
+0002](0002-ttl-and-staleness.md)).
 
 **Slot layout** (the chain):
 
@@ -202,8 +205,10 @@ two-phase commit anywhere.
    the slot, appends both to its log, and broadcasts `(entry, slot)` to every
    member.
 4. Each member validates the slot (chain, signature, leader is the current
-   leader of that epoch), appends, and removes the entry from its unslotted
-   queue if it was the author.
+   leader of that epoch), appends, and drops its copy of the entry from its
+   unslotted queue — the author's because it queued it in step 2, a
+   follower's because it accepted it optimistically (see *Why append-only is
+   what makes this small*).
 5. The client's `append` returns at one of two points, by setting
    (`write.ack = local | slotted`): when the local member has durably queued
    it, or when the slot is back. `local` is the AP behaviour (a partitioned

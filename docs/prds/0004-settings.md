@@ -162,6 +162,9 @@ mechanism that PRD 0002 and PRD 0003 populate.
   a change takes effect for slots after the `settings` slot, not before.
 - [ ] (G5) `docs/configuration.md` is generated and a test fails when it is
   stale.
+- [ ] (G6) `spine init` refuses a local `[genesis]` whose initial settings
+  fail schema validation and writes no chain; with valid ones, the written
+  `genesis` folds back to exactly those settings (goal 2's founder clause).
 
 ## Open questions / future work
 

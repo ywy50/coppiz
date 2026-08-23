@@ -7,6 +7,25 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Documentation-currency pass: PRD 0001 no longer says a `stale` mark names
+  the `entry_hash` — [PRD 0002](docs/prds/0002-ttl-and-staleness.md) defines
+  the payload as naming the target entry id `(author, author_seq)`, whose
+  author field is what every member validates against; and its write-path
+  step 4 clears the unslotted queue on receivers too, not only the author
+  (the glossary defines the queue as holding received entries, and the
+  optimistic-accept paragraph depends on that).
+- Documentation-currency pass: PRD 0002's soft-expiry sentence no longer
+  calls a TTL-reached entry "expired" under `mark_stale` — its own state
+  diagram routes live → stale there, and *expired* is defined for
+  `ttl.action = delete`; PRD 0003 cites OQ 43 where the brief's "definitely
+  has the full state" is made a state; PRD 0004 gains criterion G6 for goal
+  2's founder clause (`spine init` validates the initial settings),
+  closing the goals↔criteria gap; the glossary defines `archived branch`,
+  which PRD 0003 and RFC 0002 used without definition; research 0001 no
+  longer claims every row carries its read date (the findings table does
+  not; the evidence log does, and now says so); the README counts clanker's
+  survey as seventeen *candidates*, matching research 0001, whose option
+  list includes libraries that are not stores.
 - Spec-currency pass: PRD 0003's `epoch` entry shape now says its
   `reason` list (`leader_lost | mode_change | merge | manual`) is tier-1's
   and that [PRD 0006](docs/prds/0006-scaling-to-groups-sharding-and-parity.md)

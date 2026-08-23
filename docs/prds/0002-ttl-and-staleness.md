@@ -89,8 +89,9 @@ whose expiry instant ≤ `now - ttl.grace_ms`. This is the one place a local
 clock is used, and it only affects *visibility on this member*, never bytes.
 `grace_ms` (default 0; [open question 9](../open-questions.md)) lets an
 operator tolerate skew between the leader that stamped the slot and the
-member that reads it. Under `mark_stale`, an expired entry reads as stale;
-under `delete`, as expired; `include_stale` / `include_expired` show either.
+member that reads it. Under `mark_stale`, a TTL-reached entry reads as
+stale; under `delete`, as expired; `include_stale` / `include_expired` show
+either.
 
 **Hard removal: the `checkpoint` control entry.** Only the leader appends it,
 and it names a slot: `expire_through = (epoch, seq)`. Its meaning is: *every

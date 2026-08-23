@@ -3,8 +3,8 @@
 ## Status
 
 Draft — compiled 2026-08-21 from clanker's records; **nothing here was
-re-verified at its original source for this note**. Each row says when
-clanker's note read it. Reopen a source before quoting it as current.
+re-verified at its original source for this note**. The evidence log gives
+the read date for every claim. Reopen a source before quoting it as current.
 
 Research is evidence, not a decision: it records what exists, how good it is,
 and how confident the finding is. The decision that follows belongs in an
@@ -56,7 +56,7 @@ inherit as requirements?
   `docs/research/t-stage1-stream-replication-spike.md`, and PRD 0011 (mesh),
   all read in the clanker checkout on 2026-08-21.
 - **Not searched:** the internet. Every external claim below is clanker's
-  reading on the date shown.
+  reading, dated in the evidence log.
 - **Freshness:** clanker verified most external claims at source on
   2026-08-18 and 2026-08-19. Licences and release states age fast.
 
