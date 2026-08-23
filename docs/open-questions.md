@@ -327,6 +327,18 @@ Ordering inside each section is by what blocks implementation first.
     whether to test on musl and glibc targets, and whether `zig fmt --check`
     and a lint step gate merges as clanker's `gate` does. *Blocks:* first PR
     after the initial commit.
+59. **Does the fetchable package carry the design docs?** The `.paths` list
+    in `build.zig.zon` — the declaration of what the package contains —
+    names only `CHANGELOG.md`, `README.md`, `RELEASES.md`, `build.zig`,
+    `build.zig.zon` and `src/`. Every design record lives under `docs/`,
+    and PRD 0001 says a document "is the spec" until code replaces it, so a
+    host that adds spine as a dependency gets a library whose spec is not in
+    the package (SQLite and dqlite ship theirs). Excluding
+    [qnd-notes.md](../qnd-notes.md) is clearly right; excluding `docs/` was
+    never stated as a decision. Decide either way before the first host
+    fetches spine ([PRD 0005](prds/0005-embedding-the-library-as-the-product.md)
+    phase 5) or the first public release. *Blocks:* PRD 0005 phase 5.
+    *Answer from:* the operator.
 
 ## I. Scaling past one group (PRD 0006)
 

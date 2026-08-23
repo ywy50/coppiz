@@ -69,7 +69,7 @@ timestamp and the earliest wins — is the status quo to beat and is option E.
   the `join` — an admitting leader can delay a newcomer to slot a friend
   first. This is inherent to any admission scheme and is bounded: the
   admitter can only reorder *concurrent* joins, never place anyone before an
-  already-slotted member. During a partition, two branches may each admit
+   already-slotted member. During a partition, two branches may each admit
    members; merge re-slots the losing branch's joins *after* the survivor's,
    so a member admitted on the losing side ends up junior to everyone admitted
    on the winning side during the partition — deterministic, but possibly
