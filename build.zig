@@ -160,13 +160,13 @@ const LineLengthStep = struct {
 
     const max_columns = 100;
 
-    fn create(owner: *std.Build) *LineLengthStep {
-        const self = owner.allocator.create(LineLengthStep) catch @panic("OOM");
+    fn create(b: *std.Build) *LineLengthStep {
+        const self = b.allocator.create(LineLengthStep) catch @panic("OOM");
         self.* = .{
             .step = std.Build.Step.init(.{
                 .id = .custom,
                 .name = "100-column cap",
-                .owner = owner,
+                .owner = b,
                 .makeFn = make,
             }),
         };
@@ -298,13 +298,13 @@ const test_roots = [_][]const u8{ "src/root.zig", "src/main.zig" };
 const TestRegistrationStep = struct {
     step: std.Build.Step,
 
-    fn create(owner: *std.Build) *TestRegistrationStep {
-        const self = owner.allocator.create(TestRegistrationStep) catch @panic("OOM");
+    fn create(b: *std.Build) *TestRegistrationStep {
+        const self = b.allocator.create(TestRegistrationStep) catch @panic("OOM");
         self.* = .{
             .step = std.Build.Step.init(.{
                 .id = .custom,
                 .name = "test registration",
-                .owner = owner,
+                .owner = b,
                 .makeFn = make,
             }),
         };
