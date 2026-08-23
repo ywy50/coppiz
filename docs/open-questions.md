@@ -313,7 +313,7 @@ Ordering inside each section is by what blocks implementation first.
     divergence). *Blocks:* nothing; documentation.
 41. **Record-store tooling.** clanker maintains its `docs/` stores with
     sandboxed tools (`clanker rfc`, `clanker adr`, …) that write
-    compare-and-swap and keep the inventories in sync. Spine's stores are
+    compare-and-swap and keep the inventories in sync. spine's stores are
     hand-maintained for now; inventories drift the way clanker's did before
     its tools existed. Reuse clanker's tools pointed at this tree, or accept
     hand maintenance until the project is bigger? *Blocks:* nothing.

@@ -7,6 +7,9 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Documentation audit: the codename is lowercase everywhere, sentence start
+  included, as every other record writes it — four sentences in research 0001
+  and OQ 41 capitalized it.
 - PRD 0001's segment index is keyed by position `(epoch, seq)`, not bare
   `seq`: the slot layout makes `seq` dense within an epoch and restarting at
   1, so any segment spanning an `epoch` boundary holds two `seq = 1…k` runs

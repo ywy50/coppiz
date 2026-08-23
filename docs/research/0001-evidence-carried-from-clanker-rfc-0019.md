@@ -35,14 +35,14 @@ inherit as requirements?
   realistic bad writer is a correlated defect, which BFT cannot absorb; a hash
   chain is addable for one hash per record and clanker's improve ledger has
   already had a prefix silently rewritten — `high` on the reasoning, resting
-  on the single-operator premise (research option R, 2026-08-19). Spine
+  on the single-operator premise (research option R, 2026-08-19). spine
   adopts the chain and signatures and declines BFT; the premise is
   [OQ 1](../open-questions.md).
 - **Quorum stores cannot serve n = 2 and stall a minority partition;
   gossip/CRDT stores converge but "converge ≠ correct".** etcd/Consul/
   rqlite/dqlite need a majority; Corrosion/Marmot accept writes everywhere and
   resolve by CRDT or HLC last-write-wins — `high`, verified at source by
-  clanker 2026-08-18. Spine's answer is append-only content (no conflict to
+  clanker 2026-08-18. spine's answer is append-only content (no conflict to
   resolve) plus mode-selectable leadership (PRD 0003), which is neither row.
 - **clanker's data is four shapes, and only ~16 KB needs compare-and-swap.**
   Append logs, small mutable documents, single-owner blobs, claims — `high`,
@@ -100,7 +100,7 @@ clanker-specific and must not leak into the library's API.
 ## Out-of-the-box options
 
 - **Already in the tree (clanker's):** `chatrooms.fanOut` — at-least-once
-  fan-out with id-dedup; the spike generalizes it with a cursor. Spine's
+  fan-out with id-dedup; the spike generalizes it with a cursor. spine's
   replication is that design with a leader-assigned total order on top.
 - **Standard library / OS primitive:** Zig `std.crypto` has Ed25519 and
   SHA-256; `std.Io` has files and sockets. No dependency needed for the core
