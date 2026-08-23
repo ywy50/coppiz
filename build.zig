@@ -235,10 +235,19 @@ test "column cap flags the first line past the limit, with path and line number"
     var count: usize = 0;
 
     const over = "a" ** (LineLengthStep.max_columns + 1);
-    try LineLengthStep.checkBytes(arena, "ok\n" ++ over ++ "\nalso ok\n", "f.zig", &report, &count);
+    // Two violations: the first must still be the one named above, and the
+    // aggregate — count and every report entry — must survive past it, so a
+    // checker that stops at the first offense cannot pass.
+    try LineLengthStep.checkBytes(
+        arena,
+        "ok\n" ++ over ++ "\nalso ok\n" ++ over ++ "\nlast ok\n",
+        "f.zig",
+        &report,
+        &count,
+    );
 
-    try std.testing.expectEqual(@as(usize, 1), count);
-    try std.testing.expectEqualStrings("  f.zig:2\n", report.items);
+    try std.testing.expectEqual(@as(usize, 2), count);
+    try std.testing.expectEqualStrings("  f.zig:2\n  f.zig:4\n", report.items);
 }
 
 test "column cap measures code points, not bytes" {
