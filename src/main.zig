@@ -9,15 +9,11 @@ const spine = @import("spine");
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
-    var buf: [256]u8 = undefined;
-    var w = std.Io.File.stdout().writer(io, &buf);
-    try w.interface.print(
+    var stdout_buffer: [256]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
+    try stdout_writer.interface.print(
         "spine {f} — not implemented yet; see docs/README.md\n",
         .{spine.version},
     );
-    try w.interface.flush();
-}
-
-test {
-    std.testing.refAllDecls(@This());
+    try stdout_writer.interface.flush();
 }

@@ -52,10 +52,11 @@ cannot be absent at size 1 needs a reason in its PRD.
   ([OQ 27](../open-questions.md)) is the mitigation, and it is why the pure
   fold/election/merge split in PRDs 0001–0003 is not optional.
 - Features that would need external infrastructure to do well (global
-  discovery, cross-datacenter routing, very large clusters) arrive late or
-  not at all; past the small-cluster range the roadmap's `quorum` mode and
-  topology work ([OQ 25](../open-questions.md)) are the growth path, still
-  inside the library.
+  discovery, cross-datacenter routing) arrive late or not at all; past the
+  small-cluster range the growth path is more groups rather than bigger ones
+  ([PRD 0006](../prds/0006-scaling-to-groups-sharding-and-parity.md)), with
+  leader-star or gossip topology inside large groups ([OQ
+  25](../open-questions.md)) — still inside the library.
 - Non-Zig hosts reach it through the node binary or a future C ABI
   ([RFC 0001](../rfcs/0001-library-first-or-service-first.md)); anything the
   node binary can do, the library can do.

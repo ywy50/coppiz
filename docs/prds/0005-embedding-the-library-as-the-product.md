@@ -113,9 +113,10 @@ spine should instead support multi-process opens natively.
 
 **The node binary** is `src/main.zig`: the library plus a TOML config, a
 CLI (`init`, `run`, `status`, `members`, `admit`, `deny`, `append`, `read`,
-`follow`, `reconfigure`, `doctor`), and — if RFC 0001 keeps it — a service
+`follow`, `settings`, `reconfigure`, `migrate`, `doctor`), and — if RFC 0001 keeps it — a service
 API on a listen address. Which leads is that RFC's decision; the build makes
-both from one tree either way.
+both from one tree either way. (`settings schema` is PRD 0004's;
+`migrate` is the explicit on-disk format migration named in Failure modes.)
 
 **Service API shape** (if kept): HTTP/1.1 + JSON on a separate port from
 replication, for non-Zig hosts, for short-lived processes beside a

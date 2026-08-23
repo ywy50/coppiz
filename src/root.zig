@@ -13,10 +13,17 @@ const build_options = @import("build_options");
 pub const version: std.SemanticVersion = build_options.version;
 
 comptime {
-    // Every src/ module must be referenced here so its `test` blocks run.
-    // (Zig 0.16 runs tests only from the root file.)
+    // Every src/ module must be referenced here (or from src/main.zig for
+    // CLI-only code) so its `test` blocks run. Zig 0.16 runs tests only
+    // from a test root; the lint gate enforces the reference.
 }
 
 test "version is the one build.zig.zon declares" {
-    try std.testing.expectEqual(@as(usize, 0), version.major);
+    // Pre-1.0 pin: a major bump must not happen silently.
+    try std.testing.expectEqual(@as(u32, 0), version.major);
+
+    // Not just any version: the exact one parsed from build.zig.zon, so the
+    // build cannot drift off the zon file as its source of truth.
+    const declared = try std.SemanticVersion.parse(build_options.version_text);
+    try std.testing.expect(version.order(declared) == .eq);
 }

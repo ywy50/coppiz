@@ -23,13 +23,17 @@ get cleanup would be paying for the whole problem to solve a corner of it.
 ## Decision
 
 An entry's bytes never change after it is written. There is no `update` and
-no `delete(id)`. The only state transitions are `live → stale → removed`,
+no `delete(id)`. The only state transitions are `live → stale → removed` —
+or `live → expired → removed` when the ledger's expiry action is delete
+rather than mark_stale —
 driven by exactly two causes — a TTL reached, and a `stale` control entry
 authored by the entry's own author — and made durable only by a leader
 `checkpoint` entry so every member removes the same set at the same chain
 position. Whether either cause is active, and whether expiry marks or
 deletes, are per-ledger settings stored in the chain ([PRD 0002](../prds/0002-ttl-and-staleness.md),
-[PRD 0004](../prds/0004-settings.md)). Slots are never removed; at most an
+[PRD 0004](../prds/0004-settings.md)) — though the schema drafted so far
+gates only the TTL cause, not the `stale` cause ([OQ 57](../open-questions.md)).
+Slots are never removed; at most an
 entry's payload (and, under `ttl.retain = none`, its header) is.
 
 ## Consequences

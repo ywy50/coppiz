@@ -11,7 +11,7 @@ RFC can be withdrawn without ever producing an ADR.
 Open a new ADR from the template, numbered after the last in the inventory:
 
 ```bash
-cp docs/adrs/TEMPLATE.md docs/adrs/0003-<slug>.md
+cp docs/adrs/TEMPLATE.md docs/adrs/0004-<slug>.md
 ```
 
 The title is the **choice**, not the question. Add it to the inventory
@@ -23,5 +23,5 @@ forward to its replacement.
 | # | Status | Decision |
 |---|---|---|
 | [0001](0001-zig-0-16-standard-library-only-for-the-core.md) | Accepted | The core is Zig 0.16 with the standard library only |
-| [0002](0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md) | Accepted | Entries are immutable; TTL expiry and author-marked staleness are the only mutations, both opt-in by setting |
-| [0003](0003-batteries-included-no-external-infrastructure-at-any-size.md) | Accepted | Batteries included: replication, election and storage ship inside the library; no external infrastructure at any size |
+| [0002](0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md) | Accepted | Entries are immutable; TTL expiry and author-marked staleness are the only mutations, and both are opt-in by setting |
+| [0003](0003-batteries-included-no-external-infrastructure-at-any-size.md) | Accepted | Batteries included: replication, election and storage ship inside the library, and no external infrastructure is required at any size |

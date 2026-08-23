@@ -70,10 +70,12 @@ timestamp and the earliest wins — is the status quo to beat and is option E.
   first. This is inherent to any admission scheme and is bounded: the
   admitter can only reorder *concurrent* joins, never place anyone before an
   already-slotted member. During a partition, two branches may each admit
-  members; merge re-slots the losing branch's joins *after* the survivor's,
-  so a member admitted on the losing side ends up junior to everyone admitted
-  on the winning side during the partition — deterministic, but possibly
-  surprising. Both are documented in PRD 0003.
+   members; merge re-slots the losing branch's joins *after* the survivor's,
+   so a member admitted on the losing side ends up junior to everyone admitted
+   on the winning side during the partition — deterministic, but possibly
+   surprising. The merge case is documented in PRD 0003 (*Partition and
+   merge*); the admitter's ordering of concurrent joins is an open question
+   below, not yet settled in the PRD.
 - **Cost to adopt:** zero beyond PRD 0001.
 - **Cost to leave:** the `join` kind and the seniority fold; low.
 - **Evidence:** design reasoning over PRD 0001's chain properties; Raft's
@@ -175,7 +177,8 @@ deterministic, which B and C's are not.
 
 - Should concurrent `join`s within one leader's batch be ordered by the
   admitter's receipt order or by newcomer id, to remove the admitter's
-  discretion entirely? (the operator; cheap to decide either way)
+  discretion entirely? ([OQ 58](../open-questions.md); the operator; cheap
+  to decide either way)
 - Seniority on rejoin ([OQ 4](../open-questions.md)).
 
 ## Next steps / action items

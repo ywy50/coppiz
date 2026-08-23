@@ -7,8 +7,9 @@ dated `CHANGELOG.md` section exist for the same commit.
 
 `build.zig.zon` is the single source of truth for the program version. The
 build reads it (`build.zig`) and passes it to the library as `spine.version`
-and to `spine --version`. The build rejects values that are not valid Semantic
-Versioning.
+and to the node binary, whose startup banner prints it (the placeholder in
+`src/main.zig`; flag parsing, including a real `--version`, lands with the
+CLI). The build rejects values that are not valid Semantic Versioning.
 
 ## Compatibility contract
 

@@ -13,7 +13,8 @@ building skeleton and the design records; `spine` is a working codename
 
 ## Quick start
 
-Build and run the tests:
+Build and run the tests (a Zig 0.16 toolchain is the only prerequisite; the
+minimum version is pinned in `build.zig.zon`):
 
 ```bash
 zig build test

@@ -23,6 +23,9 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **validation** | the pure rule every member applies to a `(slot, entry)` before accepting it; a refusal names its reason | PRD 0001 |
 | **unslotted queue** | a member's durable list of entries it authored or received that have no slot yet | PRD 0001 |
 | **backfill** | a member fetching slots it lacks from any member, verified against the chain | PRD 0001 |
+| **cursor** | a read position `(epoch, seq)` from which reads and follows continue | PRD 0001, OQ 42 |
+| **follow** | pushing each new slot to a consumer callback as it lands, from a cursor; no polling | PRD 0001, PRD 0005 |
+| **snapshot** | a verified fold at a named slot, written so restart or join bounds work instead of replaying from genesis | PRD 0001, OQ 17 |
 | **head** | a member's latest verified slot | PRD 0001 |
 | **leader** | the member that assigns slots in the current epoch | PRD 0003 |
 | **epoch** | a leadership term; opened by an `epoch` control entry; `seq` restarts at 1 | PRD 0003 |
@@ -51,7 +54,8 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **grace** | read-side skew tolerance in ms; affects visibility on one member, never bytes | PRD 0002 |
 | **settings** | ledger or cluster behaviour stored in the chain via `genesis`/`settings` entries; never per-member | PRD 0004 |
 | **local config** | `spine.toml`: paths, identity, peers, fsync — things whose disagreement cannot fork the ledger | PRD 0004 |
-| **scope** | whether a setting is cluster-wide or per ledger | PRD 0004 |
+| **scope** | whether a setting is cluster-wide, per ledger, or federation-scoped (reserved, PRD 0006) | PRD 0004 |
+| **control ledger** | the ledger whose chain carries a scope's control entries (membership, settings); whether the cluster's is its own ledger or the first data ledger is OQ 7 | PRD 0004, PRD 0006 |
 | **live-changeable** | a setting that a `settings` entry may alter; may depend on other settings | PRD 0004 |
 | **host** | any program that links the spine library; the `spine` binary, the examples and clanker's `serve` are instances | PRD 0005 |
 | **service API** | the optional HTTP surface over the library for non-Zig hosts and operators | PRD 0005, RFC 0001 |

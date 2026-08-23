@@ -90,7 +90,10 @@ the clarification of the same day) and from RFC 0019's drivers:
   is [open question 1](../open-questions.md).
 - **No encryption at rest.** The host's disk is trusted. Wire encryption is
   [open question 23](../open-questions.md).
-- **No multi-cluster federation.** One cluster, its members, its ledgers.
+- **No multi-cluster federation in v1.** One cluster, its members, its
+  ledgers; growing past one group is [PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)'s
+  later overlay, which rests on the format choices this PRD already makes
+  (globally unique ledger ids, chain per ledger, self-describing segments).
 
 ## Design
 
@@ -112,6 +115,12 @@ heal". So:
 
 Readers that care about identity use entry ids. Readers that care about
 order use slots. Both are stable in the sense that matters to them.
+
+**Byte order.** Every multi-byte integer in every fixed layout of this
+section — the entry header, the slot, and the segment record prefixes,
+headers and index under Storage — is little-endian whatever the writing
+host's native order; a codec encodes fields individually and never casts a
+native struct onto its bytes.
 
 **Entry layout** (fixed header, then payload; all integers little-endian;
 sizes are the draft and may change before the first on-disk version is
@@ -210,7 +219,8 @@ are still physically present (PRD 0002).
 
 **Backfill.** A member that was down, or has just joined, asks any member for
 slots after its last known `(epoch, seq)`; pages are bounded by
-`sync.page_bytes`. The chain lets it verify each page against the previous
+`sync.page_bytes` (layer and value [OQ 56](../open-questions.md)). The chain
+lets it verify each page against the previous
 slot hash without trusting the peer. A member is `syncing` until it has
 reached the leader's head, and a `syncing` member is never leader-eligible
 (PRD 0003) and never serves backfill pages past its own verified head.
@@ -224,11 +234,14 @@ a segment is self-describing when it moves between groups (ownership
 transfer or parity reconstruction, PRD 0006); a **sealed** segment — one
 behind the head that will never be appended to — has a recorded hash and is
 the unit parity works on. The unslotted queue is its own
-small append file. Everything else — membership, settings, leader,
-stale/expired sets — is folded from the log at open, optionally from a
-snapshot (a verified fold at a named slot) to bound restart time.
-`fsync` policy is a setting (`storage.fsync = every | batched | never`);
-the default is `every` on the leader and `batched` on followers
+small append file, bounded by `sync.unslotted_max_bytes` (value and overflow
+behaviour [OQ 55](../open-questions.md)). Everything else — membership,
+settings, leader, stale/expired sets — is folded from the log at open,
+optionally from a snapshot (a verified fold at a named slot) to bound restart
+time.
+`fsync` policy is local config, not a chain setting
+(`storage.fsync = every | batched | never`; PRD 0004's layer rule); the
+default is `every` on the leader and `batched` on followers
 ([open question 14](../open-questions.md)).
 
 **Multiple ledgers per cluster.** A cluster holds many ledgers; each has its
@@ -238,7 +251,8 @@ keep one fold; per-ledger leadership is [open question 8](../open-questions.md).
 The chain is per ledger, not per cluster, because a ledger is the unit
 PRD 0006 assigns to one group and encodes with parity — a cluster-wide chain
 could not be split ([open question 7](../open-questions.md) leans that way
-for this reason).
+for this reason). The count of ledgers is itself bounded by settings
+(`cluster.max_ledgers`; value unset, [OQ 55](../open-questions.md)).
 
 **Dependencies.**
 
@@ -287,14 +301,15 @@ creates them is the source of truth):
   membership, settings, leader and stale/expired sets, checked by hash.
 - [ ] (G3) Flipping one byte in a stored slot, entry, or payload, or removing
   a slot, is detected at open and named by position.
-- [ ] (G3) A member cannot produce a valid entry attributed to another member
-  without that member's key (negative test, must fail verification).
 - [ ] (G4) A single member with no peers survives kill -9 mid-append with no
   acknowledged-`slotted` write lost.
 - [ ] (G5) A store or frame with `version + 1` is refused with
   `unsupported_version`, not misread.
-- [ ] (G6) `max_entry_bytes`, `max_ledgers`, and the unslotted-queue bound
-  are enforced and each has a test that trips it.
+- [ ] (G6) `ledger.max_entry_bytes`, `cluster.max_ledgers`, and the
+  `sync.unslotted_max_bytes` queue bound are enforced and each has a test
+  that trips it.
+- [ ] (G7) A member cannot produce a valid entry attributed to another member
+  without that member's key (negative test, must fail verification).
 
 ## Open questions / future work
 

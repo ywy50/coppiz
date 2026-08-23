@@ -109,8 +109,9 @@ as any other. How the allowlist learns the key out of band is [open question
 
 **Member states.** `joining` (admitted, `join` not yet slotted) → `syncing`
 (slotted, backfilling to the head) → `member` (at head within
-`sync.lag_slots`) ↔ `unreachable` (failure detector lost it) → `left` (a
-`leave` entry). Only `member` is leader-eligible. `syncing` is the brief's
+`sync.lag_slots`, layer and value [open question
+56](../open-questions.md)) ↔ `unreachable` (failure detector lost it) →
+`left` (a `leave` entry). Only `member` is leader-eligible. `syncing` is the brief's
 "definitely has the full state" made a state, not a heuristic.
 
 **Leave and seniority.** A `leave` entry — by the member itself, or by the
@@ -175,9 +176,9 @@ leader: self}`. Slots in the new epoch start at `seq = 1`. Every member
 validates that the claimed leader is what `leader(...)` returns for *their*
 fold and liveness; a member that disagrees does not accept the epoch and
 keeps its previous view — that is a partition, by definition, and merge
-resolves it. Epoch numbers are unique per leader change, so two concurrent
-leaders produce two epochs with the same number on different branches, which
-the merge rule orders.
+resolves it. Each branch advances its own epoch counter by one per leader
+change, so two concurrent leaders produce two epochs with the same number on
+different branches, which the merge rule orders.
 
 **Partition and merge.** Under `seniority` (or any mode with
 `fallback = seniority`), a partition yields one leader per side, each in its
@@ -238,6 +239,7 @@ member under `seniority` with `reconfigurable = true`, add members, switch to
 | `leadership.reconfigurable` | bool | `true` | from `true` → `false` live; `false` → `true` offline only |
 | `cluster.admission` | `allowlist`, `prompt`, `open` | `allowlist` | yes |
 | `cluster.max_members` | u16 | 32 | yes |
+| `cluster.max_ledgers` | u32 | unset ([OQ 55](../open-questions.md)) | yes |
 | `cluster.heartbeat_ms` | u64 | 1000 | yes |
 | `cluster.suspect_after_ms` | u64 | 5000 | yes |
 | `membership.evict_after_ms` | u64 | 0 (never) | yes |

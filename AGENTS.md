@@ -16,16 +16,18 @@ one ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md),
 ## Build & test
 
 - `zig build` builds the `spine` node; `zig build run` runs it; `zig build
-  test` runs unit tests. Read Zig's exit code directly, never through a pipe.
+  test` runs unit tests plus the lint gates (`zig build lint` runs them
+  alone). Read Zig's exit code directly, never through a pipe.
 - Zig 0.16 runs `test` blocks only from a test module's root file: every new
   `src/` module must be referenced from the `comptime` block in
   `src/root.zig` (or from `src/main.zig` for CLI-only code) or its tests
-  silently never run.
+  silently never run; the lint gate fails on an unreferenced module.
 - Write the failing test first, beside the shipped function, and confirm it
   fails for the intended reason. Pure logic (codecs, fold, election, merge,
   expiry) stays I/O-free so it can be unit-tested and later driven by a
   deterministic simulator (OQ 27). Untrusted-input decoders get a fuzz test.
-- New code is `zig fmt` clean.
+- New code is `zig fmt` clean, and every line in `src/`, `build.zig` and
+  `build.zig.zon` fits in 100 columns; `zig build test` enforces both.
 
 ## Records
 

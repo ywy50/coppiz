@@ -47,7 +47,7 @@ chain position.
   wants the content back, it appends it again (new entry id).
 - **No per-entry override of the ledger's expiry action.** An entry says how
   long it lives; the ledger says what happens then. Mixing the two per entry
-  is [open question 6](../open-questions.md) only if a consumer needs it.
+  would be a schema addition, taken on only if a consumer needs it.
 - **No secure erasure.** Delete drops the payload from live segments; it does
   not scrub disk blocks or backups.
 - **No leader-side staleness in v1.** Only the author. Extending it to the
@@ -60,7 +60,7 @@ chain position.
 `checkpoint`). No arrow points backwards.
 
 ```
-live ──author `stale` entry──▶ stale ──checkpoint──▶ removed
+live ──author `stale` entry──▶ stale ──checkpoint (if stale.cleanup=delete)──▶ removed
 live ──ttl reached, action=mark_stale──▶ stale ──checkpoint (if stale.cleanup=delete)──▶ removed
 live ──ttl reached, action=delete──▶ expired ──checkpoint──▶ removed
 ```
@@ -75,12 +75,12 @@ the same instant from the same bytes. `author_ts_ms` is never consulted.
 | `ttl.enforce` | entry `ttl_ms = 0` | entry `ttl_ms > 0` |
 |---|---|---|
 | `off` | never expires | never expires (the field is kept, ignored) |
-| `per_entry` | never expires | expires at `slot_ts_ms + ttl_ms` |
+| `per_entry` | never expires | expires at `slot_ts_ms + min(ttl_ms, ttl.max_ms)` |
 | `all` | expires at `slot_ts_ms + ttl.default_ms` | expires at `slot_ts_ms + min(ttl_ms, ttl.max_ms)` |
 
-`ttl.max_ms` (0 = unbounded) caps what an author may ask for under `all`;
-under `per_entry` it is advisory and a larger request is clamped the same way,
-so the schema owner can bound retention without forcing it. A ledger under
+`ttl.max_ms` (0 = unbounded) caps a requested TTL under both `all` and
+`per_entry` — a larger ask is clamped to it — so the schema owner can bound
+retention without forcing expiry. A ledger under
 `all` with `ttl.default_ms = 0` is a validation error in the `settings` entry
 (PRD 0004), because it would mean "everything expires immediately".
 
@@ -113,7 +113,8 @@ setting `ttl.retain`:
 
 `header` is the default because it keeps "who wrote something here, and when"
 answerable after the content is gone, which is what an audit of a
-self-modifying system needs, and costs ~200 bytes per removed entry. `none` is
+self-modifying system needs, and costs 164 bytes per removed entry — the
+draft header layout of [PRD 0001](0001-ledger-core.md) summed. `none` is
 for ledgers where volume dominates. Removing a *slot* is never allowed — it
 would break the chain — so the ledger's slot count only grows; the cost of that
 is [open question 24](../open-questions.md).
@@ -186,7 +187,7 @@ clock it did not stamp.
 | Condition | Behaviour |
 |---|---|
 | `stale` names another author's entry | refused by every member, `not_author`; the author's `author_seq` is still consumed (the entry exists, it is just refused a slot) — [open question 11](../open-questions.md) |
-| `stale` names an unknown entry id | held like any gap (PRD 0001); refused `unknown_target` if the target never arrives within `sync.gap_timeout_ms` |
+| `stale` names an unknown entry id | held like any gap (PRD 0001); refused `unknown_target` if the target never arrives within `sync.gap_timeout_ms` ([OQ 56](../open-questions.md)) |
 | Follower clock far ahead of the leader | follower hides entries early (soft); bytes unaffected; `grace_ms` is the knob |
 | Follower clock far behind | follower shows expired entries until a checkpoint removes them; bytes unaffected |
 | Leader clock jumps forward | expiry instants pass early for entries slotted afterwards; nothing retroactive — earlier slots keep their stamps |

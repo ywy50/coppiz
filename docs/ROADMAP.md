@@ -7,8 +7,8 @@ to land. Update it when a PRD changes status.
 ## Done
 
 - **Repository founded** (2026-08-21) — Zig 0.16 skeleton that builds and
-  tests (`zig build test`), clanker's docs taxonomy, five draft PRDs, two
-  RFCs in discussion, two accepted ADRs, one carried research note, the
+  tests (`zig build test`), clanker's docs taxonomy, six draft PRDs, two
+  RFCs in discussion, three accepted ADRs, one carried research note, the
   open-questions register and the glossary. No store logic exists.
 
 ## Scale tiers
@@ -32,7 +32,7 @@ the phases.
 
 1. **Ledger core, single member** — [PRD 0001](prds/0001-ledger-core.md)
    phases 1–4: codecs, chain validation, segment storage with torn-tail
-   recovery, the library API at size 1. Gate: acceptance criteria G3–G6 on
+   recovery, the library API at size 1. Gate: acceptance criteria G3–G7 on
    one member.
 2. **Settings in the chain** — [PRD 0004](prds/0004-settings.md): schema as
    code, validation, fold, `docs/configuration.md` generated and pinned.

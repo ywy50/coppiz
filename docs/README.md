@@ -94,7 +94,9 @@ election, a reserved federation settings scope
 **Source layout (planned).** `src/ledger/` entry/slot codecs, chain, storage;
 `src/cluster/` membership fold, election, epochs, merge, node loop;
 `src/settings/` schema, validation, fold; `src/net/` framing, heartbeats,
-backfill; `src/root.zig` the library API; `src/main.zig` the node binary;
+backfill; `src/config/` local `spine.toml` parsing (PRD 0004); `src/cli/`
+the node CLI and `src/api/` the optional service API (PRD 0005);
+`src/root.zig` the library API; `src/main.zig` the node binary;
 `src/federation/` (later) group membership, ownership, routing, parity.
 Pure logic (codecs, fold, election, merge, expiry) is kept I/O-free so it
 can be unit-tested and driven by a deterministic simulator

@@ -190,7 +190,7 @@ cheap today and a format break later.
 | Segment files carry the ledger id and the owning group id in their header | a segment moved between groups (ownership transfer, parity reconstruction) is self-describing | PRD 0001 storage |
 
 **Dependencies.** The whole single-group system green and measured (ROADMAP
-steps 1–8); OQ 7, 25, 49, 50, 51, 52, 53 decided.
+steps 1–8); OQ 7, 25, 50, 51, 52, 53 decided (OQ 49 already is).
 
 **Implementation** (each phase behind a measured trigger named in the
 roadmap):
@@ -215,7 +215,7 @@ roadmap):
 
 | Condition | Behaviour |
 |---|---|
-| Owning group entirely unreachable | appends to its ledgers return `owner_unreachable`; reads serve from a follower copy if one exists, else fail; other ledgers unaffected (G6: a dead group strands only its own ledgers) |
+| Owning group entirely unreachable | appends to its ledgers return `owner_unreachable`; reads serve from a follower copy if one exists, else fail; other ledgers unaffected — a dead group strands only its own ledgers |
 | Owning group's leader changes | the group's internal epoch handles it; forwarders retry at the new leader; the federation's representative updates on the next heartbeat; the federation does not suspect the group because its `suspect_after_ms` exceeds the group's election time |
 | A non-leader member of a group signs a federation entry | refused `not_representative`: the validator's copy of that group's control chain does not name the signer as leader |
 | Ownership transfer interrupted | the chain is frozen at a slot on the old owner; the new owner either completes backfill and opens its epoch, or the federation reverts the map entry; the slot is never sequenced by two owners because the freeze is a chain event |
@@ -245,8 +245,9 @@ roadmap):
 ## Open questions / future work
 
 All in [the register](../open-questions.md): grouping unit and range key
-(OQ 48), when an uneven group count is needed (OQ 49), the parity code and
+(OQ 48), the parity code and
 its reconstruction cost (OQ 50), cross-group routing and read semantics
 (OQ 51), what group identity the core headers must carry now (OQ 52),
 membership and discovery at 10⁵ instances (OQ 53), and the measurements that
-replace the tier numbers (OQ 54).
+replace the tier numbers (OQ 54). OQ 49 (uneven group count) is resolved —
+see *A group is the system* above.

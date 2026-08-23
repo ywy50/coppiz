@@ -97,7 +97,8 @@ which forwards like any append). Validation, on every member:
    `leadership.*` is frozen by `leadership.reconfigurable = false` (PRD 0003).
 3. The *resulting* settings state is valid as a whole (`ttl.enforce = all`
    requires `ttl.default_ms > 0`; `authorities[]` may be empty only under
-   `seniority` or with `fallback = seniority`; and so on). Cross-key rules
+   `seniority`, with `fallback = seniority`, or on a one-member cluster,
+   where PRD 0003 makes the empty list mean self; and so on). Cross-key rules
    live in one place, `src/settings/validate.zig`, and are table-tested.
 4. The change takes effect for slots *after* the `settings` slot. A rule that
    needs a new epoch to apply (leadership) says so, and the leader appends

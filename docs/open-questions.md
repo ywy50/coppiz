@@ -31,6 +31,12 @@ Ordering inside each section is by what blocks implementation first.
 3. **Default `write.ack`: `local` or `slotted`?** `local` keeps a partitioned
    member writing (AP); `slotted` waits for a position (CP-ish, and even then
    a position can move once at merge unless the mode forbids two leaders).
+   Its *layer* is also unsettled: PRDs 0001 and 0006 call it a setting
+   (`write.ack = local | slotted`, honoured by the owning group), PRD 0003
+   assumes a writer can ask for `slotted` without saying where the choice
+   lives, while PRD 0005's API sketch passes `.ack` per `append` call.
+   Disagreement cannot fork the ledger, which
+   suggests local config or a call parameter with a configured default.
    *Blocks:* PRD 0001 phase 4 API defaults. *Answer from:* the operator; also
    clanker's RFC 0019 open question 1 ("stall or keep working").
 38. **Service API auth.** If RFC 0001 keeps a service API, what authenticates
@@ -116,6 +122,14 @@ Ordering inside each section is by what blocks implementation first.
     gossip (SWIM-style membership with fan-out trees). clanker's research
     named 32 as the point where "the surveyed products earn their weight".
     *Blocks:* nothing until a cluster approaches it.
+58. **Ordering of concurrent `join`s within one batch.** The admitter decides
+    *when* to write a `join`, so it can order concurrent admissions — never
+    ahead of an already-slotted member, which is the bound RFC 0002 accepts
+    (its option A). Ordering same-batch joins by newcomer id instead of
+    receipt order would remove that discretion entirely, at the cost of one
+    fold rule. Cheap to decide while the format is unfrozen.
+    *Blocks:* PRD 0003 phase 1 (membership fold). *Answer from:* the
+    operator.
 
 ## D. TTL, staleness and retention
 
@@ -141,6 +155,20 @@ Ordering inside each section is by what blocks implementation first.
     but not every byte that ever existed. PRD 0003's "definitely has the
     full state" should be defined as "at head of the chain", and the docs
     should say so. *Blocks:* PRD 0003 phase 1 wording.
+57. **Is author-marked staleness itself switchable per ledger?** [ADR
+    0002](adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md)
+    records that *whether either cause is active … [is] a per-ledger
+    setting*, and its title calls both mutations opt-in. But the schema
+    drafted in [PRD 0002](prds/0002-ttl-and-staleness.md) has no setting
+    that turns the `stale` cause off: `stale.who` names who may mark
+    (always `author` in v1) and `stale.cleanup` only decides what happens
+    *after* a mark. The brief reads both ways ("a toggle to allow mutability
+    for automatic cleanup via TTL **or** marking entries stale"). Options:
+    add a `stale.enforce`-style key (and define what `off` means for an
+    entry already marked), or narrow the accepted record's claim to TTL
+    enforcement when it is next touched. Must settle before the settings
+    schema is generated ([PRD 0004](prds/0004-settings.md) phase 1).
+    *Blocks:* PRD 0004 phase 1, not the core. *Answer from:* the operator.
 
 ## E. Storage and format
 
@@ -172,6 +200,26 @@ Ordering inside each section is by what blocks implementation first.
     does `spine export` exist? Restoring a member from backup must not
     resurrect a `leave` or fork the chain; the chain makes this detectable,
     but the procedure needs a runbook. *Blocks:* first release.
+55. **Size bounds still without values.** PRD 0001 G6 requires the ledger cap
+    (`cluster.max_ledgers`) and the unslotted-queue bound
+    (`sync.unslotted_max_bytes`) enforced with a test that trips each, but
+    neither has a default or an overflow behaviour yet: what `append` returns
+    when the queue is full (refuse locally? evict the oldest unslotted
+    entry?), and what hitting the ledger cap refuses (creation only, or
+    `genesis` too?). Siblings of OQ 36 for the two
+    bounds the core cannot ship without. *Blocks:* PRD 0001 phase 3–4
+    defaults.
+56. **The `sync.*` knobs have no layer and no values.** Three settings are
+    named in the PRDs but appear in no settings table: `sync.page_bytes`
+    (backfill page bound, PRD 0001 *Backfill*), `sync.lag_slots` (when a
+    `syncing` member counts as at head, and so leader-eligible, PRD 0003
+    *Member states*), and `sync.gap_timeout_ms` (when a held gap is refused
+    `unknown_target`, PRD 0002 failure modes). For each: is it local config
+    or a chain setting — disagreeing on `lag_slots` could elect different
+    leaders, which suggests chain; a page size only risks its own tail,
+    which suggests local — and what is the default? Sibling of OQ 55.
+    *Blocks:* PRD 0001 phase 3 (backfill), PRD 0003 phase 1 (member
+    states).
 
 ## F. Transport and wire
 
@@ -213,6 +261,26 @@ Ordering inside each section is by what blocks implementation first.
     `author:author_seq` ids are drafted; is a single opaque token better for
     an HTTP API, and should ids be exposed to consumers at all or only
     cursors? *Blocks:* PRD 0005 phase 1 API.
+46. **Which non-clanker hosts are the design targets?** spine is
+    general-purpose by brief (clarified 2026-08-21), but every concrete
+    constraint so far comes from one host. Naming two or three other host
+    shapes — a CLI tool that runs in short processes, a long-lived service on
+    a few machines, an embedded/edge fleet with flaky links — would show
+    which API shapes are general and which are clanker's. A second example
+    host in `examples/` is the roadmap's way of keeping this honest. *Blocks:*
+    nothing; shapes PRD 0005's API before it freezes. *Answer from:* the
+    operator.
+47. **Several processes on one data directory, SQLite-style.** SQLite lets
+    N processes open one file (file locks, busy timeout); clanker relies on
+    that today for its session databases, with `run`/`repl` processes
+    writing beside `serve`. spine v1 flocks the directory to one process and
+    expects short-lived processes to talk to the long-lived one. Supporting
+    multi-process opens natively would mean: one process holds the listener
+    and leader role, others append through a local IPC the library provides
+    (unix socket in the data dir) — still no external infrastructure, but a
+    second transport to own. Is the SQLite habit important enough to hosts
+    to make this v1? *Blocks:* PRD 0005 phase 1 (`open` semantics). *Answer
+    from:* the operator; OQ 46's host shapes.
 
 ## H. Project, process and quality
 
@@ -260,26 +328,6 @@ Ordering inside each section is by what blocks implementation first.
     and a lint step gate merges as clanker's `gate` does. *Blocks:* first PR
     after the initial commit.
 
-46. **Which non-clanker hosts are the design targets?** spine is
-    general-purpose by brief (clarified 2026-08-21), but every concrete
-    constraint so far comes from one host. Naming two or three other host
-    shapes — a CLI tool that runs in short processes, a long-lived service on
-    a few machines, an embedded/edge fleet with flaky links — would show
-    which API shapes are general and which are clanker's. A second example
-    host in `examples/` is the roadmap's way of keeping this honest. *Blocks:*
-    nothing; shapes PRD 0005's API before it freezes. *Answer from:* the
-    operator.
-47. **Several processes on one data directory, SQLite-style.** SQLite lets
-    N processes open one file (file locks, busy timeout); clanker relies on
-    that today for its session databases, with `run`/`repl` processes
-    writing beside `serve`. spine v1 flocks the directory to one process and
-    expects short-lived processes to talk to the long-lived one. Supporting
-    multi-process opens natively would mean: one process holds the listener
-    and leader role, others append through a local IPC the library provides
-    (unix socket in the data dir) — still no external infrastructure, but a
-    second transport to own. Is the SQLite habit important enough to hosts
-    to make this v1? *Blocks:* PRD 0005 phase 1 (`open` semantics). *Answer
-    from:* the operator; OQ 46's host shapes.
 ## I. Scaling past one group (PRD 0006)
 
 48. **Grouping unit and range key.** Ownership by whole ledger is the

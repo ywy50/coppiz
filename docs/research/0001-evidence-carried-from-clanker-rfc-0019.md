@@ -76,7 +76,7 @@ clanker-specific and must not leak into the library's API.
 | "No second daemon" (PRD 0011 non-goal) | Library-first | RFC 0001 |
 | Home-instance rule: every stream has one writing host | Author = member; `(author, author_seq)` is the stable id | PRD 0001 |
 | `max_members = 32`, full mesh O(n²) | Same cap, same topology in v1 | PRD 0003, OQ 25 |
-| Admission `allowlist | prompt | open`, receiver-only | Reused as designed | PRD 0003 |
+| Admission `allowlist`/`prompt`/`open`, receiver-only | Reused as designed | PRD 0003 |
 | Two serves on one host are two members (distinct ids, ports, dirs) | Same rule; one data dir per node, flocked | PRD 0005 |
 | Guest arena / `max_fs_bytes` 1 MiB | Backfill pages bounded by `sync.page_bytes` | PRD 0001 |
 | Improve ledger prefix silently rewritten once | Hash chain + signatures from v1, not later | PRD 0001, ADR 0002 |
