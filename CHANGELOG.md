@@ -22,6 +22,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Changed
 
+- Spec-currency pass: clanker's RFC 0019 was reopened at source (2026-08-24)
+  and the claims README and PRD 0001 cite from it hold — the survey scope
+  (17 candidates at Draft 4 plus R/S/T at Draft 5), option T *Packaging*
+  naming this project, the still-unrun stage-1 spike, the port-blind
+  `networkAllowed`, and the improve-ledger rewrite. Research 0001's evidence
+  log now carries that row with its read date, so the "seventeen stores"
+  figure is traceable in-repo instead of resting on the carried note alone
+  ([OQ 40](docs/open-questions.md) stays open for the remaining rows); the
+  glossary defines `genesis` and `segment`, which every record used and only
+  their derivatives (`founder`, `sealed segment`) defined.
+
 - Spec-currency pass: ADR 0002's claim that a setting gates each mutation
   cause is reconciled with PRD 0002's actual schema, which turns the `stale`
   cause off nowhere (`stale.cleanup` governs only removal) — registered as

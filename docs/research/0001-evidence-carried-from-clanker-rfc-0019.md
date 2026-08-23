@@ -123,6 +123,7 @@ clanker-specific and must not leak into the library's API.
 | `networkAllowed` ignores port | clanker `src/sandbox/host.zig` per RFC 0019 | 2026-08-19 | high |
 | Improve ledger prefix rewritten | clanker bug report 2026-08-17 | 2026-08-17 | high |
 | Spike journeys and 1 MiB page bound | clanker spike note | 2026-08-19 | high |
+| Survey scope: 17 candidates at Draft 4, plus R/S/T at Draft 5; option T *Packaging* names the standalone public project and "which leads is the new project's first design decision"; the stage-1 spike still unrun; `networkAllowed` port blind; improve-ledger rewrite named at open question 14 | clanker `docs/rfcs/0019-shared-state-store.md`, reopened at source (README and PRD 0001 cite the survey; [OQ 40](../open-questions.md)) | 2026-08-24 (this repo) | high |
 
 ## Open questions
 

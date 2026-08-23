@@ -9,6 +9,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **member** | a node admitted to the cluster: an Ed25519 keypair, a member id derived from the public key, and an address | PRD 0003 |
 | **node** | one running process holding a data directory; a node that has been admitted is a member | PRD 0005 |
 | **founder** | the member whose `genesis` created the cluster; seniority 0 | PRD 0003 |
+| **genesis** | the control entry that creates the cluster and its first ledger; carries the initial settings and the founder's key; its slot is seniority position 0 | PRD 0001 |
 | **ledger** | one named, append-only sequence of slots with its own settings ("schema"); a cluster holds many | PRD 0001 |
 | **entry** | what an author writes: a fixed, author-signed header plus an opaque payload; immutable; identified by `(author, author_seq)` | PRD 0001 |
 | **entry id** | `(author, author_seq)`; stable forever, across merges and restarts | PRD 0001 |
@@ -66,6 +67,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **ownership** | the federation's map `ledger id → owning group`; only the owner sequences that ledger | PRD 0006 |
 | **follower copy** | a read-only replica of a ledger kept by a non-owning group; backfilled like a syncing member, never sequencing | PRD 0006 |
 | **range key** | the author-id prefix by which one ledger is split across groups, keeping each author's stream in one group | PRD 0006 |
+| **segment** | one on-disk file of slots and their entries in chain order, each record length-prefixed and CRC-checked; its header carries the format version, the ledger id and the id of the group that sequenced it | PRD 0001 |
 | **sealed segment** | a storage segment behind the head that will never be appended to; has a recorded hash; the unit of parity | PRD 0001, PRD 0006 |
 | **parity** | k-of-m erasure coding of sealed segments across groups; any k groups reconstruct | PRD 0006 |
 | **tier** | which scaling mechanisms are on: 0 (one process), 1 (one group), 2 (groups), 3 (groups of groups), parity | PRD 0006, ROADMAP |
