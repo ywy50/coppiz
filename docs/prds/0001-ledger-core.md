@@ -20,7 +20,8 @@ replication daemon), or write files and hope. There is no library that a Zig
 program embeds the way it embeds SQLite — open a directory, append, read —
 whose replication, election and cleanup are already inside, and which grows
 from one process to a fleet without an operator standing up a cluster first.
-clanker's RFC 0019 surveyed seventeen stores and confirmed that gap; the
+clanker's RFC 0019 surveyed seventeen candidates — stores and log/CRDT
+libraries alike — and confirmed that gap; the
 operator's direction (2026-08-19, clarified 2026-08-21) was to found the
 missing store as its own public, general-purpose project, with clanker as its
 first host rather than its owner. This is it.

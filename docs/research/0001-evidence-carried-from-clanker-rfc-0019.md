@@ -3,8 +3,10 @@
 ## Status
 
 Draft — compiled 2026-08-21 from clanker's records; **nothing here was
-re-verified at its original source for this note**. The evidence log gives
-the read date for every claim. Reopen a source before quoting it as current.
+re-verified at its original source for this note**. Every claim traces to a
+clanker source named under Scope and method, all read there on 2026-08-21;
+the evidence log gives the finer-grained source and date where one row covers
+it. Reopen a source before quoting it as current.
 
 Research is evidence, not a decision: it records what exists, how good it is,
 and how confident the finding is. The decision that follows belongs in an
@@ -146,3 +148,5 @@ clanker-specific and must not leak into the library's API.
 - clanker `docs/research/t-stage1-stream-replication-spike.md` (Draft).
 - clanker `docs/prds/0011-clanker-mesh.md` (In progress).
 - clanker `docs/adrs/0001-board-is-a-chatroom.md`, `0031-compare-and-swap-locks-live-in-state-locks-keyed-by-a-hash.md`.
+- clanker `docs/adrs/0033-sessions-are-per-session-sqlite-databases-with-an-append.md`
+  (cited from the findings table; read in clanker's checkout 2026-08-21).

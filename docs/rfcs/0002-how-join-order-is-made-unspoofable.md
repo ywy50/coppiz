@@ -33,7 +33,9 @@ member can gain by lying, so this mechanism is the security core of the mode.
 3. No external authority: the mode exists for clusters with no configured
    leader list (that is `configured` mode's job).
 4. Cheap: evaluated on every election and every `join` validation.
-5. Survives restarts, partitions and merges without the order changing.
+5. Survives restarts, partitions and merges without the order changing
+   arbitrarily (a merge's one deterministic re-slotting is the accepted
+   exception; see option A's cons).
 
 **Out of scope.** Who *admits* a member (PRD 0003 admission). Whether
 seniority resets on rejoin ([OQ 4](../open-questions.md)).

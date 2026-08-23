@@ -55,9 +55,10 @@ chain position.
 
 ## Design
 
-**Three states, one direction.** An entry is `live`, then possibly `stale`
-(by author mark or by TTL under `mark_stale`), then possibly `removed` (by
-`checkpoint`). No arrow points backwards.
+**Four states, one direction.** An entry is `live`, then possibly `stale`
+(by author mark, or by TTL under `mark_stale`) or `expired` (by TTL under
+`delete`), then possibly `removed` (by `checkpoint`). No arrow points
+backwards.
 
 ```
 live ──author `stale` entry──▶ stale ──checkpoint (if stale.cleanup=delete)──▶ removed
@@ -173,7 +174,7 @@ clock it did not stamp.
 1. `src/ledger/expiry.zig` — pure: `effectiveTtl(entry, settings)`,
    `expiresAt(slot, entry, settings)`, `visibleAt(now, …)`,
    `removalSet(fold, checkpoint)`. Table tests over the enforce × entry-ttl
-   matrix and the three-state transitions.
+   matrix and every transition of the state diagram above.
 2. `chain.zig` validation rules for `stale` (`not_author`, idempotent) and
    `checkpoint` (leader only; `expire_through` ≤ checkpoint's own slot; not
    inside `merge.settle_ms`).

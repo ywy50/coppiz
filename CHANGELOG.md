@@ -7,6 +7,27 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Documentation-currency pass: PRD 0002's Design no longer opens with
+  "three states" — its own diagram, the glossary and ADR 0002 all carry four
+  (`live`, `stale`, `expired`, `removed`), so the prose now does too;
+  seniority is no longer described as "position 0" for the founder —
+  *position* is defined as `(epoch, seq)` and no slot has `seq = 0`, so both
+  mentions say seniority rank 0; PRD 0001 counts clanker's survey as
+  seventeen *candidates*, matching README and research 0001; ROADMAP's
+  founding line lists five draft PRDs and two accepted ADRs (PRD 0006 and
+  ADR 0003 landed after founding); the roadmap schedules the RFC 0001
+  decision before PRD 0001 phase 4, the deadline RFC 0001's own comment
+  period sets; OQ 29/30/38 cite the PRD 0005 phases that actually contain
+  their work (3, 5 and 4, not 2, 4 and 3); PRD 0006's dependency list names
+  OQ 48 alongside its siblings and its G1 cites OQ 54's measurement set
+  instead of a roadmap section that does not exist; research 0001's status
+  no longer promises an evidence-log row for every claim (the findings table
+  traces to the Scope-and-method sources) and References names clanker ADR
+  0033, which the findings table cites; the glossary defines *sharding* and
+  *instance*, used across PRD 0006 and the roadmap without definition; RFC
+  0002's driver 5 concedes merge's deterministic re-slotting, which its own
+  option-A cons describe.
+
 - Documentation audit: the codename is lowercase everywhere, sentence start
   included, as every other record writes it — four sentences in research 0001
   and OQ 41 capitalized it.

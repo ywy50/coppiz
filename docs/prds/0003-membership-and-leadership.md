@@ -83,7 +83,7 @@ without a side channel.
 
 **Join is an entry, so join order is the chain.** A member's *seniority* is
 the slot of its `join` control entry (the founder's is the `genesis` slot,
-position 0). This is the whole answer to "cannot be spoofed" (RFC 0002):
+seniority rank 0). This is the whole answer to "cannot be spoofed" (RFC 0002):
 
 - The joining member does not write its own `join`. An *existing* member —
   the admitter, normally the leader — writes it, after admission, naming the

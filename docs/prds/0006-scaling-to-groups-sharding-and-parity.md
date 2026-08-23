@@ -190,7 +190,7 @@ cheap today and a format break later.
 | Segment files carry the ledger id and the owning group id in their header | a segment moved between groups (ownership transfer, parity reconstruction) is self-describing | PRD 0001 storage |
 
 **Dependencies.** The whole single-group system green and measured (ROADMAP
-steps 1–8); OQ 7, 25, 50, 51, 52, 53 decided (OQ 49 already is).
+steps 1–8); OQ 7, 25, 48, 50, 51, 52, 53 decided (OQ 49 already is).
 
 **Implementation** (each phase behind a measured trigger named in the
 roadmap):
@@ -226,7 +226,8 @@ roadmap):
 ## Acceptance criteria
 
 - [ ] (G1) Size-1 append latency is measured as local disk write cost with
-  no socket opened; reported in the roadmap's first measurement set.
+  no socket opened; reported with the first measurement set ([OQ
+  54](../open-questions.md)).
 - [ ] (G2) PRD 0003's acceptance criteria pass unchanged when the cluster
   is a member of a federation.
 - [ ] (G3) Federation membership and election are the same source files as

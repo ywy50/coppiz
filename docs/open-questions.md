@@ -41,7 +41,7 @@ Ordering inside each section is by what blocks implementation first.
    clanker's RFC 0019 open question 1 ("stall or keep working").
 38. **Service API auth.** If RFC 0001 keeps a service API, what authenticates
     a caller off loopback — a static token, member keys, mTLS? v1 drafts
-    loopback-only with a warning. *Blocks:* PRD 0005 phase 3.
+    loopback-only with a warning. *Blocks:* PRD 0005 phase 4.
 40. **Public claims need reopening.** Everything in research 0001 is carried
     from clanker's reading dates; before the README or a release cites an
     external fact, reopen it. *Blocks:* first public release.
@@ -247,7 +247,7 @@ Ordering inside each section is by what blocks implementation first.
     then build spine, or build spine's core and make the spike *use* spine?
     The second avoids building the cursor logic twice; the first gives
     clanker an answer without waiting. Which code survives? *Blocks:* PRD
-    0005 phase 4. *Answer from:* the operator, jointly with clanker's RFC
+    0005 phase 5. *Answer from:* the operator, jointly with clanker's RFC
     0019 next steps.
 34. **Ledger lifecycle.** Who may create a ledger (any member? leader only?
     a setting?), and can one be *dropped* — which would be the only
@@ -305,7 +305,7 @@ Ordering inside each section is by what blocks implementation first.
 29. **Observability.** `spine status` / `node.status()`: leader, epoch, head,
     members and states, lag per follower, pending checkpoint bytes, last
     merge. Metrics format (Prometheus text?) and where logs go. *Blocks:*
-    PRD 0005 phase 2.
+    PRD 0005 phase 3.
 32. **Clock assumptions.** `slot_ts_ms` is the leader's wall clock; TTL
     depends on it; nothing depends on monotonic time except failure
     detection. Document the assumption (NTP-disciplined, skew in seconds not

@@ -7,9 +7,10 @@ to land. Update it when a PRD changes status.
 ## Done
 
 - **Repository founded** (2026-08-21) — Zig 0.16 skeleton that builds and
-  tests (`zig build test`), clanker's docs taxonomy, six draft PRDs, two
-  RFCs in discussion, three accepted ADRs, one carried research note, the
-  open-questions register and the glossary. No store logic exists.
+  tests (`zig build test`), clanker's docs taxonomy, five draft PRDs (0006
+  followed), two RFCs in discussion, two accepted ADRs (0003 followed), one
+  carried research note, the open-questions register and the glossary. No
+  store logic exists.
 
 ## Scale tiers
 
@@ -31,16 +32,19 @@ In dependency order. Each line names the PRD whose Implementation section has
 the phases.
 
 1. **Ledger core, single member** — [PRD 0001](prds/0001-ledger-core.md)
-   phases 1–4: codecs, chain validation, segment storage with torn-tail
-   recovery, the library API at size 1. Gate: acceptance criteria G3–G7 on
-   one member.
+   phases 1–3: codecs, chain validation, segment storage with torn-tail
+   recovery. Gate: acceptance criteria G3–G7 on one member. **Decide RFC
+   0001** (library/service) before PRD 0001 phase 4 (the library API at size
+   1) starts — the deadline RFC 0001's own comment period sets
+   ([RFC 0001](rfcs/0001-library-first-or-service-first.md)); it has a
+   recommendation.
 2. **Settings in the chain** — [PRD 0004](prds/0004-settings.md): schema as
    code, validation, fold, `docs/configuration.md` generated and pinned.
 3. **TTL and staleness** — [PRD 0002](prds/0002-ttl-and-staleness.md): pure
    expiry predicates, `stale` and `checkpoint` rules, payload drop. Testable
    on one member (it is its own leader).
-4. **Decide RFC 0002** (join order) and **RFC 0001** (library/service) —
-   before the cluster work starts; both have recommendations.
+4. **Decide RFC 0002** (join order) — before the cluster work starts; it has
+   a recommendation.
 5. **Deterministic simulator** — [OQ 27](open-questions.md): seeded
    multi-node run with partitions, crashes, skew and reorder, over the pure
    fold/election/merge functions. Placed *before* the node loop so the loop
