@@ -18,6 +18,19 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The test-registration lint gate now follows imports transitively. Zig
+  0.16 collects a module's tests whenever a chain of analyzed imports
+  reaches it from a test root, not only when a root imports it directly
+  (verified on 0.16.0: with `src/root.zig` importing `a.zig` importing
+  `b.zig`, `zig build test` runs b's tests), but the gate compared only
+  direct root imports — a helper imported solely by another module failed
+  the build as "no test root imports it" although its tests ran, and each
+  such module had to be registered twice for no effect. The gate now walks
+  real `@import` calls from the roots across every walked module, resolving
+  import strings relative to the importing file's directory (`b.zig`
+  beside the importer, `../other/x.zig` across branches); the report names
+  the surviving failure precisely: "not reachable from a test root".
+
 - Documentation-currency pass: PRD 0002's Design no longer opens with
   "three states" — its own diagram, the glossary and ADR 0002 all carry four
   (`live`, `stale`, `expired`, `removed`), so the prose now does too;

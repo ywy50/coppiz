@@ -22,10 +22,14 @@ one ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md),
   fetched as a dependency, never for a tree built directly; the build script
   enforces the floor itself, so the gates always run under declared
   toolchain semantics.
-- Zig 0.16 runs `test` blocks only from a test module's root file: every new
-  `src/` module must be referenced from the `comptime` block in
-  `src/root.zig` (or from `src/main.zig` for CLI-only code) or its tests
-  silently never run; the lint gate fails on an unreferenced module. Zig also
+- Zig 0.16 collects `test` blocks from every `src/` module a test root
+  (`src/root.zig`, `src/main.zig`) reaches through *analyzed* imports —
+  transitively, so a helper imported only by another module has its tests
+  run; but an unreferenced module's tests silently never run, and neither do
+  those of a module imported only by a never-analyzed declaration (an unused
+  container-level `const`). Register each new module from the `comptime`
+  block in `src/root.zig` (or from `src/main.zig` for CLI-only code); the
+  lint gate fails when no chain of real `@import`s reaches it. Zig also
   analyzes a declaration only once something references it, so each
   registered module gets a line in the root's "all public declarations
   analyze" test — an unreferenced `pub` declaration is otherwise compiled

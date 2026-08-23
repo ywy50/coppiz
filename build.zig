@@ -96,9 +96,10 @@ test "meetsZigFloor accepts the floor itself and newer, rejects older" {
 /// so the build script reads as two jobs — produce and check — with this
 /// one owning all of the checking.
 fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Compile) void {
-    // Zig 0.16 runs `test` blocks only from the root file of each test
-    // module, so every src/ file must be reachable from a test-module
-    // root — src/root.zig's comptime reference block, or src/main.zig —
+    // Zig 0.16 collects `test` blocks from a test module's root file and
+    // from every src/ module its analyzed imports reach, so every src/ file
+    // must be reachable from a test-module root — src/root.zig's comptime
+    // reference block or src/main.zig, directly or through another module —
     // or its tests silently never run.
     const lib_tests = b.addTest(.{ .root_module = lib_mod });
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
@@ -118,8 +119,8 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
     // formatter (`zig fmt --check --ast-check`, run with the toolchain that
     // is executing this build, not whatever is first on PATH), a hard
     // 100-column cap matching zig fmt's own wrap target, and test
-    // registration (a module missing from a test root loses its tests
-    // silently, because Zig 0.16 collects `test` blocks only from roots).
+    // registration (a module no chain of imports reaches from a test root
+    // loses its tests silently).
     const lint_step = b.step("lint", "Check formatting, line length and test registration");
 
     // The checked paths come from `checked_paths`, shared with the column
@@ -336,19 +337,30 @@ test "column cap falls back to byte count on invalid UTF-8" {
 }
 
 /// The src/ files whose `test` blocks Zig collects (the test-module roots).
-/// One list serves both uses in the gate below: the roots scanned for
-/// imports, and the files exempt from requiring registration.
+/// One list serves both uses in the gate below: the seeds of the
+/// reachability walk, and the files exempt from requiring reachability.
 const test_roots = [_][]const u8{ "src/root.zig", "src/main.zig" };
 
-/// Fails the build when a src/ module is not imported from a test-module
-/// root (src/root.zig or src/main.zig): Zig 0.16 collects `test` blocks
-/// only from those roots, so an unreferenced module's tests silently never
-/// run and `zig build test` stays green. Import paths are relative to the
-/// importing file, and the roots themselves live in src/, so the reference
-/// is the module's path from src/ ("sub/foo.zig"), never "src/sub/foo.zig".
-/// Matching runs on the roots' token stream (hasRealImport): only a real
-/// `@import("path")` call counts, so a mention inside a comment or any
-/// string literal registers nothing.
+/// One walked src/ file: its path as appendZigFilesUnder hands it out
+/// (build-root-relative, platform separators) and its source text.
+const Source = struct {
+    path: []const u8,
+    text: []const u8,
+};
+
+/// Fails the build when no chain of real @imports reaches a src/ module
+/// from a test-module root (src/root.zig or src/main.zig): only such a
+/// chain makes Zig 0.16 collect the module's `test` blocks, so an
+/// unreachable module's tests silently never run while `zig build test`
+/// stays green. Collection follows analyzed imports transitively — verified
+/// on 0.16.0: with root.zig importing a.zig importing b.zig, b's tests run;
+/// an import in a declaration that is never analyzed (an unused
+/// container-level const) collects nothing — so the gate walks real
+/// @import calls across every walked module (hasRealImport), resolving each
+/// candidate's import string relative to the importing file's directory
+/// (importBetween), not just against the two roots. Only a literal
+/// `@import("path")` call counts: a mention inside a comment or any string
+/// literal registers nothing.
 const TestRegistrationStep = struct {
     step: std.Build.Step,
 
@@ -373,36 +385,29 @@ const TestRegistrationStep = struct {
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 
-        var root_sources: std.ArrayListUnmanaged([]const u8) = .empty;
-        for (test_roots) |root_path| {
-            const bytes = b.build_root.handle.readFileAlloc(
-                io,
-                root_path,
-                arena,
-                .unlimited,
-            ) catch |err| return step.fail(
-                "cannot read test root '{s}': {s}",
-                .{ root_path, @errorName(err) },
-            );
-            try root_sources.append(arena, bytes);
-        }
-
         var report: std.ArrayListUnmanaged(u8) = .empty;
         var count: usize = 0;
-        // Only src/ modules are subjects of the gate: a test root itself
-        // (src/root.zig, src/main.zig) is registration's author, not its
-        // object.
+        // Every walked module's text: the reachability walk reads imports
+        // out of intermediate modules too, not just out of the two roots.
+        // The roots sit in src/ themselves, so one walk finds them and no
+        // file is read twice.
         var module_paths: std.ArrayListUnmanaged([]const u8) = .empty;
         appendZigFilesUnder(b.build_root.handle, io, "src", arena, &module_paths) catch |err|
             return step.fail("cannot enumerate the src/ modules: {s}", .{@errorName(err)});
-        try classifyModules(
-            arena,
-            root_sources.items,
-            module_paths.items,
-            std.fs.path.sep,
-            &report,
-            &count,
-        );
+        var sources: std.ArrayListUnmanaged(Source) = .empty;
+        for (module_paths.items) |path| {
+            const bytes = b.build_root.handle.readFileAlloc(
+                io,
+                path,
+                arena,
+                .unlimited,
+            ) catch |err| return step.fail(
+                "cannot read module '{s}': {s}",
+                .{ path, @errorName(err) },
+            );
+            try sources.append(arena, .{ .path = path, .text = bytes });
+        }
+        try classifyModules(arena, sources.items, std.fs.path.sep, &report, &count);
         if (count > 0)
             return step.fail("{d} module(s) whose tests never run:\n{s}", .{
                 count, report.items,
@@ -410,27 +415,47 @@ const TestRegistrationStep = struct {
     }
 
     /// The gate's decision core, I/O-free so tests drive it directly, the
-    /// way checkBytes serves the column cap: given each test root's source
-    /// text and the walked module paths in filesystem form, appends one
-    /// report line per module no root imports and counts them. `sep` is a
-    /// parameter so any platform can be simulated in a test.
+    /// way checkBytes serves the column cap: from the test roots, follow
+    /// real imports across `sources` and append one report line per module
+    /// no chain reaches, counting them. O(modules²) tokenizer runs — src/
+    /// holds a handful of files today and the point is to fail loudly while
+    /// the tree is small. `sep` is a parameter so any platform can be
+    /// simulated in a test.
     fn classifyModules(
         arena: std.mem.Allocator,
-        root_sources: []const []const u8,
-        module_paths: []const []const u8,
+        sources: []const Source,
         sep: u8,
         report: *std.ArrayListUnmanaged(u8),
         count: *usize,
     ) !void {
-        for (module_paths) |path| {
-            if (try isTestRoot(arena, path, sep)) continue;
-            const import_path = try toImportPath(arena, path, sep);
-            for (root_sources) |source| {
-                if (try hasRealImport(arena, source, import_path)) break;
-            } else {
-                count.* += 1;
-                try report.print(arena, "  {s}: no test root imports it\n", .{path});
+        var reachable: std.StringArrayHashMapUnmanaged(void) = .empty;
+        defer reachable.deinit(arena);
+        var queue: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer queue.deinit(arena);
+        for (sources) |source| {
+            if (try isTestRoot(arena, source.path, sep)) try queue.append(arena, source.path);
+        }
+        var cursor: usize = 0;
+        while (cursor < queue.items.len) : (cursor += 1) {
+            const path = queue.items[cursor];
+            if (reachable.contains(path)) continue;
+            try reachable.put(arena, path, {});
+            const text = for (sources) |source| {
+                if (std.mem.eql(u8, source.path, path)) break source.text;
+            } else unreachable;
+            for (sources) |candidate| {
+                if (std.mem.eql(u8, candidate.path, path)) continue;
+                if (reachable.contains(candidate.path)) continue;
+                const wanted = try importBetween(arena, path, candidate.path, sep);
+                if (try hasRealImport(arena, text, wanted))
+                    try queue.append(arena, candidate.path);
             }
+        }
+        for (sources) |source| {
+            if (try isTestRoot(arena, source.path, sep)) continue;
+            if (reachable.contains(source.path)) continue;
+            count.* += 1;
+            try report.print(arena, "  {s}: not reachable from a test root\n", .{source.path});
         }
     }
 
@@ -438,8 +463,8 @@ const TestRegistrationStep = struct {
     /// test_roots is written with '/', so a byte-equal comparison never matches there:
     /// the roots would be checked as ordinary modules and fail the gate (nothing
     /// @imports them as files). Normalize the walked path to '/' separators first —
-    /// the same translation toImportPath applies after stripping the "src/" prefix.
-    /// `sep` is a parameter so any platform can be simulated in a test.
+    /// the same translation importBetween applies after resolving. `sep` is a
+    /// parameter so any platform can be simulated in a test.
     fn isTestRoot(
         arena: std.mem.Allocator,
         path: []const u8,
@@ -452,30 +477,39 @@ const TestRegistrationStep = struct {
         return false;
     }
 
-    /// The gate matches `@import("sub/x.zig")` strings, whose separators are always '/',
-    /// but appendZigFilesUnder returns filesystem paths in the platform separator ('\')
-    /// on Windows. Strip the leading component — the prefix is the same byte length
-    /// either way, both separators being one byte — and translate before matching; a
-    /// native-separator path never matches, so without this every module fails the
-    /// gate on Windows. `sep` is a parameter so any platform can be simulated in a
-    /// test: reading std.fs.path.sep here instead would make classifyModules' sep a
-    /// lie on any host but one.
-    fn toImportPath(arena: std.mem.Allocator, path: []const u8, sep: u8) ![]const u8 {
-        // The blind four-byte slice below only works on a path
-        // appendZigFilesUnder produced; pin that instead of trusting every
-        // caller to check.
-        std.debug.assert(isSrcPrefixed(path));
-        return importSeparators(arena, path["src/".len..], sep);
-    }
-
-    /// True for exactly the path shape appendZigFilesUnder hands out: the literal first
-    /// component "src" plus one separator byte, in either platform's form. toImportPath
-    /// strips those four bytes by count, so the shape — not just the byte total — is
-    /// the contract.
-    fn isSrcPrefixed(path: []const u8) bool {
-        if (path.len < "src/".len) return false;
-        return std.mem.startsWith(u8, path, "src/") or
-            std.mem.startsWith(u8, path, "src\\");
+    /// The @import string that reaches the file `to_path` from the file
+    /// `from_path`: relative to the importing file's directory and
+    /// '/'-separated, the only form an import string may hold — "sub/x.zig"
+    /// from a root-level importer, "y.zig" beside the importer,
+    /// "../other/y.zig" across branches (a submodule importing a sibling
+    /// tree climbs out). Both paths come from one walk of "src/", so
+    /// neither carries a drive or leading separator; `sep` is a parameter
+    /// so any platform can be simulated in a test.
+    fn importBetween(
+        arena: std.mem.Allocator,
+        from_path: []const u8,
+        to_path: []const u8,
+        sep: u8,
+    ) ![]const u8 {
+        const from = try importSeparators(arena, from_path, sep);
+        const to = try importSeparators(arena, to_path, sep);
+        // Longest common prefix ending on a '/' boundary: stopping at the
+        // first differing byte instead would treat "src/aa/" and "src/ab/"
+        // as one directory because they share "src/a".
+        var scanned: usize = 0;
+        var boundary: usize = 0;
+        const limit = @min(from.len, to.len);
+        while (scanned < limit and from[scanned] == to[scanned]) : (scanned += 1) {
+            if (from[scanned] == '/') boundary = scanned + 1;
+        }
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        // Each directory left under the importer climbs one "..".
+        for (from[boundary..]) |c| {
+            if (c != '/') continue;
+            try out.appendSlice(arena, "../");
+        }
+        try out.appendSlice(arena, to[boundary..]);
+        return out.toOwnedSlice(arena);
     }
 
     /// True when `source` actually calls `@import("target")`, decided on the
@@ -521,30 +555,47 @@ fn importSeparators(arena: std.mem.Allocator, path: []const u8, sep: u8) ![]cons
     return std.mem.replaceOwned(u8, arena, path, &.{sep}, "/");
 }
 
-test "import paths use '/' whatever the filesystem separator is" {
+test "importBetween resolves the import string from the importing file's directory" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // The Windows case, simulated on every host through the sep argument.
-    const win_path = try importSeparators(arena, "sub/x\\y.zig", '\\');
-    try std.testing.expectEqualStrings("sub/x/y.zig", win_path);
+    // A root-level importer reaches a submodule by its path from src/.
+    try std.testing.expectEqualStrings(
+        "sub/x.zig",
+        try TestRegistrationStep.importBetween(arena, "src/root.zig", "src/sub/x.zig", '/'),
+    );
 
-    // The shape toImportPath strips by byte count: both separators count,
-    // anything else — including a bare "src" and a deeper first component —
-    // must fail the check the slice asserts on.
-    try std.testing.expect(TestRegistrationStep.isSrcPrefixed("src/sub/x.zig"));
-    try std.testing.expect(TestRegistrationStep.isSrcPrefixed("src\\sub\\x.zig"));
-    try std.testing.expect(!TestRegistrationStep.isSrcPrefixed("sub/x.zig"));
-    try std.testing.expect(!TestRegistrationStep.isSrcPrefixed("src"));
-    try std.testing.expect(!TestRegistrationStep.isSrcPrefixed("source/x.zig"));
+    // Modules in one subdirectory are siblings: a bare filename.
+    try std.testing.expectEqualStrings(
+        "y.zig",
+        try TestRegistrationStep.importBetween(arena, "src/sub/x.zig", "src/sub/y.zig", '/'),
+    );
+    // Across branches the import climbs out with "..".
+    try std.testing.expectEqualStrings(
+        "../other/y.zig",
+        try TestRegistrationStep.importBetween(arena, "src/sub/x.zig", "src/other/y.zig", '/'),
+    );
+    // The shared prefix must stop on a '/' boundary: src/aa/ and src/ab/
+    // share "src/a" byte-wise but are different directories.
+    try std.testing.expectEqualStrings(
+        "../ab/g.zig",
+        try TestRegistrationStep.importBetween(arena, "src/aa/f.zig", "src/ab/g.zig", '/'),
+    );
 
-    // What TestRegistrationStep.make sees per host: appendZigFilesUnder
-    // joins with the platform separator, and the result must match real
-    // import syntax.
-    const joined = if (std.fs.path.sep == '/') "src/sub/x.zig" else "src\\sub\\x.zig";
-    const import_path = try TestRegistrationStep.toImportPath(arena, joined, std.fs.path.sep);
-    try std.testing.expectEqualStrings("sub/x.zig", import_path);
+    // The Windows case, simulated on every host through the sep argument:
+    // walked paths are normalized before resolution.
+    const win = try importSeparators(arena, "sub\\x\\y.zig", '\\');
+    try std.testing.expectEqualStrings("sub/x/y.zig", win);
+    try std.testing.expectEqualStrings(
+        "y.zig",
+        try TestRegistrationStep.importBetween(
+            arena,
+            "src\\sub\\x.zig",
+            "src\\sub\\y.zig",
+            '\\',
+        ),
+    );
 }
 
 test "test roots match whatever separator the walker produced" {
@@ -564,65 +615,65 @@ test "test roots match whatever separator the walker produced" {
     try std.testing.expect(try TestRegistrationStep.isTestRoot(arena, native, std.fs.path.sep));
 }
 
-test "test-registration gate reports exactly the modules no test root imports" {
+test "test-registration gate reports exactly the modules no chain reaches from a test root" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // Two roots, each importing one module: registration must be found in
-    // any root, not only the first scanned.
-    const root_sources = [_][]const u8{
-        "_ = @import(\"sub/registered.zig\");\n",
-        "_ = @import(\"other/second.zig\");\n",
-    };
-    // The walked paths as appendZigFilesUnder hands them to make() on
-    // Windows, simulated through sep. This drives the full chain — skip the
-    // roots, strip the prefix, translate separators, match against every
-    // root's imports — which its separately-tested pieces do not cover.
-    const module_paths = [_][]const u8{
-        "src\\main.zig",
-        "src\\root.zig",
-        "src\\sub\\registered.zig",
-        "src\\other\\second.zig",
-        "src\\sub\\unregistered.zig",
+    // The tree: main.zig imports sub/registered.zig, and only
+    // registered.zig reaches ../other/second.zig — second's tests run
+    // through that chain, so neither may be reported, whatever file imports
+    // it. registered.zig also *mentions* sub/unregistered.zig inside a
+    // comment: no real import call, so the orphan stays an orphan.
+    const sources = [_]Source{
+        .{
+            .path = "src\\main.zig",
+            .text = "comptime {\n    _ = @import(\"sub/registered.zig\");\n}\n",
+        },
+        .{ .path = "src\\root.zig", .text = "" },
+        .{
+            .path = "src\\sub\\registered.zig",
+            .text = "_ = @import(\"../other/second.zig\");\n" ++
+                "// _ = @import(\"sub/unregistered.zig\"); registers nothing\n",
+        },
+        .{ .path = "src\\other\\second.zig", .text = "" },
+        .{ .path = "src\\sub\\unregistered.zig", .text = "" },
     };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
     var count: usize = 0;
-    try TestRegistrationStep.classifyModules(
-        arena,
-        &root_sources,
-        &module_paths,
-        '\\',
-        &report,
-        &count,
-    );
+    try TestRegistrationStep.classifyModules(arena, &sources, '\\', &report, &count);
 
     // The roots are never reported though nothing imports them; exactly the
     // orphan is, named by its walked path — the string make() prints on any
     // host.
     try std.testing.expectEqual(@as(usize, 1), count);
     try std.testing.expectEqualStrings(
-        "  src\\sub\\unregistered.zig: no test root imports it\n",
+        "  src\\sub\\unregistered.zig: not reachable from a test root\n",
         report.items,
     );
 
     // The same tree in this host's separator form decides identically.
     const s = std.fs.path.sep_str;
-    const native_paths = [_][]const u8{
-        "src" ++ s ++ "main.zig",
-        "src" ++ s ++ "root.zig",
-        "src" ++ s ++ "sub" ++ s ++ "registered.zig",
-        "src" ++ s ++ "other" ++ s ++ "second.zig",
-        "src" ++ s ++ "sub" ++ s ++ "unregistered.zig",
+    const native_sources = [_]Source{
+        .{
+            .path = "src" ++ s ++ "main.zig",
+            .text = sources[0].text,
+        },
+        .{ .path = "src" ++ s ++ "root.zig", .text = "" },
+        .{
+            .path = "src" ++ s ++ "sub" ++ s ++ "registered.zig",
+            .text = sources[2].text,
+        },
+        .{ .path = "src" ++ s ++ "other" ++ s ++ "second.zig", .text = "" },
+        .{ .path = "src" ++ s ++ "sub" ++ s ++ "unregistered.zig", .text = "" },
     };
 
     report = .empty;
     count = 0;
     try TestRegistrationStep.classifyModules(
         arena,
-        &root_sources,
-        &native_paths,
+        &native_sources,
         std.fs.path.sep,
         &report,
         &count,
@@ -630,7 +681,7 @@ test "test-registration gate reports exactly the modules no test root imports" {
 
     try std.testing.expectEqual(@as(usize, 1), count);
     try std.testing.expectEqualStrings(
-        "  src" ++ s ++ "sub" ++ s ++ "unregistered.zig: no test root imports it\n",
+        "  src" ++ s ++ "sub" ++ s ++ "unregistered.zig: not reachable from a test root\n",
         report.items,
     );
 }

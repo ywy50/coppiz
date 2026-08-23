@@ -13,9 +13,14 @@ const build_options = @import("build_options");
 pub const version: std.SemanticVersion = build_options.version;
 
 comptime {
-    // Every src/ module must be referenced here (or from src/main.zig for
-    // CLI-only code) so its `test` blocks run. Zig 0.16 runs tests only
-    // from a test root; the lint gate enforces the reference.
+    // Every src/ module should be referenced here (or from src/main.zig
+    // for CLI-only code). Tests collect from any module transitively
+    // reachable from a test root through analyzed imports, so a module only
+    // another module imports has its tests run too; registering here keeps
+    // each module's public declarations covered by the "all public
+    // declarations analyze" test below, which indirect reachability alone
+    // does not give. The lint gate fails only when no chain of real
+    // @imports reaches a module.
     //
     // Registration alone collects a module's tests but does not check its
     // unreferenced declarations: Zig analyzes a `pub` declaration only once

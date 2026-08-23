@@ -22,7 +22,8 @@ test "all public declarations analyze" {
     // Zig's analyzer is lazy: an unreferenced `pub` declaration is compiled
     // into nothing and checked by nothing, so this test references them all.
     // CLI-only submodules registered from this root go here as they are
-    // added:
+    // added (tests collect from any module reachable through imports, but
+    // only registration in a test root analyzes a submodule's declarations):
     //     std.testing.refAllDecls(@import("cli/x.zig"));
     std.testing.refAllDecls(@This());
 }
