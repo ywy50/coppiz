@@ -17,3 +17,12 @@ pub fn main(init: std.process.Init) !void {
     );
     try stdout_writer.interface.flush();
 }
+
+test "all public declarations analyze" {
+    // Zig's analyzer is lazy: an unreferenced `pub` declaration is compiled
+    // into nothing and checked by nothing, so this test references them all.
+    // CLI-only submodules registered from this root go here as they are
+    // added:
+    //     std.testing.refAllDecls(@import("cli/x.zig"));
+    std.testing.refAllDecls(@This());
+}

@@ -25,7 +25,11 @@ one ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md),
 - Zig 0.16 runs `test` blocks only from a test module's root file: every new
   `src/` module must be referenced from the `comptime` block in
   `src/root.zig` (or from `src/main.zig` for CLI-only code) or its tests
-  silently never run; the lint gate fails on an unreferenced module.
+  silently never run; the lint gate fails on an unreferenced module. Zig also
+  analyzes a declaration only once something references it, so each
+  registered module gets a line in the root's "all public declarations
+  analyze" test — an unreferenced `pub` declaration is otherwise compiled
+  into nothing and checked by nothing.
 - Write the failing test first, beside the shipped function, and confirm it
   fails for the intended reason. Pure logic (codecs, fold, election, merge,
   expiry) stays I/O-free so it can be unit-tested and later driven by a

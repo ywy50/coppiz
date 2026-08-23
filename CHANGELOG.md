@@ -5,6 +5,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
+### Added
+
+- "All public declarations analyze" tests in both test roots
+  (`src/root.zig`, `src/main.zig`): Zig's analyzer is lazy, so an
+  unreferenced `pub` declaration was compiled into nothing and checked by
+  nothing — a type error inside one reached a green build (demonstrated:
+  an unreferenced function assigning a string to a `u32` passed
+  `zig build test`). The tests reference every public declaration through
+  `std.testing.refAllDecls`; each module registered for test collection now
+  also gets a line there, so its declarations are semantically checked too.
+
 ### Fixed
 
 - Documentation-currency pass: PRD 0002's Design no longer opens with

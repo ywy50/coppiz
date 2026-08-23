@@ -16,6 +16,21 @@ comptime {
     // Every src/ module must be referenced here (or from src/main.zig for
     // CLI-only code) so its `test` blocks run. Zig 0.16 runs tests only
     // from a test root; the lint gate enforces the reference.
+    //
+    // Registration alone collects a module's tests but does not check its
+    // unreferenced declarations: Zig analyzes a `pub` declaration only once
+    // something references it, so a type error in one reaches a green build.
+    // Each registered module therefore also gets a line in the analysis
+    // test below, whose import both registers it and forces every public
+    // declaration through the semantic analyzer.
+}
+
+test "all public declarations analyze" {
+    // Zig's analyzer is lazy: an unreferenced `pub` declaration is compiled
+    // into nothing and checked by nothing, so this test references them all.
+    // New submodules go here as they are added:
+    //     std.testing.refAllDecls(@import("sub/x.zig"));
+    std.testing.refAllDecls(@This());
 }
 
 test "version is the one build.zig.zon declares" {
