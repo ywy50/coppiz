@@ -387,21 +387,13 @@ const TestRegistrationStep = struct {
             std.mem.startsWith(u8, path, "src\\");
     }
 
-    /// Allocation, not a fixed buffer: a fixed one would have to turn an
-    /// over-long module path into `false` — the gate would then report
-    /// "no test root imports it", hiding the real cause behind a wrong one.
-    fn hasImport(arena: std.mem.Allocator, source: []const u8, target: []const u8) !bool {
-        const needle = try std.fmt.allocPrint(arena, "@import(\"{s}\")", .{target});
-        return std.mem.indexOf(u8, source, needle) != null;
-    }
-
     /// True when `source` actually calls `@import("target")`, decided on the
     /// token stream rather than the text: the tokenizer drops comments and
     /// lexes every kind of string literal as one string token, so a mention
-    /// in either registers nothing (the textual hasImport above admits both),
-    /// while an import sharing a line with a trailing comment — or with an
-    /// earlier "//" inside a string — still counts. The builtin's spelling is
-    /// matched too, so @embedFile("sub/x.zig") is not registration. Only the
+    /// in either registers nothing, while an import sharing a line with a
+    /// trailing comment — or with an earlier "//" inside a string — still
+    /// counts. The builtin's spelling is matched too, so
+    /// @embedFile("sub/x.zig") is not registration. Only the
     /// two preceding tokens are remembered; that spans any whitespace but not
     /// a computed path (@import(a ++ b)), which fails loudly instead — the
     /// direction the gate accepts.
@@ -462,9 +454,6 @@ test "import paths use '/' whatever the filesystem separator is" {
     const joined = if (std.fs.path.sep == '/') "src/sub/x.zig" else "src\\sub\\x.zig";
     const import_path = try TestRegistrationStep.toImportPath(arena, joined);
     try std.testing.expectEqualStrings("sub/x.zig", import_path);
-    try std.testing.expect(
-        try TestRegistrationStep.hasImport(arena, "_ = @import(\"sub/x.zig\");", import_path),
-    );
 }
 
 test "test roots match whatever separator the walker produced" {
@@ -482,39 +471,6 @@ test "test roots match whatever separator the walker produced" {
     // What make() sees on this host.
     const native = try importSeparators(arena, "src/root.zig", std.fs.path.sep);
     try std.testing.expect(try TestRegistrationStep.isTestRoot(arena, native, std.fs.path.sep));
-}
-
-/// Cuts each line at its first `//`, and drops multiline-string lines, so a
-/// mention of `@import("x.zig")` in a comment or in string data no longer
-/// satisfies the registration gate. A line whose first non-blank bytes are
-/// `\\` is inside a multiline string literal — data, never code, since that
-/// is invalid syntax anywhere else. Only ever removes text, so it can turn a
-/// pass into a (loud) false failure — never the reverse; a real import
-/// sharing a line with a `//` or an inline `\\` literal just needs its own
-/// line.
-fn stripLineComments(arena: std.mem.Allocator, source: []const u8) ![]const u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    var lines = std.mem.splitScalar(u8, source, '\n');
-    while (lines.next()) |line| {
-        if (isMultilineStringLine(line)) {
-            try out.append(arena, '\n');
-            continue;
-        }
-        if (std.mem.indexOf(u8, line, "//")) |pos| {
-            try out.appendSlice(arena, line[0..pos]);
-        } else {
-            try out.appendSlice(arena, line);
-        }
-        try out.append(arena, '\n');
-    }
-    return out.toOwnedSlice(arena);
-}
-
-/// True when the line's first non-blank bytes start a multiline string
-/// continuation (`\\...`): its content is string data, never code.
-fn isMultilineStringLine(line: []const u8) bool {
-    const trimmed = std.mem.trimStart(u8, line, " \t");
-    return std.mem.startsWith(u8, trimmed, "\\\\");
 }
 
 test "hasRealImport counts only a real @import call" {
@@ -579,41 +535,4 @@ test "hasRealImport counts only a real @import call" {
         "_ = @import(\"other/y.zig\");\n",
         "sub/x.zig",
     ));
-}
-
-test "stripLineComments keeps code, cuts comments" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const src =
-        \\comptime {
-        \\    _ = @import("a/b.zig"); // keep this one
-        \\}
-        \\// _ = @import("c/d.zig");
-    ;
-    const stripped = try stripLineComments(arena, src);
-
-    try std.testing.expect(try TestRegistrationStep.hasImport(arena, stripped, "a/b.zig"));
-    try std.testing.expect(!try TestRegistrationStep.hasImport(arena, stripped, "c/d.zig"));
-}
-
-test "stripLineComments drops multiline string lines" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    // Inside a multiline string the import mention is inert text; the only
-    // live import is the last line. (Four leading backslashes = the `\\`
-    // line-prefix marker plus two content backslashes.)
-    const src =
-        \\const prose =
-        \\\\ _ = @import("ghost/never.zig"); reads well here.
-        \\
-        \\_ = @import("real/x.zig");
-    ;
-    const stripped = try stripLineComments(arena, src);
-
-    try std.testing.expect(!try TestRegistrationStep.hasImport(arena, stripped, "ghost/never.zig"));
-    try std.testing.expect(try TestRegistrationStep.hasImport(arena, stripped, "real/x.zig"));
 }
