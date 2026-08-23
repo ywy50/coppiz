@@ -230,8 +230,11 @@ const LineLengthStep = struct {
         var report: std.ArrayListUnmanaged(u8) = .empty;
         var count: usize = 0;
         const root_dir = b.build_root.handle;
-        for (try checkedFiles(root_dir, io, arena, &checked_paths)) |path| {
-            const bytes = try root_dir.readFileAlloc(io, path, arena, .unlimited);
+        const files = checkedFiles(root_dir, io, arena, &checked_paths) catch |err|
+            return step.fail("cannot enumerate the checked paths: {s}", .{@errorName(err)});
+        for (files) |path| {
+            const bytes = root_dir.readFileAlloc(io, path, arena, .unlimited) catch |err|
+                return step.fail("cannot read '{s}': {s}", .{ path, @errorName(err) });
             try checkBytes(arena, bytes, path, &report, &count);
         }
         if (count > 0)
@@ -376,11 +379,14 @@ const TestRegistrationStep = struct {
 
         var root_sources: std.ArrayListUnmanaged([]const u8) = .empty;
         for (test_roots) |root_path| {
-            const bytes = try b.build_root.handle.readFileAlloc(
+            const bytes = b.build_root.handle.readFileAlloc(
                 io,
                 root_path,
                 arena,
                 .unlimited,
+            ) catch |err| return step.fail(
+                "cannot read test root '{s}': {s}",
+                .{ root_path, @errorName(err) },
             );
             try root_sources.append(arena, bytes);
         }
@@ -391,7 +397,8 @@ const TestRegistrationStep = struct {
         // (src/root.zig, src/main.zig) is registration's author, not its
         // object.
         var module_paths: std.ArrayListUnmanaged([]const u8) = .empty;
-        try appendZigFilesUnder(b.build_root.handle, io, "src", arena, &module_paths);
+        appendZigFilesUnder(b.build_root.handle, io, "src", arena, &module_paths) catch |err|
+            return step.fail("cannot enumerate the src/ modules: {s}", .{@errorName(err)});
         try classifyModules(
             arena,
             root_sources.items,

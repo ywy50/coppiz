@@ -94,6 +94,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Changed
 
+- The lint gates' file-access failures now name what they were reading: a
+  checked path that could not be read surfaced as a bare OS error
+  (`FileNotFound`) with no path, leaving the operator to re-derive the gate's
+  file list by hand before the failure could be fixed. Each failure point in
+  the 100-column-cap and test-registration steps reports the operation, the
+  path and the OS error instead; both gates still fail loudly, never skip a
+  file silently.
+
 - Spec-currency pass: clanker's RFC 0019 was reopened at source (2026-08-24)
   and the claims README and PRD 0001 cite from it hold — the survey scope
   (17 candidates at Draft 4 plus R/S/T at Draft 5), option T *Packaging*
