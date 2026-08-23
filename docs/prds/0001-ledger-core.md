@@ -233,7 +233,8 @@ reached the leader's head, and a `syncing` member is never leader-eligible
 **Storage.** One directory per member, one subdirectory per ledger, segment
 files of slots+entries in chain order, each record length-prefixed and
 CRC-checked so a torn tail write is detected and truncated at startup, and
-a sparse seq→offset index per segment. A segment's header carries the
+a sparse position→offset index per segment (position = `(epoch, seq)`;
+`seq` alone cannot key it — it restarts at 1 every epoch). A segment's header carries the
 format version, the ledger id and the id of the group that sequenced it, so
 a segment is self-describing when it moves between groups (ownership
 transfer or parity reconstruction, PRD 0006); a **sealed** segment — one

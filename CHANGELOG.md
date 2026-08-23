@@ -7,6 +7,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- PRD 0001's segment index is keyed by position `(epoch, seq)`, not bare
+  `seq`: the slot layout makes `seq` dense within an epoch and restarting at
+  1, so any segment spanning an `epoch` boundary holds two `seq = 1…k` runs
+  and a `seq`-keyed index is ambiguous — against the glossary's own
+  definition of *position*.
 - Documentation-currency pass: PRD 0001 no longer says a `stale` mark names
   the `entry_hash` — [PRD 0002](docs/prds/0002-ttl-and-staleness.md) defines
   the payload as naming the target entry id `(author, author_seq)`, whose
