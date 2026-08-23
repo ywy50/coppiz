@@ -73,9 +73,6 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   called epoch numbers unique per leader change in the sentence explaining
   how two branches end up with the same number, and now says each branch
   advances its own counter.
-
-### Changed
-
 - The two file-covering lint gates (`zig fmt --check --ast-check` and the
   100-column cap) now derive their checked-path set from one shared list in
   `build.zig`, where each previously wrote its own: adding a source file or
