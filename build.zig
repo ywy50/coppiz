@@ -284,8 +284,9 @@ const test_roots = [_][]const u8{ "src/root.zig", "src/main.zig" };
 /// run and `zig build test` stays green. Import paths are relative to the
 /// importing file, and the roots themselves live in src/, so the reference
 /// is the module's path from src/ ("sub/foo.zig"), never "src/sub/foo.zig".
-/// Matching runs on comment-stripped roots: a commented-out import must
-/// not count as registration.
+/// Matching runs on the roots' token stream (hasRealImport): only a real
+/// `@import("path")` call counts, so a mention inside a comment or any
+/// string literal registers nothing.
 const TestRegistrationStep = struct {
     step: std.Build.Step,
 
@@ -318,7 +319,7 @@ const TestRegistrationStep = struct {
                 arena,
                 .unlimited,
             );
-            try root_sources.append(arena, try stripLineComments(arena, bytes));
+            try root_sources.append(arena, bytes);
         }
 
         var report: std.ArrayListUnmanaged(u8) = .empty;
@@ -331,8 +332,8 @@ const TestRegistrationStep = struct {
         for (module_paths.items) |path| {
             if (try isTestRoot(arena, path, std.fs.path.sep)) continue;
             const import_path = try toImportPath(arena, path);
-            for (root_sources.items) |stripped| {
-                if (try hasImport(arena, stripped, import_path)) break;
+            for (root_sources.items) |source| {
+                if (try hasRealImport(arena, source, import_path)) break;
             } else {
                 count += 1;
                 try report.print(arena, "  {s}: no test root imports it\n", .{path});
@@ -392,6 +393,39 @@ const TestRegistrationStep = struct {
     fn hasImport(arena: std.mem.Allocator, source: []const u8, target: []const u8) !bool {
         const needle = try std.fmt.allocPrint(arena, "@import(\"{s}\")", .{target});
         return std.mem.indexOf(u8, source, needle) != null;
+    }
+
+    /// True when `source` actually calls `@import("target")`, decided on the
+    /// token stream rather than the text: the tokenizer drops comments and
+    /// lexes every kind of string literal as one string token, so a mention
+    /// in either registers nothing (the textual hasImport above admits both),
+    /// while an import sharing a line with a trailing comment — or with an
+    /// earlier "//" inside a string — still counts. The builtin's spelling is
+    /// matched too, so @embedFile("sub/x.zig") is not registration. Only the
+    /// two preceding tokens are remembered; that spans any whitespace but not
+    /// a computed path (@import(a ++ b)), which fails loudly instead — the
+    /// direction the gate accepts.
+    fn hasRealImport(arena: std.mem.Allocator, source: []const u8, target: []const u8) !bool {
+        const terminated = try arena.dupeZ(u8, source);
+        var lexer = std.zig.Tokenizer.init(terminated);
+        var prev_tags: [2]std.zig.Token.Tag = .{ .eof, .eof };
+        var prev_slices: [2][]const u8 = .{ "", "" };
+        const wanted = try std.fmt.allocPrint(arena, "\"{s}\"", .{target});
+        while (true) {
+            const token = lexer.next();
+            if (token.tag == .eof) return false;
+            if (token.tag == .string_literal and
+                prev_tags[0] == .builtin and std.mem.eql(u8, prev_slices[0], "@import") and
+                prev_tags[1] == .l_paren)
+            {
+                if (std.mem.eql(u8, terminated[token.loc.start..token.loc.end], wanted))
+                    return true;
+            }
+            prev_tags[0] = prev_tags[1];
+            prev_tags[1] = token.tag;
+            prev_slices[0] = prev_slices[1];
+            prev_slices[1] = terminated[token.loc.start..token.loc.end];
+        }
     }
 };
 
@@ -481,6 +515,70 @@ fn stripLineComments(arena: std.mem.Allocator, source: []const u8) ![]const u8 {
 fn isMultilineStringLine(line: []const u8) bool {
     const trimmed = std.mem.trimStart(u8, line, " \t");
     return std.mem.startsWith(u8, trimmed, "\\\\");
+}
+
+test "hasRealImport counts only a real @import call" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The forms that register: plain, spaced across lines, sharing a line
+    // with a trailing comment.
+    try std.testing.expect(try TestRegistrationStep.hasRealImport(
+        arena,
+        "_ = @import(\"sub/x.zig\");\n",
+        "sub/x.zig",
+    ));
+    try std.testing.expect(try TestRegistrationStep.hasRealImport(
+        arena,
+        "comptime {\n    _ = @import(\n        \"sub/x.zig\",\n    );\n}\n",
+        "sub/x.zig",
+    ));
+    try std.testing.expect(try TestRegistrationStep.hasRealImport(
+        arena,
+        "_ = @import(\"sub/x.zig\"); // keep this one\n",
+        "sub/x.zig",
+    ));
+
+    // The false-pass directions the textual matcher admits: mention inside
+    // an ordinary string literal, in a comment, in multiline string data —
+    // none of them import anything.
+    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
+        arena,
+        "const msg = \"@import(\\\"sub/x.zig\\\") registers nothing\";\n",
+        "sub/x.zig",
+    ));
+    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
+        arena,
+        "// _ = @import(\"sub/x.zig\");\n",
+        "sub/x.zig",
+    ));
+    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
+        arena,
+        "const prose =\n" ++
+            "\\\\ @import(\"sub/x.zig\") reads well here.\n" ++
+            ";\n",
+        "sub/x.zig",
+    ));
+    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
+        arena,
+        "// @import(\n// \"sub/x.zig\"); split across comment lines\n",
+        "sub/x.zig",
+    ));
+
+    // A different builtin taking the same path is not registration either.
+    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
+        arena,
+        "const img = @embedFile(\"sub/x.zig\");\n",
+        "sub/x.zig",
+    ));
+
+    // A different path does not match.
+    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
+        arena,
+        "_ = @import(\"other/y.zig\");\n",
+        "sub/x.zig",
+    ));
 }
 
 test "stripLineComments keeps code, cuts comments" {

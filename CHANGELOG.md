@@ -7,6 +7,21 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The test-registration lint gate now matches real `@import` calls on each
+  root's token stream instead of text after comment-stripping. The textual
+  matcher admitted one false-pass direction beyond the multiline-string one
+  fixed earlier: the literal characters `@import("sub/x.zig")` inside an
+  ordinary string literal counted as registration while importing nothing,
+  leaving that module's tests silently never run behind a green build. And
+  stripping cut at the first `//` anywhere in a line, so an import sharing
+  a line with an earlier `//` inside a string literal failed loudly though
+  it was real. The tokenizer decides both directions: comments and every
+  kind of string literal register nothing, a real import counts whatever
+  shares its line, and a different builtin taking the same path
+  (`@embedFile`) is not registration.
+
+### Changed
+
 - Spec-currency pass: ADR 0002's claim that a setting gates each mutation
   cause is reconciled with PRD 0002's actual schema, which turns the `stale`
   cause off nowhere (`stale.cleanup` governs only removal) — registered as
