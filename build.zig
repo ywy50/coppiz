@@ -307,17 +307,14 @@ test "column cap measures code points, not bytes" {
     var count: usize = 0;
 
     // 60 two-byte code points: 120 bytes, but only 60 columns.
-    var wide: std.ArrayListUnmanaged(u8) = .empty;
-    for (0..60) |_| try wide.appendSlice(arena, "\u{00e9}");
-    try LineLengthStep.checkBytes(arena, wide.items, "f.zig", &report, &count);
+    try LineLengthStep.checkBytes(arena, "\u{00e9}" ** 60, "f.zig", &report, &count);
 
     try std.testing.expectEqual(@as(usize, 0), count);
 
     // The invalid side of the same boundary: 101 code points is over the cap
     // whatever the encoding, so wide characters are not skipped wholesale.
-    var wide_over: std.ArrayListUnmanaged(u8) = .empty;
-    for (0..LineLengthStep.max_columns + 1) |_| try wide_over.appendSlice(arena, "\u{00e9}");
-    try LineLengthStep.checkBytes(arena, wide_over.items, "f.zig", &report, &count);
+    const wide_over = "\u{00e9}" ** (LineLengthStep.max_columns + 1);
+    try LineLengthStep.checkBytes(arena, wide_over, "f.zig", &report, &count);
 
     try std.testing.expectEqual(@as(usize, 1), count);
     try std.testing.expectEqualStrings("  f.zig:1\n", report.items);
@@ -330,9 +327,8 @@ test "column cap falls back to byte count on invalid UTF-8" {
     var report: std.ArrayListUnmanaged(u8) = .empty;
     var count: usize = 0;
 
-    var bad: std.ArrayListUnmanaged(u8) = .empty;
-    try bad.appendNTimes(arena, 0xff, LineLengthStep.max_columns + 1);
-    try LineLengthStep.checkBytes(arena, bad.items, "f.zig", &report, &count);
+    const bad = "\xff" ** (LineLengthStep.max_columns + 1);
+    try LineLengthStep.checkBytes(arena, bad, "f.zig", &report, &count);
 
     try std.testing.expectEqual(@as(usize, 1), count);
     // Same path:line report as the valid-UTF-8 over-limit case.
