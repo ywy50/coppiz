@@ -7,6 +7,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Spec-currency pass: PRD 0004's acceptance criteria now cover the second
+  half of its goal 4 — that a settings change takes effect at a defined slot
+  (G4 also asserts effect from the slot after the `settings` entry, per its
+  Design validation rule 4), closing the goals↔criteria gap the PRD template
+  flags; and RFC 0002's option-A cons paragraph lost a stray three-space
+  indent that broke its bullet's continuation alignment.
 - Documentation-currency pass: the slot-growth mechanism parked at [OQ
   24](docs/open-questions.md) was named three ways across records — *chain
   checkpoint* (PRD 0002), *archival chain checkpoint* (ADR 0002, the

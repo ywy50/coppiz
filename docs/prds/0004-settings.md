@@ -158,7 +158,8 @@ mechanism that PRD 0002 and PRD 0003 populate.
   peers ends up with the cluster's settings.
 - [ ] (G3) A `settings` entry touching `leadership.mode` is refused on every
   member when `reconfigurable = false`, accepted when `true`.
-- [ ] (G4) Every cross-key rule has a refusing test and an accepting test.
+- [ ] (G4) Every cross-key rule has a refusing test and an accepting test, and
+  a change takes effect for slots after the `settings` slot, not before.
 - [ ] (G5) `docs/configuration.md` is generated and a test fails when it is
   stale.
 
