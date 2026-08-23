@@ -5,6 +5,7 @@ const std = @import("std");
 // and the `spine` executable (src/main.zig) that wraps that same library
 // as a standalone node. Which of the two leads the design is RFC 0001.
 pub fn build(b: *std.Build) void {
+    enforceToolchainFloor();
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -45,6 +46,49 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     addChecks(b, lib_mod, exe);
+}
+
+/// Fails the build when the toolchain executing it is older than the floor
+/// declared in build.zig.zon. Zig itself never checks that field for a tree
+/// built directly (verified on 0.16.0: a floor of 99.0.0 builds silently);
+/// only a consumer fetching spine as a dependency gets it checked. Yet every
+/// gate in addChecks assumes the declared toolchain's semantics — zig fmt's
+/// output and --ast-check, std.zig.Tokenizer's lexing behind the test
+/// registration check, test-block collection from module roots — so an
+/// undeclared toolchain would analyze with the wrong rules. Fail loudly
+/// instead, before any gate can half-run.
+fn enforceToolchainFloor() void {
+    const floor_text = @import("build.zig.zon").minimum_zig_version;
+    if (!meetsZigFloor(@import("builtin").zig_version, floor_text))
+        std.debug.panic(
+            "spine requires Zig {s} or newer; running {f}",
+            .{ floor_text, @import("builtin").zig_version },
+        );
+}
+
+/// True when `running` satisfies the semver floor spelled by `floor_text`.
+/// I/O-free so tests drive it directly. An unparseable floor satisfies
+/// nothing: broken configuration fails loudly, never permissively.
+fn meetsZigFloor(running: std.SemanticVersion, floor_text: []const u8) bool {
+    const floor = std.SemanticVersion.parse(floor_text) catch return false;
+    return running.order(floor) != .lt;
+}
+
+test "meetsZigFloor accepts the floor itself and newer, rejects older" {
+    const floor = "0.16.0";
+    try std.testing.expect(meetsZigFloor(try std.SemanticVersion.parse("0.16.0"), floor));
+    try std.testing.expect(meetsZigFloor(try std.SemanticVersion.parse("0.17.0"), floor));
+    try std.testing.expect(!meetsZigFloor(try std.SemanticVersion.parse("0.15.9"), floor));
+
+    // Semver orders a prerelease before its own release, so a dev toolchain
+    // below the named release is rejected too.
+    try std.testing.expect(
+        !meetsZigFloor(try std.SemanticVersion.parse("0.16.0-dev.1+abc"), floor),
+    );
+
+    // A floor that does not parse cannot be satisfied by any toolchain —
+    // broken configuration, not permission to proceed.
+    try std.testing.expect(!meetsZigFloor(try std.SemanticVersion.parse("0.16.0"), "no-semver"));
 }
 
 /// Wires the `test` and `lint` steps onto the artifacts built above: unit

@@ -161,6 +161,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- Toolchain-floor enforcement in the build: `zig build` now fails loudly when
+  the running Zig is older than `minimum_zig_version` in build.zig.zon. Zig
+  checks that field only for consumers fetching spine as a dependency, never
+  for a tree built directly, so every analysis gate (`zig fmt --check`,
+  the 100-column cap, test registration — the latter lexing with
+  `std.zig.Tokenizer`) could otherwise run under undeclared toolchain
+  semantics.
 - Spec-consistency fourth pass: PRD 0001's duplicate acceptance-criterion id
   (two criteria labelled G3) is renumbered — the forgery negative test is now
   G7, and the roadmap's single-member gate cites G3–G7; PRD 0001's

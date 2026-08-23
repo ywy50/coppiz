@@ -18,6 +18,10 @@ one ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md),
 - `zig build` builds the `spine` node; `zig build run` runs it; `zig build
   test` runs unit tests plus the lint gates (`zig build lint` runs them
   alone). Read Zig's exit code directly, never through a pipe.
+- Zig checks `build.zig.zon`'s `minimum_zig_version` only when spine is
+  fetched as a dependency, never for a tree built directly; the build script
+  enforces the floor itself, so the gates always run under declared
+  toolchain semantics.
 - Zig 0.16 runs `test` blocks only from a test module's root file: every new
   `src/` module must be referenced from the `comptime` block in
   `src/root.zig` (or from `src/main.zig` for CLI-only code) or its tests
