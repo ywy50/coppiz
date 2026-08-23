@@ -7,6 +7,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Spec-currency pass: PRD 0003's `epoch` entry shape now says its
+  `reason` list (`leader_lost | mode_change | merge | manual`) is tier-1's
+  and that [PRD 0006](docs/prds/0006-scaling-to-groups-sharding-and-parity.md)
+  extends it with `ownership_transfer`, which the PRD used without noting the
+  extension; and the failure-detector defaults (`cluster.heartbeat_ms` 1 s,
+  `cluster.suspect_after_ms` 5 s) now carry their inline citation to
+  [OQ 37](docs/open-questions.md), where they are registered as placeholders —
+  every other placeholder default in the PRDs already named its open question.
 - Spec-currency pass: PRD 0004's acceptance criteria now cover the second
   half of its goal 4 — that a settings change takes effect at a defined slot
   (G4 also asserts effect from the slot after the `settings` entry, per its

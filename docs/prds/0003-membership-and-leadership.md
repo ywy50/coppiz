@@ -125,7 +125,9 @@ chain event, never on absence ([open question 4](../open-questions.md)).
 
 **Failure detection.** Every member heartbeats every other over the
 replication connection (`cluster.heartbeat_ms`, default 1 s); a member missed
-for `cluster.suspect_after_ms` (default 5 s) is `unreachable`. A leader that
+for `cluster.suspect_after_ms` (default 5 s) is `unreachable`. Both timings
+are placeholders, on the record at [OQ 37](../open-questions.md) together
+with the leader-lease question they feed. A leader that
 becomes `unreachable` triggers an election on every member that noticed. Full
 mesh is the v1 topology and inherits clanker's reasoning for a small cap
 (`cluster.max_members`, default 32); the leader-star or gossip topology for
@@ -172,7 +174,10 @@ Its exact semantics are [open question 12](../open-questions.md).
 
 **Epochs.** A new leader's first act is to append an `epoch` control entry:
 `{epoch: prev + 1, reason: leader_lost | mode_change | merge | manual,
-leader: self}`. Slots in the new epoch start at `seq = 1`. Every member
+leader: self}`. This reason list is tier-1's; the federation overlay of
+[PRD 0006](0006-scaling-to-groups-sharding-and-parity.md) adds
+`ownership_transfer`, which a ledger's new owner appends when it continues
+the adopted chain after a transfer. Slots in the new epoch start at `seq = 1`. Every member
 validates that the claimed leader is what `leader(...)` returns for *their*
 fold and liveness; a member that disagrees does not accept the epoch and
 keeps its previous view — that is a partition, by definition, and merge
