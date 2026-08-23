@@ -7,6 +7,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Documentation-currency pass: the slot-growth mechanism parked at [OQ
+  24](docs/open-questions.md) was named three ways across records — *chain
+  checkpoint* (PRD 0002), *archival chain checkpoint* (ADR 0002, the
+  roadmap) and *archival checkpoint* (the register). Every mention now says
+  *archival checkpoint*, and the glossary defines it: four records used the
+  term and none defined it, against the define-once rule. A `build.zig`
+  test comment also stopped saying "the textual matcher admits" in the
+  present tense — the matcher it means is the text-stripping one the
+  tokenizer gate removed, so the present tense read as if the current gate
+  were textual.
 - The test-registration lint gate now matches real `@import` calls on each
   root's token stream instead of text after comment-stripping. The textual
   matcher admitted one false-pass direction beyond the multiline-string one

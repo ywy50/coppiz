@@ -46,7 +46,7 @@ entry's payload (and, under `ttl.retain = none`, its header) is.
   already works (its ADR 0001), so the first consumer loses nothing.
 - The hash chain survives cleanup because slots stay and entry hashes stay;
   the cost is that the slot sequence only grows, and a very long-lived,
-  high-churn ledger eventually needs an archival chain checkpoint
+  high-churn ledger eventually needs an archival checkpoint
   ([OQ 24](../open-questions.md)).
 - Author-only staleness means a compromised or defective member can hide its
   own history but nobody else's; extending the right to a leader or operator

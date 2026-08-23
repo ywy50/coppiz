@@ -53,6 +53,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **checkpoint** | the leader's control entry that makes removal deterministic: "drop everything expired/stale through slot X" | PRD 0002 |
 | **retain** | what a removal keeps: `header` or `none` | PRD 0002 |
 | **grace** | read-side skew tolerance in ms; affects visibility on one member, never bytes | PRD 0002 |
+| **archival checkpoint** | a leader-signed root over a chain prefix that lets members drop the slots behind it while keeping verifiability from the root; out of v1, the bound on slot growth | OQ 24 |
 | **settings** | ledger or cluster behaviour stored in the chain via `genesis`/`settings` entries; never per-member | PRD 0004 |
 | **local config** | `spine.toml`: paths, identity, peers, fsync — things whose disagreement cannot fork the ledger | PRD 0004 |
 | **scope** | whether a setting is cluster-wide, per ledger, or federation-scoped (reserved, PRD 0006) | PRD 0004 |

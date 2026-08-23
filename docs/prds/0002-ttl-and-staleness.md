@@ -216,6 +216,6 @@ clock it did not stamp.
 - `grace_ms` default and whether it should be derived from observed skew
   ([OQ 9](../open-questions.md)).
 - Checkpoint cadence defaults ([OQ 10](../open-questions.md)).
-- Slot count grows forever even under `retain = none`; whether a
-  *chain checkpoint* (a signed root that lets old slots be archived) is
+- Slot count grows forever even under `retain = none`; whether an
+  *archival checkpoint* (a signed root that lets old slots be archived) is
   needed, and when ([OQ 24](../open-questions.md)).

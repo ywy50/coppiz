@@ -496,9 +496,9 @@ test "hasRealImport counts only a real @import call" {
         "sub/x.zig",
     ));
 
-    // The false-pass directions the textual matcher admits: mention inside
-    // an ordinary string literal, in a comment, in multiline string data —
-    // none of them import anything.
+    // The false-pass directions the removed textual matcher admitted:
+    // mention inside an ordinary string literal, in a comment, in multiline
+    // string data — none of them import anything.
     try std.testing.expect(!try TestRegistrationStep.hasRealImport(
         arena,
         "const msg = \"@import(\\\"sub/x.zig\\\") registers nothing\";\n",
