@@ -718,8 +718,8 @@ const TestRegistrationStep = struct {
 
     /// One real `@import("path")` call found in a token stream: `path` is the
     /// literal between the quotes, normalized (normalizeImportPath), and
-    /// `wrapped` whether the call sits directly
-    /// inside a `std.testing.refAllDecls`/`refAllDeclsRecursive` argument
+    /// `wrapped` whether the call sits directly inside a
+    /// `std.testing.refAllDecls`/`refAllDeclsRecursive` argument
     /// list — the form that forces the target's public declarations through
     /// the analyzer, not merely collects its tests. Comments and every kind
     /// of string literal yield nothing, and only a literal path argument
@@ -1713,10 +1713,9 @@ fn excludedFromGates(basename: []const u8, depth: usize) bool {
 /// directory loudly and its subtree would otherwise escape this gate
 /// silently).
 ///
-/// On failure `failed_path` names the walked entry that could not be
-/// handled — the link or unclassifiable entry whose resolution failed or
-/// the directory behind one — so
-/// the caller can report it instead of a bare error name (the same rule
+/// On failure `failed_path` names the walked entry that could not be handled —
+/// the link or unclassifiable entry whose resolution failed or the directory
+/// behind one — so the caller can report it instead of a bare error name (the same rule
 /// checkedFiles follows for its gate paths). A failure belonging to no
 /// single entry — allocation alone, here, or the walker failing to descend
 /// between entries — leaves it unset, and the caller falls back to a
