@@ -282,7 +282,6 @@ const LineLengthStep = struct {
         const arena = arena_state.allocator();
 
         var report: std.ArrayListUnmanaged(u8) = .empty;
-        var count: usize = 0;
         const root_dir = b.build_root.handle;
         var failed_path: ?[]const u8 = null;
         const files = checkedFiles(root_dir, io, arena, &checked_paths, &failed_path) catch |err|
@@ -293,28 +292,31 @@ const LineLengthStep = struct {
         for (files) |path| {
             const bytes = root_dir.readFileAlloc(io, path, arena, .unlimited) catch |err|
                 return step.fail("cannot read '{s}': {s}", .{ path, @errorName(err) });
-            try checkBytes(arena, bytes, path, &report, &count);
+            try checkBytes(arena, bytes, path, &report);
         }
-        if (count > 0)
+        // One report line per violation (pinned by the exact-string tests
+        // below), so the tally is the newline count — no second output to
+        // keep in lockstep with the appends.
+        const violations = std.mem.count(u8, report.items, "\n");
+        if (violations > 0)
             return step.fail("{d} line(s) exceed {d} columns:\n{s}", .{
-                count, max_columns, report.items,
+                violations, max_columns, report.items,
             });
     }
 
-    /// The cap itself, I/O-free so tests can drive it directly.
+    /// The cap itself, I/O-free so tests can drive it directly. Appends one
+    /// report line per offending line.
     fn checkBytes(
         arena: std.mem.Allocator,
         bytes: []const u8,
         path: []const u8,
         report: *std.ArrayListUnmanaged(u8),
-        count: *usize,
     ) !void {
         var line_no: usize = 0;
         var lines = std.mem.splitScalar(u8, bytes, '\n');
         while (lines.next()) |line| {
             line_no += 1;
             if ((std.unicode.utf8CountCodepoints(line) catch line.len) <= max_columns) continue;
-            count.* += 1;
             try report.print(arena, "  {s}:{d}\n", .{ path, line_no });
         }
     }
@@ -325,12 +327,10 @@ test "column cap admits a line at exactly the limit" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var report: std.ArrayListUnmanaged(u8) = .empty;
-    var count: usize = 0;
 
     const exact = "a" ** LineLengthStep.max_columns;
-    try LineLengthStep.checkBytes(arena, exact ++ "\nsecond\n", "f.zig", &report, &count);
+    try LineLengthStep.checkBytes(arena, exact ++ "\nsecond\n", "f.zig", &report);
 
-    try std.testing.expectEqual(@as(usize, 0), count);
     try std.testing.expectEqual(@as(usize, 0), report.items.len);
 }
 
@@ -339,24 +339,20 @@ test "column cap flags the first line past the limit, with path and line number"
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var report: std.ArrayListUnmanaged(u8) = .empty;
-    var count: usize = 0;
 
     const over = "a" ** (LineLengthStep.max_columns + 1);
-    // Two violations: the first must still be the one named above, and the
-    // aggregate — count and every report entry — must survive past it, so a
-    // checker that stops at the first offense cannot pass. The second
-    // violation is also the file's last line with no trailing '\n': a file
-    // not ending in a newline must still have that final line checked, the
-    // boundary where a line-walking refactor most easily drops the tail.
+    // Two violations, both reported in order: a checker that stops at the
+    // first offense cannot pass. The second violation is also the file's
+    // last line with no trailing '\n': a file not ending in a newline must
+    // still have that final line checked, the boundary where a line-walking
+    // refactor most easily drops the tail.
     try LineLengthStep.checkBytes(
         arena,
         "ok\n" ++ over ++ "\nalso ok\n" ++ over,
         "f.zig",
         &report,
-        &count,
     );
 
-    try std.testing.expectEqual(@as(usize, 2), count);
     try std.testing.expectEqualStrings("  f.zig:2\n  f.zig:4\n", report.items);
 }
 
@@ -365,19 +361,15 @@ test "column cap measures code points, not bytes" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var report: std.ArrayListUnmanaged(u8) = .empty;
-    var count: usize = 0;
 
     // 60 two-byte code points: 120 bytes, but only 60 columns.
-    try LineLengthStep.checkBytes(arena, "\u{00e9}" ** 60, "f.zig", &report, &count);
-
-    try std.testing.expectEqual(@as(usize, 0), count);
+    try LineLengthStep.checkBytes(arena, "\u{00e9}" ** 60, "f.zig", &report);
+    try std.testing.expectEqual(@as(usize, 0), report.items.len);
 
     // The invalid side of the same boundary: 101 code points is over the cap
     // whatever the encoding, so wide characters are not skipped wholesale.
     const wide_over = "\u{00e9}" ** (LineLengthStep.max_columns + 1);
-    try LineLengthStep.checkBytes(arena, wide_over, "f.zig", &report, &count);
-
-    try std.testing.expectEqual(@as(usize, 1), count);
+    try LineLengthStep.checkBytes(arena, wide_over, "f.zig", &report);
     try std.testing.expectEqualStrings("  f.zig:1\n", report.items);
 }
 
@@ -386,12 +378,10 @@ test "column cap falls back to byte count on invalid UTF-8" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var report: std.ArrayListUnmanaged(u8) = .empty;
-    var count: usize = 0;
 
     const bad = "\xff" ** (LineLengthStep.max_columns + 1);
-    try LineLengthStep.checkBytes(arena, bad, "f.zig", &report, &count);
+    try LineLengthStep.checkBytes(arena, bad, "f.zig", &report);
 
-    try std.testing.expectEqual(@as(usize, 1), count);
     // Same path:line report as the valid-UTF-8 over-limit case.
     try std.testing.expectEqualStrings("  f.zig:1\n", report.items);
 }
@@ -450,7 +440,6 @@ const TestRegistrationStep = struct {
         const arena = arena_state.allocator();
 
         var report: std.ArrayListUnmanaged(u8) = .empty;
-        var count: usize = 0;
         // Every walked module's text: the reachability walk reads imports
         // out of intermediate modules too, not just out of the two roots.
         // The roots sit in src/ themselves, so one walk finds them and no
@@ -471,16 +460,14 @@ const TestRegistrationStep = struct {
             );
             try sources.append(arena, .{ .path = path, .text = bytes });
         }
-        try classifyModules(arena, sources.items, std.fs.path.sep, &report, &count);
+        try classifyModules(arena, sources.items, std.fs.path.sep, &report);
         var analysis_report: std.ArrayListUnmanaged(u8) = .empty;
-        var analysis_count: usize = 0;
-        try declarationAnalysisGaps(
-            arena,
-            sources.items,
-            std.fs.path.sep,
-            &analysis_report,
-            &analysis_count,
-        );
+        try declarationAnalysisGaps(arena, sources.items, std.fs.path.sep, &analysis_report);
+        // Both cores append one report line per finding (pinned by the
+        // exact-string tests below), so each tally is a newline count — no
+        // second output to keep in lockstep with the appends.
+        const count = std.mem.count(u8, report.items, "\n");
+        const analysis_count = std.mem.count(u8, analysis_report.items, "\n");
         var message: std.ArrayListUnmanaged(u8) = .empty;
         if (count > 0)
             try message.print(arena, "{d} module(s) whose tests never run:\n{s}", .{
@@ -501,7 +488,7 @@ const TestRegistrationStep = struct {
     /// The gate's decision core, I/O-free so tests drive it directly, the
     /// way checkBytes serves the column cap: from the test roots, follow
     /// real imports across `sources` and append one report line per module
-    /// no chain reaches, counting them. O(modules²) tokenizer runs — src/
+    /// no chain reaches. O(modules²) tokenizer runs — src/
     /// holds a handful of files today and the point is to fail loudly while
     /// the tree is small. `sep` is a parameter so any platform can be
     /// simulated in a test.
@@ -510,39 +497,35 @@ const TestRegistrationStep = struct {
         sources: []const Source,
         sep: u8,
         report: *std.ArrayListUnmanaged(u8),
-        count: *usize,
     ) !void {
-        // Both containers allocate from the caller's arena, which outlives
-        // this function, so they need no deinit of their own. A module is
-        // marked reachable exactly when it is enqueued, so every path enters
-        // the queue once and is visited once — an importer reached twice
-        // cannot enqueue its target twice.
-        var reachable: std.StringArrayHashMapUnmanaged(void) = .empty;
-        var queue: std.ArrayListUnmanaged([]const u8) = .empty;
-        for (sources) |source| {
+        // The walk works in indices into `sources`, so the queue can hold no
+        // path that lacks a text and a module is marked reached exactly when
+        // it is enqueued — every index enters the queue once and is visited
+        // once, so an importer reached twice cannot enqueue its target twice.
+        var reached = try arena.alloc(bool, sources.len);
+        @memset(reached, false);
+        var queue: std.ArrayListUnmanaged(usize) = .empty;
+        for (sources, 0..) |source, i| {
             if (!try isTestRoot(arena, source.path, sep)) continue;
-            try reachable.put(arena, source.path, {});
-            try queue.append(arena, source.path);
+            reached[i] = true;
+            try queue.append(arena, i);
         }
         var cursor: usize = 0;
         while (cursor < queue.items.len) : (cursor += 1) {
-            const path = queue.items[cursor];
-            const text = for (sources) |source| {
-                if (std.mem.eql(u8, source.path, path)) break source.text;
-            } else unreachable;
-            for (sources) |candidate| {
-                if (reachable.contains(candidate.path)) continue;
-                const wanted = try importBetween(arena, path, candidate.path, sep);
-                if (try hasRealImport(arena, text, wanted)) {
-                    try reachable.put(arena, candidate.path, {});
-                    try queue.append(arena, candidate.path);
+            const from = sources[queue.items[cursor]];
+            for (sources, 0..) |candidate, i| {
+                if (reached[i]) continue;
+                const wanted = try importBetween(arena, from.path, candidate.path, sep);
+                if (try hasRealImport(arena, from.text, wanted)) {
+                    reached[i] = true;
+                    try queue.append(arena, i);
                 }
             }
         }
-        for (sources) |source| {
-            if (try isTestRoot(arena, source.path, sep)) continue;
-            if (reachable.contains(source.path)) continue;
-            count.* += 1;
+        // Every test root was seeded as reached above, so anything still
+        // unreached here is an ordinary module no chain reaches.
+        for (sources, 0..) |source, i| {
+            if (reached[i]) continue;
             try report.print(arena, "  {s}: not reachable from a test root\n", .{source.path});
         }
     }
@@ -685,7 +668,6 @@ const TestRegistrationStep = struct {
         sources: []const Source,
         sep: u8,
         report: *std.ArrayListUnmanaged(u8),
-        count: *usize,
     ) !void {
         for (sources) |root_source| {
             if (!try isTestRoot(arena, root_source.path, sep)) continue;
@@ -707,7 +689,6 @@ const TestRegistrationStep = struct {
                     // and asks for no wrapper.
                     if (try isTestRoot(arena, candidate.path, sep)) break;
                     try reported.put(arena, imp.path, {});
-                    count.* += 1;
                     try report.print(
                         arena,
                         "  {s}: imported by {s} without forced declaration analysis\n",
@@ -827,13 +808,11 @@ test "test-registration gate reports exactly the modules no chain reaches from a
     };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
-    var count: usize = 0;
-    try TestRegistrationStep.classifyModules(arena, &sources, '\\', &report, &count);
+    try TestRegistrationStep.classifyModules(arena, &sources, '\\', &report);
 
     // The roots are never reported though nothing imports them; exactly the
     // orphan is, named by its walked path — the string make() prints on any
     // host.
-    try std.testing.expectEqual(@as(usize, 1), count);
     try std.testing.expectEqualStrings(
         "  src\\sub\\unregistered.zig: not reachable from a test root\n",
         report.items,
@@ -856,16 +835,8 @@ test "test-registration gate reports exactly the modules no chain reaches from a
     };
 
     report = .empty;
-    count = 0;
-    try TestRegistrationStep.classifyModules(
-        arena,
-        &native_sources,
-        std.fs.path.sep,
-        &report,
-        &count,
-    );
+    try TestRegistrationStep.classifyModules(arena, &native_sources, std.fs.path.sep, &report);
 
-    try std.testing.expectEqual(@as(usize, 1), count);
     try std.testing.expectEqualStrings(
         "  src" ++ s ++ "sub" ++ s ++ "unregistered.zig: not reachable from a test root\n",
         report.items,
@@ -898,10 +869,8 @@ test "classifyModules classifies through an import cycle and reports modules bel
     };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
-    var count: usize = 0;
-    try TestRegistrationStep.classifyModules(arena, &sources, '\\', &report, &count);
+    try TestRegistrationStep.classifyModules(arena, &sources, '\\', &report);
 
-    try std.testing.expectEqual(@as(usize, 2), count);
     try std.testing.expectEqualStrings(
         \\  src\orphan.zig: not reachable from a test root
         \\  src\down.zig: not reachable from a test root
@@ -1002,10 +971,8 @@ test "declaration-analysis gate reports a module its root never wraps in refAllD
     };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
-    var count: usize = 0;
-    try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '\\', &report, &count);
+    try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '\\', &report);
 
-    try std.testing.expectEqual(@as(usize, 1), count);
     try std.testing.expectEqualStrings(
         \\  src\a.zig: imported by src\root.zig without forced declaration analysis
         \\
@@ -1050,10 +1017,8 @@ test "declaration-analysis gate admits wrappers, duplicates and non-module impor
     };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
-    var count: usize = 0;
-    try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '/', &report, &count);
+    try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '/', &report);
 
-    try std.testing.expectEqual(@as(usize, 1), count);
     try std.testing.expectEqualStrings(
         "  src/c.zig: imported by src/root.zig without forced declaration analysis\n",
         report.items,
@@ -1076,10 +1041,8 @@ test "declaration-analysis gate constrains only the test roots' own imports" {
     };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
-    var count: usize = 0;
-    try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '\\', &report, &count);
+    try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '\\', &report);
 
-    try std.testing.expectEqual(@as(usize, 0), count);
     try std.testing.expectEqual(@as(usize, 0), report.items.len);
 }
 
