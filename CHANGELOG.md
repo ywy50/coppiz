@@ -7,6 +7,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- A fifth lint gate, coverage completeness: the analysis gates cover an
+  explicit allowlist (`checked_paths` in build.zig) that fails loudly when a
+  listed path stops existing but stayed silent about its complement — a
+  stray or newly added `.zig` file outside those paths reached no formatter,
+  no column cap and no test binary while `zig build test` stayed green. The
+  new step walks the build root (skipping leading-dot tooling entries and
+  the root-level `zig-out` install prefix; a linked directory is rejected
+  like the covering gates' walks) and fails naming each uncovered file, so
+  coverage can only change by editing `checked_paths`.
 - Declaration-analysis enforcement in the test-registration lint gate: a
   `src/` module a test root imports but that root never wraps in a
   `std.testing.refAllDecls` (or `refAllDeclsRecursive`) call fails the build
@@ -38,6 +47,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The gate-coverage walk's failures now name the entry they stopped on
+  (`cannot walk 'tools/vendor': LinkedDirectoryNotWalked`, not a bare
+  `cannot walk the project tree: …`): a linked directory rejected by the
+  walk or a symlink that no longer resolves failed the step with an error
+  name alone, leaving the operator to find which of every walked entry was
+  at fault — the same repair `checkedFiles` already made for its gate-path
+  enumeration failures.
 - Three accuracy repairs from a documentation audit: PRD 0001's control-entry
   table now names the `epoch` reason list PRD 0003 defines (`leader_lost`,
   `mode_change`, `merge`, `manual`) where it paraphrased three of the four

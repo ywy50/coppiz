@@ -135,18 +135,21 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
     // test` is the one blocking entry point, so it carries the checks: the
     // formatter (`zig fmt --check --ast-check`, run with the toolchain that
     // is executing this build, not whatever is first on PATH), a hard
-    // 100-column cap matching zig fmt's own wrap target, and test
+    // 100-column cap matching zig fmt's own wrap target, test
     // registration (a module no chain of imports reaches from a test root
     // loses its tests silently, and a root import never wrapped in
     // refAllDecls loses every semantic check of the module's public
-    // declarations).
+    // declarations), and gate coverage (the checked paths are an allowlist,
+    // so a .zig file outside them is analyzed by nothing — the complement
+    // is failed loudly instead of skipped silently).
     const lint_step = b.step(
         "lint",
-        "Check formatting, line length, test registration and declaration analysis",
+        "Check formatting, line length, test registration, declaration analysis and gate coverage",
     );
 
     // The checked paths come from `checked_paths`, shared with the column
-    // cap below, so the two file-covering gates can never drift apart.
+    // cap and coverage gates, so the file-covering gates can never drift
+    // apart about what is analyzed.
     const fmt_args = [_][]const u8{ b.graph.zig_exe, "fmt", "--check", "--ast-check" } ++
         checked_paths;
     const fmt_check = b.addSystemCommand(&fmt_args);
@@ -159,6 +162,7 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
 
     lint_step.dependOn(&LineLengthStep.create(b).step);
     lint_step.dependOn(&TestRegistrationStep.create(b).step);
+    lint_step.dependOn(&GateCoverageStep.create(b).step);
     test_step.dependOn(lint_step);
 }
 
@@ -1333,4 +1337,347 @@ test "appendZigFilesUnder rejects a linked directory whose walk cannot descend" 
         error.LinkedDirectoryNotWalked,
         appendZigFilesUnder(tmp.dir, io, arena, "src", &found),
     );
+}
+
+/// Fails the build when a project-owned `.zig` file lies outside every
+/// analysis gate's coverage. The gates' paths are an allowlist
+/// (`checked_paths`): through checkedFiles it fails loudly when a listed
+/// path stops existing, but nothing watched the allowlist's complement — a
+/// new source directory or a stray top-level module would reach no
+/// formatter, no column cap and no test binary while `zig build test`
+/// stayed green. This step walks the build root for what the allowlist
+/// misses and fails naming each uncovered file, so coverage can only change
+/// by editing `checked_paths`, never shrink silently.
+const GateCoverageStep = struct {
+    step: std.Build.Step,
+
+    fn create(b: *std.Build) *GateCoverageStep {
+        const self = b.allocator.create(GateCoverageStep) catch @panic("OOM");
+        self.* = .{
+            .step = std.Build.Step.init(.{
+                .id = .custom,
+                .name = "gate coverage completeness",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
+        _ = options;
+        const b = step.owner;
+        const io = b.graph.io;
+        var arena_state = std.heap.ArenaAllocator.init(b.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        // The covered side comes from the same dispatcher the two
+        // file-covering gates use, so this gate compares against exactly
+        // what they check — never against its own re-derivation of the
+        // checked set that could drift from theirs.
+        var failed_path: ?[]const u8 = null;
+        const covered = checkedFiles(
+            b.build_root.handle,
+            io,
+            arena,
+            &checked_paths,
+            &failed_path,
+        ) catch |err|
+            return step.fail("cannot enumerate '{s}': {s}", .{
+                failed_path orelse "the checked paths",
+                @errorName(err),
+            });
+
+        var candidates: std.ArrayListUnmanaged([]const u8) = .empty;
+        // The walk can fail on one specific entry (a linked directory it
+        // must reject, a link that no longer resolves): failed_path names
+        // it, the way checkedFiles names the gate path it stopped on — a
+        // bare error name would leave the operator to find the entry by
+        // hand among everything the walk visited. The variable is reused
+        // from the covered side above: its enumeration outcome was already
+        // handled by then.
+        failed_path = null;
+        appendProjectZigFiles(
+            b.build_root.handle,
+            io,
+            arena,
+            &candidates,
+            &failed_path,
+        ) catch |err| {
+            if (failed_path) |path|
+                return step.fail("cannot walk '{s}': {s}", .{ path, @errorName(err) });
+            return step.fail("cannot walk the project tree: {s}", .{@errorName(err)});
+        };
+
+        var report: std.ArrayListUnmanaged(u8) = .empty;
+        try GateCoverageStep.uncoveredPaths(arena, covered, candidates.items, &report);
+
+        // One report line per violation (pinned by the exact-string tests
+        // below), so the tally is the newline count — no second output to
+        // keep in lockstep with the appends.
+        const violations = std.mem.count(u8, report.items, "\n");
+        if (violations > 0)
+            return step.fail("{d} Zig source(s) no analysis gate covers:\n{s}", .{
+                violations, report.items,
+            });
+    }
+
+    /// The gate's decision core, I/O-free so tests drive it directly, the
+    /// way classifyModules serves the registration walk: appends one report
+    /// line per candidate equal to no entry of `covered`, in the order
+    /// handed in (the walk order, like the other gates' reports).
+    /// O(covered x candidates) comparisons — the tree holds a handful of
+    /// files today and the point is to fail loudly while it is small.
+    fn uncoveredPaths(
+        arena: std.mem.Allocator,
+        covered: []const []const u8,
+        candidates: []const []const u8,
+        report: *std.ArrayListUnmanaged(u8),
+    ) !void {
+        outer: for (candidates) |path| {
+            for (covered) |checked| {
+                if (std.mem.eql(u8, checked, path)) continue :outer;
+            }
+            try report.print(arena, "  {s}: not covered by any analysis gate\n", .{path});
+        }
+    }
+};
+
+/// True when a walked entry lies in tooling territory rather than among
+/// project sources, so the coverage walk skips it: leading-dot entries at
+/// any depth (.git holds objects, .zig-cache caches build artifacts,
+/// .local/.agents hold machine-local state — tooling nests wherever it
+/// wants) and the install prefix `zig-out` at the walk root. The depth
+/// guard is load-bearing: a project directory that merely names itself
+/// zig-out deeper down stays inside the gated tree, its sources still
+/// reportable — the gate exists so nothing escapes silently.
+fn excludedFromGates(basename: []const u8, depth: usize) bool {
+    if (basename.len == 0) return false;
+    if (basename[0] == '.') return true;
+    return depth == 1 and std.mem.eql(u8, basename, "zig-out");
+}
+
+/// Appends every project-owned .zig file — everything under the build root
+/// except what excludedFromGates prunes — as a path relative to the walked
+/// root. That is the form `checked_paths` produces too, so the comparison
+/// needs no separator or prefix normalization on any host. Pruning happens
+/// during descent rather than after the walk: .zig-cache alone holds
+/// thousands of entries that would otherwise be visited on every lint run.
+/// Symlinks resolve through the same rules appendZigFilesUnder applies for
+/// the covering gates — a linked .zig file is collected like a real one,
+/// and a linked directory is rejected loudly, since SelectiveWalker enters
+/// only entries reported as directories and the subtree behind a link would
+/// escape this gate silently.
+///
+/// On failure `failed_path` names the walked entry that could not be
+/// handled — the link whose resolution failed or the linked directory — so
+/// the caller can report it instead of a bare error name (the same rule
+/// checkedFiles follows for its gate paths). A failure belonging to no
+/// single entry — allocation alone, here, or the walker failing to descend
+/// between entries — leaves it unset, and the caller falls back to a
+/// generic subject.
+fn appendProjectZigFiles(
+    build_root: std.Io.Dir,
+    io: std.Io,
+    arena: std.mem.Allocator,
+    paths: *std.ArrayListUnmanaged([]const u8),
+    failed_path: *?[]const u8,
+) !void {
+    var dir = try build_root.openDir(io, ".", .{ .iterate = true });
+    defer dir.close(io);
+    var walker = try std.Io.Dir.walkSelectively(dir, arena);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if (excludedFromGates(entry.basename, entry.depth())) continue;
+        var kind = entry.kind;
+        if (kind == .sym_link) {
+            const linked_path = try std.fs.path.join(arena, &.{ ".", entry.path });
+            const st = build_root.statFile(io, linked_path, .{}) catch |err| {
+                // next() invalidates its slices on the following call, so
+                // the name is copied out before the walk (or its deinit)
+                // continues.
+                failed_path.* = try arena.dupe(u8, entry.path);
+                return err;
+            };
+            kind = st.kind;
+        }
+        if (kind == .directory) {
+            if (entry.kind == .sym_link) {
+                failed_path.* = try arena.dupe(u8, entry.path);
+                return error.LinkedDirectoryNotWalked;
+            }
+            // Entering is opt-in with a selective walker; skipping a
+            // pruned or non-directory entry just keeps reading siblings.
+            try walker.enter(io, entry);
+            continue;
+        }
+        if (kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+        // next() invalidates the returned slices on its following call, so
+        // the path is copied out before the walk continues.
+        try paths.append(arena, try arena.dupe(u8, entry.path));
+    }
+}
+
+test "gate coverage reports exactly the candidates outside the checked paths" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The allowlist's silent complement, now reported: everything the gates
+    // cover passes, and each uncovered candidate gets one line naming it,
+    // in the order handed in (the walk order, like the other gates).
+    const covered = [_][]const u8{ "src/root.zig", "build.zig" };
+    const candidates = [_][]const u8{ "stray.zig", "build.zig", "tools/late.zig" };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    try GateCoverageStep.uncoveredPaths(arena, &covered, &candidates, &report);
+
+    try std.testing.expectEqualStrings(
+        \\  stray.zig: not covered by any analysis gate
+        \\  tools/late.zig: not covered by any analysis gate
+        \\
+    , report.items);
+}
+
+test "gate coverage stays silent when every candidate is covered" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The tree-today shape: the walk finds nothing the gates miss, so the
+    // report is empty and make() fails nothing.
+    const covered = [_][]const u8{ "src/main.zig", "src/root.zig" };
+    const candidates = [_][]const u8{ "src/root.zig", "src/main.zig" };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    try GateCoverageStep.uncoveredPaths(arena, &covered, &candidates, &report);
+
+    try std.testing.expectEqual(@as(usize, 0), report.items.len);
+}
+
+test "excludedFromGates prunes tooling entries only" {
+    // Hidden entries are tooling territory at any depth (.git holds
+    // objects, .zig-cache caches build artifacts, .local/.agents hold
+    // machine-local state); zig-out is the install prefix, but only at the
+    // walk root — deeper down it is just a project directory's name.
+    try std.testing.expect(excludedFromGates(".git", 1));
+    try std.testing.expect(excludedFromGates(".zig-cache", 4));
+    try std.testing.expect(excludedFromGates("zig-out", 1));
+    try std.testing.expect(!excludedFromGates("zig-out", 2));
+    try std.testing.expect(!excludedFromGates("src", 1));
+    try std.testing.expect(!excludedFromGates("tools", 3));
+    try std.testing.expect(!excludedFromGates("build.zig", 1));
+
+    // The dot must start a full component: a project entry whose name
+    // merely contains one is walked like any other.
+    try std.testing.expect(!excludedFromGates("src.tools", 1));
+}
+
+test "appendProjectZigFiles walks the tree minus tooling directories, links included" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The layout: covered and uncoverable .zig files side by side, a
+    // non-.zig file, a leading-dot directory and a root-level zig-out
+    // holding .zig files the walk must never see — while a zig-out *nested*
+    // in a project directory stays reportable (the depth guard) — and a
+    // symlinked source file collected like a real one (the same policy the
+    // two file-covering gates apply).
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "tools", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, ".hidden", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "zig-out/bin", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "tools/zig-out", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/top.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "tools/inner.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "tools/zig-out/made.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "stray.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "notes.md", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = ".hidden/cache.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "zig-out/bin/made.zig", .data = "" });
+    try tmp.dir.symLink(io, "top.zig", "src/link.zig", .{});
+
+    var found: std.ArrayListUnmanaged([]const u8) = .empty;
+    var failed_path: ?[]const u8 = null;
+    try appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path);
+    std.mem.sort([]const u8, found.items, {}, lessThanStrings);
+
+    // A clean walk names no failing entry: make()'s report stays generic
+    // exactly when nothing specific failed.
+    try std.testing.expectEqual(@as(usize, 5), found.items.len);
+    try std.testing.expect(failed_path == null);
+    try std.testing.expectEqualStrings("src/link.zig", found.items[0]);
+    try std.testing.expectEqualStrings("src/top.zig", found.items[1]);
+    try std.testing.expectEqualStrings("stray.zig", found.items[2]);
+    try std.testing.expectEqualStrings("tools/inner.zig", found.items[3]);
+    try std.testing.expectEqualStrings("tools/zig-out/made.zig", found.items[4]);
+}
+
+test "appendProjectZigFiles rejects a linked directory like the gate-path walk" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // One policy everywhere: SelectiveWalker enters only entries reported
+    // as directories and links are not, so the subtree behind the link
+    // would silently escape this gate too — fail loudly instead, the
+    // direction appendZigFilesUnder already chose for the covering gates.
+    (try tmp.dir.createDirPathOpen(io, "tools/sub", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "tools/sub/deep.zig", .data = "" });
+    // The link's target resolves relative to the link's own directory, the
+    // same shape the gate-path walk's twin test uses.
+    try tmp.dir.symLink(io, "sub", "tools/vendor", .{});
+
+    var found: std.ArrayListUnmanaged([]const u8) = .empty;
+    var failed_path: ?[]const u8 = null;
+    try std.testing.expectError(
+        error.LinkedDirectoryNotWalked,
+        appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path),
+    );
+
+    // The rejection names the walked entry — the link itself, in walked-path
+    // form — so make()'s report says which entry stopped the walk instead of
+    // a bare error name the operator would have to locate by hand.
+    try std.testing.expectEqualStrings("tools/vendor", failed_path.?);
+}
+
+test "appendProjectZigFiles names a link that no longer resolves" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The other entry-specific failure on this walk: a dangling link is
+    // reported as .sym_link by iteration, and resolving it through statFile
+    // (which follows links) fails — before failed_path existed, make()
+    // printed only "cannot walk the project tree: FileNotFound", leaving
+    // the operator to find which of every walked entry was dangling.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/real.zig", .data = "" });
+    try tmp.dir.symLink(io, "nowhere.zig", "src/dangling.zig", .{});
+
+    var found: std.ArrayListUnmanaged([]const u8) = .empty;
+    var failed_path: ?[]const u8 = null;
+    try std.testing.expectError(
+        error.FileNotFound,
+        appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path),
+    );
+
+    // The link, not its missing target: it is the tree entry that cannot be
+    // handled.
+    try std.testing.expectEqualStrings("src/dangling.zig", failed_path.?);
 }
