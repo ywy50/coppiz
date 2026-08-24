@@ -65,6 +65,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- RFC 0001's *Current state* no longer presents clanker's shared state as
+  JSON/JSONL files in the present tense: its own evidence record (research
+  0001) and [PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)
+  carry clanker ADR 0033 (2026-08-20), which moved sessions to per-session
+  SQLite with an append-only replicated `events` stream while the JSONL
+  streams stayed unreplicated — verified in clanker's tree before editing.
 - Three accuracy repairs from a documentation audit: RELEASES.md and this
   changelog describe the version mechanism that actually landed — the
   library parses the raw `build.zig.zon` value and fails compilation on

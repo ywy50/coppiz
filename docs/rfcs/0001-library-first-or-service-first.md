@@ -49,10 +49,15 @@ beyond Zig (roadmap).
 
 ## Current state
 
-Nothing is implemented. clanker's shared state is JSON/JSONL files under
-`state/`, with a symlink + `shared_root` workaround for worktrees and no
-cross-host replication for most streams (RFC 0019, *Current state*). The
-stage-1 spike RFC 0019 names has not been run.
+Nothing is implemented. clanker's shared state was JSON/JSONL files under
+`state/` when RFC 0019 surveyed it (2026-08-19); since its ADR 0033
+(accepted 2026-08-20) sessions are per-session SQLite databases written
+directly in-process, their append-only `events` stream replicating to mesh
+peers at `cursor + 1`, while the remaining JSONL streams have no replication
+and the symlink + `shared_root` workaround stands
+([research 0001](../research/0001-evidence-carried-from-clanker-rfc-0019.md);
+[PRD 0005](../prds/0005-embedding-the-library-as-the-product.md), *Example
+host*). The stage-1 spike RFC 0019 names has not been run.
 
 ## Options considered
 
