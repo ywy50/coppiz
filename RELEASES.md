@@ -26,9 +26,12 @@ The public contract includes more than Zig declarations: the library API in
 `src/root.zig`; documented CLI commands, flags and output; the schema of
 ledger settings and local config and their defaults; the on-disk entry, slot,
 segment and snapshot formats (each carries a version a reader refuses when
-unknown); and the replication wire protocol once RFC 0001 decides whether it
-is public. A signature-preserving change to results, errors, defaults, side
-effects, wire data, or persisted data can therefore be breaking.
+unknown); and the replication wire protocol once [OQ
+19](docs/open-questions.md) decides whether it is public (RFC 0001 keeps the
+protocol specified either way; whether it is a public contract is that
+question, not the library/service one). A signature-preserving change to
+results, errors, defaults, side effects, wire data, or persisted data can
+therefore be breaking.
 
 Persisted and wire formats add one rule the Zig API does not have: a cluster
 may run two adjacent versions during a rolling upgrade, the leader is

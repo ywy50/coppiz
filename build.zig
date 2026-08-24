@@ -1726,19 +1726,19 @@ fn excludedFromGates(basename: []const u8, depth: usize) bool {
 /// between entries — leaves it unset, and the caller falls back to a
 /// generic subject.
 fn appendProjectZigFiles(
-    build_root: std.Io.Dir,
+    root_dir: std.Io.Dir,
     io: std.Io,
     arena: std.mem.Allocator,
     paths: *std.ArrayListUnmanaged([]const u8),
     failed_path: *?[]const u8,
 ) !void {
-    var dir = try build_root.openDir(io, ".", .{ .iterate = true });
+    var dir = try root_dir.openDir(io, ".", .{ .iterate = true });
     defer dir.close(io);
     var walker = try std.Io.Dir.walkSelectively(dir, arena);
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
         if (excludedFromGates(entry.basename, entry.depth())) continue;
-        const classified = classifyWalkedEntry(build_root, io, arena, "", entry) catch |err| {
+        const classified = classifyWalkedEntry(root_dir, io, arena, "", entry) catch |err| {
             // next() invalidates its slices on the following call, so
             // the name is copied out before the walk (or its deinit)
             // continues.
