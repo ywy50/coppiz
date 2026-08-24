@@ -27,6 +27,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The 100-column cap's enumeration failure now names the checked path it
+  stopped on (`cannot enumerate 'src': FileNotFound`, not a bare
+  `FileNotFound`): `checkedFiles` can fail on any of its three entries, and
+  every other file-access failure in the gates already reported which file
+  it was reading.
 - Symlink handling in the two file-covering lint gates: directory iteration
   reports a link as `.sym_link` — the walker never resolves it (verified on
   0.16.0: Linux's `getdents64` `d_type` reaches the filter untouched), so a

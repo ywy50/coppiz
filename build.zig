@@ -181,16 +181,29 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// `gate_paths` is a parameter rather than a read of `checked_paths` so a
 /// test can drive the dispatch against a temporary tree, the same way `sep`
 /// is a parameter below; production hands in `&checked_paths`.
+///
+/// On failure `failed_path` names the gate path that could not be stat'd or
+/// walked, so the calling step can report it — a bare error name would leave
+/// the operator to re-derive the checked-path list by hand (the same rule
+/// the read failures below follow). Every error return sets it first.
 fn checkedFiles(
     root_dir: std.Io.Dir,
     io: std.Io,
     arena: std.mem.Allocator,
     gate_paths: []const []const u8,
+    failed_path: *?[]const u8,
 ) ![][]const u8 {
     var paths: std.ArrayListUnmanaged([]const u8) = .empty;
     for (gate_paths) |path| {
-        if ((try root_dir.statFile(io, path, .{})).kind == .directory) {
-            try appendZigFilesUnder(root_dir, io, arena, path, &paths);
+        const stat = root_dir.statFile(io, path, .{}) catch |err| {
+            failed_path.* = path;
+            return err;
+        };
+        if (stat.kind == .directory) {
+            appendZigFilesUnder(root_dir, io, arena, path, &paths) catch |err| {
+                failed_path.* = path;
+                return err;
+            };
         } else {
             try paths.append(arena, path);
         }
@@ -269,8 +282,12 @@ const LineLengthStep = struct {
         var report: std.ArrayListUnmanaged(u8) = .empty;
         var count: usize = 0;
         const root_dir = b.build_root.handle;
-        const files = checkedFiles(root_dir, io, arena, &checked_paths) catch |err|
-            return step.fail("cannot enumerate the checked paths: {s}", .{@errorName(err)});
+        var failed_path: ?[]const u8 = null;
+        const files = checkedFiles(root_dir, io, arena, &checked_paths, &failed_path) catch |err|
+            return step.fail("cannot enumerate '{s}': {s}", .{
+                failed_path orelse "the checked paths",
+                @errorName(err),
+            });
         for (files) |path| {
             const bytes = root_dir.readFileAlloc(io, path, arena, .unlimited) catch |err|
                 return step.fail("cannot read '{s}': {s}", .{ path, @errorName(err) });
@@ -878,7 +895,8 @@ test "checkedFiles expands directory entries and takes plain entries whole" {
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
     const gate_paths = [_][]const u8{ "lib", "build.zig.zon" };
 
-    const checked = try checkedFiles(tmp.dir, io, arena, &gate_paths);
+    var failed_path: ?[]const u8 = null;
+    const checked = try checkedFiles(tmp.dir, io, arena, &gate_paths, &failed_path);
     std.mem.sort([]const u8, checked, {}, lessThanStrings);
 
     try std.testing.expectEqual(@as(usize, 3), checked.len);
@@ -908,7 +926,8 @@ test "checkedFiles resolves a listed path that symlinks a directory" {
     try tmp.dir.symLink(io, "vendor", "linked-lib", .{});
 
     const gate_paths = [_][]const u8{"linked-lib"};
-    const checked = try checkedFiles(tmp.dir, io, arena, &gate_paths);
+    var failed_path: ?[]const u8 = null;
+    const checked = try checkedFiles(tmp.dir, io, arena, &gate_paths, &failed_path);
 
     // Paths stay as listed (through the link), the shape both gates report;
     // the non-.zig file is filtered like any walked entry.
@@ -925,12 +944,16 @@ test "checkedFiles fails loudly when a checked path stops existing" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    // The documented alternative to silently checking nothing.
+    // The documented alternative to silently checking nothing, with the
+    // failing path captured for the step's report: the error alone names no
+    // path, and one of three checked entries failed.
     const gate_paths = [_][]const u8{"gone"};
+    var failed_path: ?[]const u8 = null;
     try std.testing.expectError(
         error.FileNotFound,
-        checkedFiles(tmp.dir, io, arena, &gate_paths),
+        checkedFiles(tmp.dir, io, arena, &gate_paths, &failed_path),
     );
+    try std.testing.expectEqualStrings("gone", failed_path.?);
 }
 
 test "appendZigFilesUnder collects every .zig file below the directory, and only files" {
