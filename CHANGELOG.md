@@ -108,8 +108,6 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   CRLF checkout or commit, so the policy the build enforces is now pinned
   where checkouts and commits are made.
 
-### Fixed
-
 - PRD 0002's open-questions list now cites [OQ
   57](docs/open-questions.md), which concerns that PRD's own schema — whether
   the `stale` cause is switchable per ledger as ADR 0002 records — but was
