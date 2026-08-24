@@ -56,6 +56,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- `checkedFiles`'s doc comment in build.zig names its callers again: it
+  claimed to serve "every step that enumerates files" but listed only the
+  two file-covering gates and the test-registration walk — the enumeration
+  the coverage-completeness gate performs through the same dispatcher was
+  missing, while `zig fmt`, named by "the two file-covering gates", reads
+  its files without the dispatcher.
 - Two accuracy repairs from a documentation audit: `src/root.zig`'s
   registration guidance no longer says registering a module keeps its public
   declarations covered by the "all public declarations analyze" test — that

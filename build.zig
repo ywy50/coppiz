@@ -178,9 +178,10 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// Every file a checking step covers, derived from its gate paths: a listed
 /// directory contributes its .zig descendants; any other entry is taken
 /// whole (build.zig.zon has no .zig suffix but must still be capped). One
-/// dispatcher serves every step that enumerates files — the two
-/// file-covering gates and the test-registration walk — so their coverage
-/// rules cannot drift apart.
+/// dispatcher serves every step that enumerates files — the 100-column cap,
+/// the test-registration walk and the coverage-completeness walk (`zig fmt`
+/// takes the same list but reads the files itself) — so their coverage rules
+/// cannot drift apart.
 ///
 /// All paths go through `root_dir` — the build root — not the process cwd:
 /// the runner walks up to find build.zig without changing directory, so a
@@ -194,7 +195,7 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// `gate_paths` is a parameter rather than a read of `checked_paths` so a
 /// test can drive the dispatch against a temporary tree, the same way `separator`
 /// is a parameter below; production hands in `&checked_paths` for the
-/// file-covering gates and `&.{"src"}` for the registration walk.
+/// column-cap and coverage walks and `&.{"src"}` for the registration walk.
 ///
 /// On failure `failed_path` names the gate path that could not be stat'd or
 /// walked, so the caller can report it — a bare error name would leave the
@@ -227,20 +228,63 @@ fn checkedFiles(
     return paths.toOwnedSlice(arena);
 }
 
+/// What one walked entry is, once its real kind is known: the shared
+/// decision both file walks act on, so their collection rules cannot drift
+/// apart.
+const WalkedEntry = union(enum) {
+    /// A .zig source file: `path` is the entry's path under `root_dir`,
+    /// freshly allocated, in the form both gates report and read back.
+    zig_source: []const u8,
+    /// A directory walked into as a real directory (the walker descended or
+    /// may be told to).
+    directory,
+    /// A link or unclassifiable entry resolving to a directory: neither
+    /// walker descends into it, so its subtree would escape every gate
+    /// silently — reject loudly instead.
+    linked_directory,
+    /// Anything else: not a Zig source.
+    other,
+};
+
+/// Classifies one walked entry against the policy both walks share. The
+/// kind is probed through links and filesystem-unclassifiable entries via
+/// `root_dir.statFile`, which follows links: iteration reports a link as
+/// `.sym_link`, never the kind of its target (verified on 0.16.0 — Linux's
+/// getdents64 d_type is never statted), and an entry the OS could not
+/// classify (`DT_UNKNOWN` reaches Zig as `.unknown`; verified on 0.16.0 in
+/// std.Io.Threaded's dirReadLinux, and real on XFS with ftype=0 and some
+/// NFS/FUSE mounts) answers nothing — filtering on the raw kind drops real
+/// sources from every gate while they stay green. The probe joins the
+/// entry's walked path under `prefix` — the gate path for the covering
+/// walk, "" for the coverage walk, whose paths are already build-root
+/// relative — and is built only when the raw kind demands it; the returned
+/// `.zig_source` path joins the same way, so it is freshly allocated and
+/// survives the walker invalidating its slices.
+fn classifyWalkedEntry(
+    root_dir: std.Io.Dir,
+    io: std.Io,
+    arena: std.mem.Allocator,
+    prefix: []const u8,
+    entry: std.Io.Dir.Walker.Entry,
+) !WalkedEntry {
+    var kind = entry.kind;
+    if (kind == .sym_link or kind == .unknown) {
+        const probe_path = try std.fs.path.join(arena, &.{ prefix, entry.path });
+        kind = (try root_dir.statFile(io, probe_path, .{})).kind;
+    }
+    if (kind == .directory) {
+        return if (entry.kind == .directory) .directory else .linked_directory;
+    }
+    if (kind != .file) return .other;
+    if (!std.mem.endsWith(u8, entry.basename, ".zig")) return .other;
+    return .{ .zig_source = try std.fs.path.join(arena, &.{ prefix, entry.path }) };
+}
+
 /// Appends every .zig file under the directory `dir_path`, as a path from
-/// the build root ("src/foo.zig"), in walker order. A symlink entry is
-/// resolved through `root_dir.statFile`, which follows links (verified on
-/// 0.16.0: the walker itself reports a symlink as `.sym_link` — Linux's
-/// getdents64 d_type, never statted), so a linked .zig file is collected
-/// like a real one; a linked directory is never descended into (Walker only
-/// enters entries reported as directories), so one is rejected loudly
-/// instead of silently dropping its subtree from every gate. The same probe
-/// resolves an entry the OS could not classify (`DT_UNKNOWN` reaches Zig as
-/// `.unknown`; verified on 0.16.0 in std.Io.Threaded's dirReadLinux, and
-/// real on XFS with ftype=0 and some NFS/FUSE mounts) — without it a plain
-/// source file there would be skipped by every gate while they stayed green.
-/// An entry that only the probe reveals as a directory is rejected like a
-/// linked one: the walker has already declined to descend into it.
+/// the build root ("src/foo.zig"), in walker order. A linked directory is
+/// never descended into (Walker only enters entries reported as
+/// directories), so classifyWalkedEntry rejects one loudly instead of
+/// silently dropping its subtree from every gate.
 fn appendZigFilesUnder(
     root_dir: std.Io.Dir,
     io: std.Io,
@@ -254,20 +298,14 @@ fn appendZigFilesUnder(
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
         // entry.path is relative to the walked directory, while root_dir
-        // stands at the build root: a link is resolved through its joined
-        // path, the one both gates report and read back.
-        var kind = entry.kind;
-        if (kind == .sym_link or kind == .unknown) {
-            const linked_path = try std.fs.path.join(arena, &.{ dir_path, entry.path });
-            kind = (try root_dir.statFile(io, linked_path, .{})).kind;
+        // stands at the build root: classification probes and collects
+        // through dir_path joined onto it, the form both gates report.
+        switch (try classifyWalkedEntry(root_dir, io, arena, dir_path, entry)) {
+            .zig_source => |path| try paths.append(arena, path),
+            .linked_directory => return error.LinkedDirectoryNotWalked,
+            // The plain walker descends real directories itself.
+            .directory, .other => {},
         }
-        if (kind == .directory) {
-            if (entry.kind != .directory) return error.LinkedDirectoryNotWalked;
-            continue;
-        }
-        if (kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
-        try paths.append(arena, try std.fs.path.join(arena, &.{ dir_path, entry.path }));
     }
 }
 
@@ -359,7 +397,7 @@ const LineLengthStep = struct {
             arena,
             &checked_paths,
         );
-        for (sources) |source| try checkBytes(arena, source.text, source.path, &report);
+        for (sources) |source| try checkLineLengths(arena, source.text, source.path, &report);
         // One report line per violation (pinned by the exact-string tests
         // below), so the tally is the newline count — no second output to
         // keep in lockstep with the appends.
@@ -372,7 +410,7 @@ const LineLengthStep = struct {
 
     /// The cap itself, I/O-free so tests can drive it directly. Appends one
     /// report line per offending line.
-    fn checkBytes(
+    fn checkLineLengths(
         arena: std.mem.Allocator,
         bytes: []const u8,
         path: []const u8,
@@ -395,7 +433,7 @@ test "column cap admits a line at exactly the limit" {
     var report: std.ArrayListUnmanaged(u8) = .empty;
 
     const exact = "a" ** LineLengthStep.max_columns;
-    try LineLengthStep.checkBytes(arena, exact ++ "\nsecond\n", "f.zig", &report);
+    try LineLengthStep.checkLineLengths(arena, exact ++ "\nsecond\n", "f.zig", &report);
 
     try std.testing.expectEqual(@as(usize, 0), report.items.len);
 }
@@ -412,7 +450,7 @@ test "column cap flags the first line past the limit, with path and line number"
     // last line with no trailing '\n': a file not ending in a newline must
     // still have that final line checked, the boundary where a line-walking
     // refactor most easily drops the tail.
-    try LineLengthStep.checkBytes(
+    try LineLengthStep.checkLineLengths(
         arena,
         "ok\n" ++ over ++ "\nalso ok\n" ++ over,
         "f.zig",
@@ -429,13 +467,13 @@ test "column cap measures code points, not bytes" {
     var report: std.ArrayListUnmanaged(u8) = .empty;
 
     // 60 two-byte code points: 120 bytes, but only 60 columns.
-    try LineLengthStep.checkBytes(arena, "\u{00e9}" ** 60, "f.zig", &report);
+    try LineLengthStep.checkLineLengths(arena, "\u{00e9}" ** 60, "f.zig", &report);
     try std.testing.expectEqual(@as(usize, 0), report.items.len);
 
     // The invalid side of the same boundary: 101 code points is over the cap
     // whatever the encoding, so wide characters are not skipped wholesale.
     const wide_over = "\u{00e9}" ** (LineLengthStep.max_columns + 1);
-    try LineLengthStep.checkBytes(arena, wide_over, "f.zig", &report);
+    try LineLengthStep.checkLineLengths(arena, wide_over, "f.zig", &report);
     try std.testing.expectEqualStrings("  f.zig:1\n", report.items);
 }
 
@@ -446,7 +484,7 @@ test "column cap falls back to byte count on invalid UTF-8" {
     var report: std.ArrayListUnmanaged(u8) = .empty;
 
     const bad = "\xff" ** (LineLengthStep.max_columns + 1);
-    try LineLengthStep.checkBytes(arena, bad, "f.zig", &report);
+    try LineLengthStep.checkLineLengths(arena, bad, "f.zig", &report);
 
     // Same path:line report as the valid-UTF-8 over-limit case.
     try std.testing.expectEqualStrings("  f.zig:1\n", report.items);
@@ -531,7 +569,7 @@ const TestRegistrationStep = struct {
     }
 
     /// The gate's decision core, I/O-free so tests drive it directly, the
-    /// way checkBytes serves the column cap: from the test roots, follow
+    /// way checkLineLengths serves the column cap: from the test roots, follow
     /// real imports across `sources` and append one report line per module
     /// no chain reaches. O(modules²) tokenizer runs — src/
     /// holds a handful of files today and the point is to fail loudly while
@@ -1648,13 +1686,12 @@ fn excludedFromGates(basename: []const u8, depth: usize) bool {
 /// needs no separator or prefix normalization on any host. Pruning happens
 /// during descent rather than after the walk: .zig-cache alone holds
 /// thousands of entries that would otherwise be visited on every lint run.
-/// Symlinks resolve through the same rules appendZigFilesUnder applies for
-/// the covering gates — a linked .zig file is collected like a real one,
-/// and a linked directory is rejected loudly, since SelectiveWalker enters
-/// only entries reported as directories and the subtree behind a link would
-/// escape this gate silently. An entry reported `.unknown` (filesystems
-/// whose d_type answers nothing) takes the same probe and the same rules,
-/// so a source file there is covered rather than skipped.
+/// Entry classification goes through classifyWalkedEntry, the same policy
+/// appendZigFilesUnder applies for the covering gates — a linked .zig file
+/// is collected like a real one (SelectiveWalker enters only entries
+/// reported as directories, so classifyWalkedEntry rejects a linked
+/// directory loudly and its subtree would otherwise escape this gate
+/// silently).
 ///
 /// On failure `failed_path` names the walked entry that could not be
 /// handled — the link or unclassifiable entry whose resolution failed or
@@ -1677,33 +1714,26 @@ fn appendProjectZigFiles(
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
         if (excludedFromGates(entry.basename, entry.depth())) continue;
-        var kind = entry.kind;
-        if (kind == .sym_link or kind == .unknown) {
-            const linked_path = try std.fs.path.join(arena, &.{ ".", entry.path });
-            const target_stat = build_root.statFile(io, linked_path, .{}) catch |err| {
-                // next() invalidates its slices on the following call, so
-                // the name is copied out before the walk (or its deinit)
-                // continues.
-                failed_path.* = try arena.dupe(u8, entry.path);
-                return err;
-            };
-            kind = target_stat.kind;
-        }
-        if (kind == .directory) {
-            if (entry.kind != .directory) {
-                failed_path.* = try arena.dupe(u8, entry.path);
-                return error.LinkedDirectoryNotWalked;
-            }
+        const classified = classifyWalkedEntry(build_root, io, arena, "", entry) catch |err| {
+            // next() invalidates its slices on the following call, so
+            // the name is copied out before the walk (or its deinit)
+            // continues.
+            failed_path.* = try arena.dupe(u8, entry.path);
+            return err;
+        };
+        switch (classified) {
             // Entering is opt-in with a selective walker; skipping a
             // pruned or non-directory entry just keeps reading siblings.
-            try walker.enter(io, entry);
-            continue;
+            .directory => try walker.enter(io, entry),
+            .linked_directory => {
+                failed_path.* = try arena.dupe(u8, entry.path);
+                return error.LinkedDirectoryNotWalked;
+            },
+            // The "" prefix joins to the entry's walked path itself: the
+            // fresh copy outlives the walker slice it was derived from.
+            .zig_source => |path| try paths.append(arena, path),
+            .other => {},
         }
-        if (kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
-        // next() invalidates the returned slices on its following call, so
-        // the path is copied out before the walk continues.
-        try paths.append(arena, try arena.dupe(u8, entry.path));
     }
 }
 
