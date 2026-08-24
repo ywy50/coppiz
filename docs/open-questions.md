@@ -231,6 +231,18 @@ Ordering inside each section is by what blocks implementation first.
     *Blocks:* PRD 0001 phase 3 (backfill), PRD 0003 phase 1 (member
     states).
 
+61. **What bounds per-process memory?** [PRD 0001](prds/0001-ledger-core.md)
+    goal 6 requires entry size, ledger count *and per-process memory* to be
+    bounded by settings, but only the first two have keys
+    (`ledger.max_entry_bytes`, `cluster.max_ledgers`; the unslotted queue adds
+    `sync.unslotted_max_bytes`, OQ 55) — no memory bound exists anywhere in
+    the drafted schema, and no acceptance criterion covers the clause. What
+    is the knob (a fold/snapshot cache cap, a per-ledger page budget,
+    nothing before measurement?), and what does a member do at the bound?
+    Sibling of OQs 36 and 55.
+    *Blocks:* PRD 0001 phase 3–4 defaults. *Answer from:* measurement, like
+    OQ 54.
+
 ## F. Transport and wire
 
 19. **Replication wire: own binary framing or HTTP?** clanker's spike used

@@ -160,7 +160,7 @@ How spine fits that host, two routes, both speaking to the same library:
 | Route | How a guest reaches the ledger | clanker change | Trade |
 |---|---|---|---|
 | **A. library inside `serve`, behind a host function** (clanker RFC 0019 option A + T) | guest calls `ck_state` (name-gated, like `ck_chat`); host calls the library in-process | one host channel + routes; spine as a dependency beside the already-vendored SQLite | single static binary kept; keys and sockets never in the sandbox; the path clanker's RFC recommends |
-| **B. `spine` node beside clanker, guest or host speaks the service API** | `network_allow` to loopback, HTTP | none to the harness | zero harness change, so it works for experiments today; but clanker's `network_allow` cannot scope a guest to one port, and a second daemon is what its PRD 0011 rules out |
+| **B. `spine` node beside clanker, guest or host speaks the service API** | a guest or native client speaks loopback HTTP to a `spine` process per instance ([RFC 0001](../rfcs/0001-library-first-or-service-first.md) option B) | `network_allow` to loopback | none to the harness — zero harness change, so it works for experiments today; but clanker's `network_allow` cannot scope a guest to one port, and a second daemon is what its PRD 0011 rules out |
 
 What clanker would put in first: the event streams it already replicates by
 hand (session `events`, and the JSONL streams that have no replication at

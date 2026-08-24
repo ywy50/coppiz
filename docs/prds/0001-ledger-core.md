@@ -72,7 +72,8 @@ the clarification of the same day) and from RFC 0019's drivers:
 5. The on-disk format and the wire format are versioned, and a reader refuses
    a version it does not know rather than misreading it.
 6. Entry size, ledger count, and per-process memory are bounded by settings,
-   not by what the host happens to allow.
+   not by what the host happens to allow. (The memory bound has no key in the
+   drafted schema and no criterion below — [OQ 61](../open-questions.md).)
 
 ## Non-goals
 
