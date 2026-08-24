@@ -137,7 +137,9 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
     // is executing this build, not whatever is first on PATH), a hard
     // 100-column cap matching zig fmt's own wrap target, and test
     // registration (a module no chain of imports reaches from a test root
-    // loses its tests silently).
+    // loses its tests silently, and a root import never wrapped in
+    // refAllDecls loses every semantic check of the module's public
+    // declarations).
     const lint_step = b.step("lint", "Check formatting, line length and test registration");
 
     // The checked paths come from `checked_paths`, shared with the column
@@ -410,7 +412,11 @@ const Source = struct {
 /// from a test-module root (src/root.zig or src/main.zig): only such a
 /// chain makes Zig 0.16 collect the module's `test` blocks, so an
 /// unreachable module's tests silently never run while `zig build test`
-/// stays green. Collection follows analyzed imports transitively — verified
+/// stays green. The step also fails when a test root imports a src/ module
+/// but never wraps that import in refAllDecls: registration alone collects
+/// tests and analyzes nothing, an unreferenced `pub` declaration is
+/// compiled into nothing, so the module's public surface would reach no
+/// semantic check. Collection follows analyzed imports transitively — verified
 /// on 0.16.0: with root.zig importing a.zig importing b.zig, b's tests run;
 /// an import in a declaration that is never analyzed (an unused
 /// container-level const) collects nothing — so the gate walks real
@@ -427,7 +433,7 @@ const TestRegistrationStep = struct {
         self.* = .{
             .step = std.Build.Step.init(.{
                 .id = .custom,
-                .name = "test registration",
+                .name = "test registration and declaration analysis",
                 .owner = b,
                 .makeFn = make,
             }),
@@ -466,10 +472,30 @@ const TestRegistrationStep = struct {
             try sources.append(arena, .{ .path = path, .text = bytes });
         }
         try classifyModules(arena, sources.items, std.fs.path.sep, &report, &count);
+        var analysis_report: std.ArrayListUnmanaged(u8) = .empty;
+        var analysis_count: usize = 0;
+        try declarationAnalysisGaps(
+            arena,
+            sources.items,
+            std.fs.path.sep,
+            &analysis_report,
+            &analysis_count,
+        );
+        var message: std.ArrayListUnmanaged(u8) = .empty;
         if (count > 0)
-            return step.fail("{d} module(s) whose tests never run:\n{s}", .{
+            try message.print(arena, "{d} module(s) whose tests never run:\n{s}", .{
                 count, report.items,
             });
+        if (analysis_count > 0) {
+            if (message.items.len > 0) try message.append(arena, '\n');
+            try message.print(
+                arena,
+                "{d} module(s) whose public declarations are never analyzed:\n{s}",
+                .{ analysis_count, analysis_report.items },
+            );
+        }
+        if (message.items.len > 0)
+            return step.fail("{s}", .{message.items});
     }
 
     /// The gate's decision core, I/O-free so tests drive it directly, the
@@ -579,32 +605,117 @@ const TestRegistrationStep = struct {
     /// and string literals lex as inert data (a multiline string one token
     /// per line, under its own tag), so a mention in either registers
     /// nothing, while an import sharing a line with a trailing comment — or
-    /// with an earlier "//" inside a string — still counts. The builtin's
-    /// spelling is matched too, so
-    /// @embedFile("sub/x.zig") is not registration. Only the
-    /// two preceding tokens are remembered; that spans any whitespace but not
-    /// a computed path (@import(a ++ b)), which fails loudly instead — the
+    /// with an earlier "//" inside a string — still counts. A computed path
+    /// (@import(a ++ b)) matches nothing and fails loudly instead — the
     /// direction the gate accepts.
     fn hasRealImport(arena: std.mem.Allocator, text: []const u8, wanted_import: []const u8) !bool {
+        for (try collectImports(arena, text)) |imp| {
+            if (std.mem.eql(u8, imp.path, wanted_import)) return true;
+        }
+        return false;
+    }
+
+    /// One real `@import("path")` call found in a token stream: `path` is the
+    /// literal between the quotes, `wrapped` whether the call sits directly
+    /// inside a `std.testing.refAllDecls`/`refAllDeclsRecursive` argument
+    /// list — the form that forces the target's public declarations through
+    /// the analyzer, not merely collects its tests. Comments and every kind
+    /// of string literal yield nothing, and only a literal path argument
+    /// counts (the rules hasRealImport states, shared here so the two
+    /// questions — does this file import X, and is the import wrapped — can
+    /// never drift apart). Four tokens of look-behind span any whitespace:
+    /// `refAllDecls` `(` `@import` `(` `path`. The identifier spelling is
+    /// matched exactly, so `myRefAllDecls(@import("x"))` is not a wrapper.
+    const ImportRef = struct {
+        path: []const u8,
+        wrapped: bool,
+    };
+
+    fn collectImports(arena: std.mem.Allocator, text: []const u8) ![]ImportRef {
         const terminated = try arena.dupeZ(u8, text);
         var lexer = std.zig.Tokenizer.init(terminated);
-        var prev_tags: [2]std.zig.Token.Tag = .{ .eof, .eof };
-        var prev_slices: [2][]const u8 = .{ "", "" };
-        const wanted = try std.fmt.allocPrint(arena, "\"{s}\"", .{wanted_import});
+        var prev_tags: [4]std.zig.Token.Tag = .{ .eof, .eof, .eof, .eof };
+        var prev_slices: [4][]const u8 = .{ "", "", "", "" };
+        var refs: std.ArrayListUnmanaged(ImportRef) = .empty;
         while (true) {
             const token = lexer.next();
-            if (token.tag == .eof) return false;
+            if (token.tag == .eof) return refs.toOwnedSlice(arena);
+            // While `token` is read, prev_*[3] is one token back, [2] two,
+            // and so on: `@import` at [2] with `(` at [3] is a call, and a
+            // wrapper adds `refAllDecls` at [0] behind another `(` at [1].
             if (token.tag == .string_literal and
-                prev_tags[0] == .builtin and std.mem.eql(u8, prev_slices[0], "@import") and
-                prev_tags[1] == .l_paren)
+                prev_tags[2] == .builtin and std.mem.eql(u8, prev_slices[2], "@import") and
+                prev_tags[3] == .l_paren)
             {
-                if (std.mem.eql(u8, terminated[token.loc.start..token.loc.end], wanted))
-                    return true;
+                const wrapped = prev_tags[1] == .l_paren and prev_tags[0] == .identifier and
+                    (std.mem.eql(u8, prev_slices[0], "refAllDecls") or
+                        std.mem.eql(u8, prev_slices[0], "refAllDeclsRecursive"));
+                try refs.append(arena, .{
+                    .path = terminated[token.loc.start + 1 .. token.loc.end - 1],
+                    .wrapped = wrapped,
+                });
             }
             prev_tags[0] = prev_tags[1];
-            prev_tags[1] = token.tag;
+            prev_tags[1] = prev_tags[2];
+            prev_tags[2] = prev_tags[3];
+            prev_tags[3] = token.tag;
             prev_slices[0] = prev_slices[1];
-            prev_slices[1] = terminated[token.loc.start..token.loc.end];
+            prev_slices[1] = prev_slices[2];
+            prev_slices[2] = prev_slices[3];
+            prev_slices[3] = terminated[token.loc.start..token.loc.end];
+        }
+    }
+
+    /// The gate's second half: a module a test root imports but that root
+    /// never wraps in `refAllDecls`/`refAllDeclsRecursive` is reported.
+    /// Registration alone collects a module's tests and analyzes nothing —
+    /// Zig compiles an unreferenced `pub` declaration into nothing — so the
+    /// pairing src/root.zig documents (register AND a line in the "all
+    /// public declarations analyze" test) is what gets declarations
+    /// semantically checked, and dropping the second half used to be
+    /// invisible to every gate while `zig build test` stayed green. Only the
+    /// two test roots are constrained: that is where the documented
+    /// convention puts both halves, while an intermediate module's imports
+    /// are ordinary use. An import resolving to no walked module (`std`,
+    /// `build_options`, the `spine` package) needs no wrapper. One report
+    /// line per distinct import string per root, whatever the number of bare
+    /// occurrences.
+    fn declarationAnalysisGaps(
+        arena: std.mem.Allocator,
+        sources: []const Source,
+        sep: u8,
+        report: *std.ArrayListUnmanaged(u8),
+        count: *usize,
+    ) !void {
+        for (sources) |root_source| {
+            if (!try isTestRoot(arena, root_source.path, sep)) continue;
+            const imports = try collectImports(arena, root_source.text);
+            var wrapped_paths: std.StringArrayHashMapUnmanaged(void) = .empty;
+            var reported: std.StringArrayHashMapUnmanaged(void) = .empty;
+            for (imports) |imp| {
+                if (imp.wrapped) try wrapped_paths.put(arena, imp.path, {});
+            }
+            for (imports) |imp| {
+                if (wrapped_paths.contains(imp.path)) continue;
+                if (reported.contains(imp.path)) continue;
+                for (sources) |candidate| {
+                    if (std.mem.eql(u8, candidate.path, root_source.path)) continue;
+                    const wanted =
+                        try importBetween(arena, root_source.path, candidate.path, sep);
+                    if (!std.mem.eql(u8, wanted, imp.path)) continue;
+                    // A root importing the other root is not a registration
+                    // and asks for no wrapper.
+                    if (try isTestRoot(arena, candidate.path, sep)) break;
+                    try reported.put(arena, imp.path, {});
+                    count.* += 1;
+                    try report.print(
+                        arena,
+                        "  {s}: imported by {s} without forced declaration analysis\n",
+                        .{ candidate.path, root_source.path },
+                    );
+                    break;
+                }
+            }
         }
     }
 };
@@ -869,6 +980,134 @@ test "hasRealImport counts only a real @import call" {
         "_ = @import(\"other/y.zig\");\n",
         "sub/x.zig",
     ));
+}
+
+test "declaration-analysis gate reports a module its root never wraps in refAllDecls" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The half-done state every gate used to admit: the comptime block
+    // registers a.zig, so its tests collect and the reachability walk is
+    // satisfied, yet nothing references its declarations — Zig compiles an
+    // unreferenced `pub` declaration into nothing, checked by nothing,
+    // while `zig build test` stays green.
+    const sources = [_]Source{
+        .{
+            .path = "src\\root.zig",
+            .text = "comptime {\n    _ = @import(\"a.zig\");\n}\n",
+        },
+        .{ .path = "src\\main.zig", .text = "" },
+        .{ .path = "src\\a.zig", .text = "" },
+    };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    var count: usize = 0;
+    try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '\\', &report, &count);
+
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqualStrings(
+        \\  src\a.zig: imported by src\root.zig without forced declaration analysis
+        \\
+    , report.items);
+}
+
+test "declaration-analysis gate admits wrappers, duplicates and non-module imports" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // What must pass without a report: a bare registration doubled by a
+    // refAllDecls line (the documented pairing), either wrapper spelling
+    // across any whitespace, package and builtin imports ("build_options",
+    // "std") resolving to no walked module, an import whose target does not
+    // exist, and one distinct import string reported only once however often
+    // it appears bare. What must still be caught: a look-alike wrapper —
+    // `myRefAllDecls` analyzes nothing, so c.zig is the one reported module.
+    const sources = [_]Source{
+        .{
+            .path = "src/root.zig",
+            .text = "const o = @import(\"build_options\");\n" ++
+                "_ = @import(\"std\");\n" ++
+                "comptime {\n" ++
+                "    _ = @import(\"a.zig\");\n" ++
+                "    _ = @import(\"a.zig\");\n" ++
+                "    _ = @import(\"c.zig\");\n" ++
+                "    _ = @import(\"nowhere.zig\");\n" ++
+                "}\n" ++
+                "test {\n" ++
+                "    std.testing.refAllDecls(@import(\"a.zig\"));\n" ++
+                "    std.testing.refAllDeclsRecursive(\n" ++
+                "        @import(\"b.zig\"),\n" ++
+                "    );\n" ++
+                "    myRefAllDecls(@import(\"c.zig\"));\n" ++
+                "}\n",
+        },
+        .{ .path = "src/main.zig", .text = "" },
+        .{ .path = "src/a.zig", .text = "" },
+        .{ .path = "src/b.zig", .text = "" },
+        .{ .path = "src/c.zig", .text = "" },
+    };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    var count: usize = 0;
+    try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '/', &report, &count);
+
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqualStrings(
+        "  src/c.zig: imported by src/root.zig without forced declaration analysis\n",
+        report.items,
+    );
+}
+
+test "declaration-analysis gate constrains only the test roots' own imports" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The documented convention puts both halves at the roots, so an
+    // intermediate module's ordinary-use import (a.zig reaching b.zig) asks
+    // for no wrapper, and neither does one root importing the other.
+    const sources = [_]Source{
+        .{ .path = "src\\root.zig", .text = "" },
+        .{ .path = "src\\main.zig", .text = "_ = @import(\"root.zig\");\n" },
+        .{ .path = "src\\a.zig", .text = "_ = @import(\"b.zig\");\n" },
+        .{ .path = "src\\b.zig", .text = "" },
+    };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    var count: usize = 0;
+    try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '\\', &report, &count);
+
+    try std.testing.expectEqual(@as(usize, 0), count);
+    try std.testing.expectEqual(@as(usize, 0), report.items.len);
+}
+
+test "collectImports reads paths and wrapper position off the token stream" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Comments and string-literal mentions yield nothing; a computed path
+    // yields nothing; the recorded paths are quote-stripped literals, and
+    // `wrapped` tracks exactly which calls sit inside a wrapper's parens.
+    const refs = try TestRegistrationStep.collectImports(
+        arena,
+        "// _ = @import(\"commented.zig\");\n" ++
+            "const s = \"@import(\\\"string.zig\\\")\";\n" ++
+            "const m =\n\\\\ @import(\"multiline.zig\")\n;\n" ++
+            "const d = @import(dir ++ \"/x.zig\");\n" ++
+            "comptime {\n" ++
+            "    _ = @import(\"bare.zig\");\n" ++
+            "    std.testing.refAllDecls(@import(\"wrapped.zig\"));\n" ++
+            "}\n",
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), refs.len);
+    try std.testing.expectEqualStrings("bare.zig", refs[0].path);
+    try std.testing.expect(!refs[0].wrapped);
+    try std.testing.expectEqualStrings("wrapped.zig", refs[1].path);
+    try std.testing.expect(refs[1].wrapped);
 }
 
 /// Orders path strings lexicographically, so tests can compare the walker's

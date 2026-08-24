@@ -24,7 +24,8 @@ test "all public declarations analyze" {
     // CLI-only submodules go here as they are added: an import registers a
     // submodule for test collection, and the refAllDecls line is what also
     // forces its public declarations through the analyzer (src/root.zig
-    // spells out both halves):
+    // spells out both halves; the lint gate fails a root import that never
+    // gets its refAllDecls line):
     //     std.testing.refAllDecls(@import("cli/x.zig"));
     std.testing.refAllDecls(@This());
 }

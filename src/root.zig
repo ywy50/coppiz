@@ -27,7 +27,8 @@ comptime {
     // something references it, so a type error in one reaches a green build.
     // Each registered module therefore also gets a line in the analysis
     // test below, whose import both registers it and forces every public
-    // declaration through the semantic analyzer.
+    // declaration through the semantic analyzer. The lint gate enforces the
+    // pairing: a test-root import no refAllDecls call wraps fails the build.
 }
 
 test "all public declarations analyze" {

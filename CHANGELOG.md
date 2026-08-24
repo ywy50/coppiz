@@ -7,6 +7,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- Declaration-analysis enforcement in the test-registration lint gate: a
+  `src/` module a test root imports but that root never wraps in a
+  `std.testing.refAllDecls` (or `refAllDeclsRecursive`) call fails the build
+  with the module and root named. Registration alone collects a module's
+  tests; its unreferenced `pub` declarations are compiled into nothing and
+  checked by nothing, so registering without the refAllDecls line hid a
+  whole public surface from every semantic check behind a green `zig build
+  test` (the gap the "all public declarations analyze" tests closed by hand,
+  now gated). The gate constrains only the two test roots, where the
+  documented convention puts both halves, and ignores imports resolving to
+  no walked module (`std`, `build_options`, the `spine` package).
 - Two boundary pins in the lint-gate tests: the column-cap test now feeds its
   second over-limit line as the file's last line with no trailing '\n' (a
   file not ending in a newline must still have that final line checked),

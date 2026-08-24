@@ -33,7 +33,10 @@ one ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md),
   analyzes a declaration only once something references it, so each
   registered module gets a line in the root's "all public declarations
   analyze" test — an unreferenced `pub` declaration is otherwise compiled
-  into nothing and checked by nothing.
+  into nothing and checked by nothing. The lint gate enforces that pairing
+  too: a test-root import no `refAllDecls` call wraps fails the build, so
+  registration without declaration analysis can no longer hide behind a
+  green run.
 - Write the failing test first, beside the shipped function, and confirm it
   fails for the intended reason. Pure logic (codecs, fold, election, merge,
   expiry) stays I/O-free so it can be unit-tested and later driven by a
