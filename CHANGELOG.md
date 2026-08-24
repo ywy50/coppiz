@@ -56,6 +56,18 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Both lint-gate walks (the covering gates' `appendZigFilesUnder` and the
+  coverage gate's `appendProjectZigFiles`) now resolve an entry the
+  filesystem could not classify instead of skipping it. On filesystems whose
+  `getdents64`/`readdir` d_type answers nothing — XFS with `ftype=0`, some
+  NFS and FUSE mounts — every entry reaches the walker as `.unknown`
+  (verified on 0.16.0 in std.Io.Threaded's `dirReadLinux`), so a plain
+  `.zig` source file fell out of the formatter, the column cap, the test
+  binary and the coverage gate while `zig build test` stayed green. Such an
+  entry now takes the same `statFile` probe a symlink takes; one that only
+  the probe reveals as a directory is rejected loudly like a linked
+  directory, since the walker has already declined to descend into it.
+
 - The test-registration and declaration-analysis gates now match `@import`
   strings in their resolved form instead of byte-for-byte. Zig accepts
   spellings the exact comparison rejected or mismatched — a comptime

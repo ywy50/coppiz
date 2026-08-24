@@ -187,9 +187,10 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// `zig build` invoked from anywhere under the project must still read this
 /// project's files. Symlinks are resolved wherever they are met: a listed
 /// path is statted through (`statFile` follows links), and inside a walked
-/// directory each link is resolved by `appendZigFilesUnder`, which analyzes
-/// a linked .zig file like a real one and fails a gate rather than leave a
-/// linked directory's subtree silently unchecked.
+/// directory each link — and each entry the filesystem could not classify —
+/// is resolved by `appendZigFilesUnder`, which analyzes a linked .zig file
+/// like a real one and fails a gate rather than leave a linked directory's
+/// subtree silently unchecked.
 /// `gate_paths` is a parameter rather than a read of `checked_paths` so a
 /// test can drive the dispatch against a temporary tree, the same way `separator`
 /// is a parameter below; production hands in `&checked_paths` for the
@@ -233,7 +234,13 @@ fn checkedFiles(
 /// getdents64 d_type, never statted), so a linked .zig file is collected
 /// like a real one; a linked directory is never descended into (Walker only
 /// enters entries reported as directories), so one is rejected loudly
-/// instead of silently dropping its subtree from every gate.
+/// instead of silently dropping its subtree from every gate. The same probe
+/// resolves an entry the OS could not classify (`DT_UNKNOWN` reaches Zig as
+/// `.unknown`; verified on 0.16.0 in std.Io.Threaded's dirReadLinux, and
+/// real on XFS with ftype=0 and some NFS/FUSE mounts) — without it a plain
+/// source file there would be skipped by every gate while they stayed green.
+/// An entry that only the probe reveals as a directory is rejected like a
+/// linked one: the walker has already declined to descend into it.
 fn appendZigFilesUnder(
     root_dir: std.Io.Dir,
     io: std.Io,
@@ -250,12 +257,12 @@ fn appendZigFilesUnder(
         // stands at the build root: a link is resolved through its joined
         // path, the one both gates report and read back.
         var kind = entry.kind;
-        if (kind == .sym_link) {
+        if (kind == .sym_link or kind == .unknown) {
             const linked_path = try std.fs.path.join(arena, &.{ dir_path, entry.path });
             kind = (try root_dir.statFile(io, linked_path, .{})).kind;
         }
         if (kind == .directory) {
-            if (entry.kind == .sym_link) return error.LinkedDirectoryNotWalked;
+            if (entry.kind != .directory) return error.LinkedDirectoryNotWalked;
             continue;
         }
         if (kind != .file) continue;
@@ -1601,10 +1608,13 @@ fn excludedFromGates(basename: []const u8, depth: usize) bool {
 /// the covering gates — a linked .zig file is collected like a real one,
 /// and a linked directory is rejected loudly, since SelectiveWalker enters
 /// only entries reported as directories and the subtree behind a link would
-/// escape this gate silently.
+/// escape this gate silently. An entry reported `.unknown` (filesystems
+/// whose d_type answers nothing) takes the same probe and the same rules,
+/// so a source file there is covered rather than skipped.
 ///
 /// On failure `failed_path` names the walked entry that could not be
-/// handled — the link whose resolution failed or the linked directory — so
+/// handled — the link or unclassifiable entry whose resolution failed or
+/// the directory behind one — so
 /// the caller can report it instead of a bare error name (the same rule
 /// checkedFiles follows for its gate paths). A failure belonging to no
 /// single entry — allocation alone, here, or the walker failing to descend
@@ -1624,7 +1634,7 @@ fn appendProjectZigFiles(
     while (try walker.next(io)) |entry| {
         if (excludedFromGates(entry.basename, entry.depth())) continue;
         var kind = entry.kind;
-        if (kind == .sym_link) {
+        if (kind == .sym_link or kind == .unknown) {
             const linked_path = try std.fs.path.join(arena, &.{ ".", entry.path });
             const target_stat = build_root.statFile(io, linked_path, .{}) catch |err| {
                 // next() invalidates its slices on the following call, so
@@ -1636,7 +1646,7 @@ fn appendProjectZigFiles(
             kind = target_stat.kind;
         }
         if (kind == .directory) {
-            if (entry.kind == .sym_link) {
+            if (entry.kind != .directory) {
                 failed_path.* = try arena.dupe(u8, entry.path);
                 return error.LinkedDirectoryNotWalked;
             }
