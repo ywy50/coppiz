@@ -177,6 +177,10 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   "test registration" as the last gate after declaration-analysis enforcement
   joined it (the coverage-completeness entry under Added extends the same
   string).
+- The `test` step's description says what it runs again: the string behind
+  `zig build --help` still read "Run unit tests" after the lint gates were
+  wired into `zig build test`; it now reads "Run unit tests and the lint
+  gates", matching AGENTS.md's description of the step.
 - Two accuracy repairs from a documentation audit: docs/README's
   architecture summary now scopes full replication to the group — the
   unscoped "every member holds every ledger in full" contradicted both

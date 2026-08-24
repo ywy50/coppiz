@@ -122,7 +122,7 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
         .root_source_file = b.path("build.zig"),
         .target = b.resolveTargetQuery(.{}),
     }) });
-    const test_step = b.step("test", "Run unit tests");
+    const test_step = b.step("test", "Run unit tests and the lint gates");
     test_step.dependOn(&b.addRunArtifact(lib_tests).step);
     test_step.dependOn(&b.addRunArtifact(exe_tests).step);
     test_step.dependOn(&b.addRunArtifact(build_tests).step);
@@ -601,7 +601,7 @@ const TestRegistrationStep = struct {
         // path that lacks a text and a module is marked reached exactly when
         // it is enqueued — every index enters the queue once and is visited
         // once, so an importer reached twice cannot enqueue its target twice.
-        var reached = try arena.alloc(bool, sources.len);
+        const reached = try arena.alloc(bool, sources.len);
         @memset(reached, false);
         var queue: std.ArrayListUnmanaged(usize) = .empty;
         for (sources, 0..) |source, i| {
