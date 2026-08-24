@@ -87,6 +87,17 @@ test "meetsZigFloor accepts the floor itself and newer, rejects older" {
         !meetsZigFloor(try std.SemanticVersion.parse("0.16.0-dev.1+abc"), floor),
     );
 
+    // The mirror side: a release toolchain satisfies a prerelease floor of
+    // the same release — the boundary where the floor itself is a dev tag.
+    try std.testing.expect(
+        meetsZigFloor(try std.SemanticVersion.parse("0.16.0"), "0.16.0-dev.1"),
+    );
+
+    // Build metadata orders equal, so it neither admits nor rejects.
+    try std.testing.expect(
+        meetsZigFloor(try std.SemanticVersion.parse("0.16.0+rust"), floor),
+    );
+
     // A floor that does not parse cannot be satisfied by any toolchain —
     // broken configuration, not permission to proceed.
     try std.testing.expect(!meetsZigFloor(try std.SemanticVersion.parse("0.16.0"), "no-semver"));
@@ -684,6 +695,35 @@ test "test-registration gate reports exactly the modules no chain reaches from a
     try std.testing.expectEqual(@as(usize, 1), count);
     try std.testing.expectEqualStrings(
         "  src" ++ s ++ "sub" ++ s ++ "unregistered.zig: not reachable from a test root\n",
+        report.items,
+    );
+}
+
+test "classifyModules classifies through an import cycle and still reports the orphan" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Two reachable modules importing each other: real trees do this for
+    // shared types, and the walk must visit the pair once — reporting both
+    // as reached, terminating, and still naming the module outside the
+    // cycle. The exact report doubles as the termination proof: a walk
+    // that re-enqueued visited modules never reached these assertions.
+    const sources = [_]Source{
+        .{ .path = "src\\root.zig", .text = "_ = @import(\"a.zig\");\n" },
+        .{ .path = "src\\main.zig", .text = "" },
+        .{ .path = "src\\a.zig", .text = "_ = @import(\"b.zig\");\n" },
+        .{ .path = "src\\b.zig", .text = "_ = @import(\"a.zig\");\n" },
+        .{ .path = "src\\orphan.zig", .text = "" },
+    };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    var count: usize = 0;
+    try TestRegistrationStep.classifyModules(arena, &sources, '\\', &report, &count);
+
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqualStrings(
+        "  src\\orphan.zig: not reachable from a test root\n",
         report.items,
     );
 }

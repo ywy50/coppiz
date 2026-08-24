@@ -7,6 +7,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- Two coverage repairs in the lint-gate tests: the toolchain-floor test now
+  pins the complementary prerelease boundary (a release toolchain satisfies
+  a prerelease floor of the same release; build metadata orders equal), and
+  the test-registration gate's decision core is exercised on an import
+  cycle — two reachable modules importing each other are both classified as
+  reached, the walk terminates, and the orphan outside the cycle is still
+  the only module reported.
+
+### Fixed
+
 - "All public declarations analyze" tests in both test roots
   (`src/root.zig`, `src/main.zig`): Zig's analyzer is lazy, so an
   unreferenced `pub` declaration was compiled into nothing and checked by
