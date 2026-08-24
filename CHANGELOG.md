@@ -38,6 +38,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Two accuracy repairs from a documentation audit: docs/README's
+  architecture summary now scopes full replication to the group — the
+  unscoped "every member holds every ledger in full" contradicted both
+  [PRD 0001](docs/prds/0001-ledger-core.md)'s own constraint wording and
+  the ownership-and-routing overlay of
+  [PRD 0006](docs/prds/0006-scaling-to-groups-sharding-and-parity.md)
+  described later in the same section; and the registration guidance in
+  `src/root.zig` no longer says the lint gate fails *only* when no import
+  chain reaches a module — it also fails a test-root import no refAllDecls
+  call wraps, which that comment's next paragraph, `src/main.zig`'s, and
+  build.zig already state.
 - The 100-column cap's enumeration failure now names the checked path it
   stopped on (`cannot enumerate 'src': FileNotFound`, not a bare
   `FileNotFound`): `checkedFiles` can fail on any of its three entries, and

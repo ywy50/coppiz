@@ -19,7 +19,7 @@ comptime {
     // another module imports has its tests run too; registering here keeps
     // each module's public declarations covered by the "all public
     // declarations analyze" test below, which indirect reachability alone
-    // does not give. The lint gate fails only when no chain of real
+    // does not give. The lint gate fails when no chain of real
     // @imports reaches a module.
     //
     // Registration alone collects a module's tests but does not check its

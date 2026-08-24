@@ -43,8 +43,9 @@ spine is a replicated, append-only ledger written in Zig 0.16 with the
 standard library only ([ADR 0001](adrs/0001-zig-0-16-standard-library-only-for-the-core.md)),
 and everything a cluster needs ships inside the library
 ([ADR 0003](adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
-Every member holds every ledger in full. The design rests on one
-separation and one rule:
+Every member of a group holds the group's ledgers in full (past one
+group, ledgers are owned and routed — see *Scaling by recursion* below).
+The design rests on one separation and one rule:
 
 **The separation: entry versus slot.** An *entry* is what an author writes —
 immutable, author-signed, identified by `(author, author_seq)`. A *slot* is
