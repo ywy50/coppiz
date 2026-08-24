@@ -10,13 +10,13 @@ recurring recovery procedures in [docs/runbooks/](runbooks/),
 and what we learn from an external project in [docs/digests/](digests/).
 Cross-cutting unknowns are numbered in [open-questions.md](open-questions.md);
 terms are defined once in [glossary.md](glossary.md).
-The operator's original brief (2026-08-21), which every PRD cites as "the brief",
-is [qnd-notes.md](../qnd-notes.md) at the repository root. Clarified the same
-day, in conversation: spine is for anyone facing this class of problem, not
-for clanker specifically; it must be a library to "just use" the way SQLite,
-dqlite or rqlite are, with everything built in and no extra infrastructure;
-slim to start, expandable and naturally scalable. That clarification is
-[ADR 0003](adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md).
+The operator's original brief (2026-08-21), quoted as "the brief" wherever a
+record refers to it, is [qnd-notes.md](../qnd-notes.md) at the repository
+root. Clarified the same day, in conversation: spine is for anyone facing
+this class of problem, not for clanker specifically; it must be a library to
+"just use" the way SQLite, dqlite or rqlite are, with everything built in and
+no extra infrastructure; slim to start, expandable and naturally scalable.
+That clarification is [ADR 0003](adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md).
 
 The taxonomy is clanker's, deliberately: spine was founded by clanker's
 [RFC 0019](https://github.com/maci0/clanker/blob/main/docs/rfcs/0019-shared-state-store.md)

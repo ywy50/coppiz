@@ -47,6 +47,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Two accuracy repairs from this audit: docs/README no longer says every PRD
+  cites the brief — PRD
+  [0006](docs/prds/0006-scaling-to-groups-sharding-and-parity.md) postdates
+  the clarification and does not quote it — and the `lint` step's changelog
+  entry no longer pins its description at "four checks", a count the fifth
+  gate's arrival had already made stale.
 - The gate-coverage walk's failures now name the entry they stopped on
   (`cannot walk 'tools/vendor': LinkedDirectoryNotWalked`, not a bare
   `cannot walk the project tree: …`): a linked directory rejected by the
@@ -75,10 +81,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the placeholder ends when the library API and node CLI land; and PRD
   0003's Status reads "the design the RFC recommends", restoring a dropped
   article.
-- The `lint` step's description names all four checks again — formatting,
-  line length, test registration and declaration analysis: the string
-  behind `zig build --help` still read "test registration" as the last
-  gate after declaration-analysis enforcement joined it.
+- The `lint` step's description names its gates again instead of stopping at
+  "test registration": the string behind `zig build --help` still read
+  "test registration" as the last gate after declaration-analysis enforcement
+  joined it (the coverage-completeness entry under Added extends the same
+  string).
 - Two accuracy repairs from a documentation audit: docs/README's
   architecture summary now scopes full replication to the group — the
   unscoped "every member holds every ledger in full" contradicted both
