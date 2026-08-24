@@ -671,31 +671,37 @@ const TestRegistrationStep = struct {
     ) !void {
         for (sources) |root_source| {
             if (!try isTestRoot(arena, root_source.path, sep)) continue;
+
+            // Resolve every other module's import string from this root up
+            // front: the string depends on (root, candidate) alone, so
+            // deriving it per import would redo identical work. First
+            // candidate wins, and a candidate that is itself a test root is
+            // absent — one root importing the other is not a registration
+            // and asks for no wrapper.
+            var named: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+            for (sources) |candidate| {
+                if (std.mem.eql(u8, candidate.path, root_source.path)) continue;
+                if (try isTestRoot(arena, candidate.path, sep)) continue;
+                const wanted = try importBetween(arena, root_source.path, candidate.path, sep);
+                if (!named.contains(wanted)) try named.put(arena, wanted, candidate.path);
+            }
+
             const imports = try collectImports(arena, root_source.text);
             var wrapped_paths: std.StringArrayHashMapUnmanaged(void) = .empty;
-            var reported: std.StringArrayHashMapUnmanaged(void) = .empty;
             for (imports) |imp| {
                 if (imp.wrapped) try wrapped_paths.put(arena, imp.path, {});
             }
+            var reported: std.StringArrayHashMapUnmanaged(void) = .empty;
             for (imports) |imp| {
                 if (wrapped_paths.contains(imp.path)) continue;
                 if (reported.contains(imp.path)) continue;
-                for (sources) |candidate| {
-                    if (std.mem.eql(u8, candidate.path, root_source.path)) continue;
-                    const wanted =
-                        try importBetween(arena, root_source.path, candidate.path, sep);
-                    if (!std.mem.eql(u8, wanted, imp.path)) continue;
-                    // A root importing the other root is not a registration
-                    // and asks for no wrapper.
-                    if (try isTestRoot(arena, candidate.path, sep)) break;
-                    try reported.put(arena, imp.path, {});
-                    try report.print(
-                        arena,
-                        "  {s}: imported by {s} without forced declaration analysis\n",
-                        .{ candidate.path, root_source.path },
-                    );
-                    break;
-                }
+                const candidate_path = named.get(imp.path) orelse continue;
+                try reported.put(arena, imp.path, {});
+                try report.print(
+                    arena,
+                    "  {s}: imported by {s} without forced declaration analysis\n",
+                    .{ candidate_path, root_source.path },
+                );
             }
         }
     }
