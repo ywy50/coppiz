@@ -328,6 +328,29 @@ fn failEnumeration(
     });
 }
 
+/// Allocates one custom analysis step whose make() lives on `T`: the body
+/// all three steps' constructors share, differing only in type, display
+/// name and make function. One copy serves all three so their wiring cannot
+/// drift apart, the same rule failEnumeration and loadCheckedSources follow
+/// for their shared plumbing.
+fn newCustomStep(
+    b: *std.Build,
+    comptime T: type,
+    name: []const u8,
+    comptime make_fn: std.Build.Step.MakeFn,
+) *T {
+    const self = b.allocator.create(T) catch @panic("OOM");
+    self.* = .{
+        .step = std.Build.Step.init(.{
+            .id = .custom,
+            .name = name,
+            .owner = b,
+            .makeFn = make_fn,
+        }),
+    };
+    return self;
+}
+
 /// The shared front half of both analysis steps' make(): enumerates the
 /// files `gate_paths` covers and reads each whole, reporting both failure
 /// modes — a gate path that cannot be enumerated (failEnumeration), a
@@ -363,18 +386,14 @@ const LineLengthStep = struct {
     const columns_max = 100;
 
     fn create(b: *std.Build) *LineLengthStep {
-        const self = b.allocator.create(LineLengthStep) catch @panic("OOM");
-        self.* = .{
-            .step = std.Build.Step.init(.{
-                .id = .custom,
-                // Computed from columns_max so the displayed name cannot
-                // drift from the cap it describes.
-                .name = std.fmt.comptimePrint("{d}-column cap", .{columns_max}),
-                .owner = b,
-                .makeFn = make,
-            }),
-        };
-        return self;
+        return newCustomStep(
+            b,
+            LineLengthStep,
+            // Computed from columns_max so the displayed name cannot drift
+            // from the cap it describes.
+            std.fmt.comptimePrint("{d}-column cap", .{columns_max}),
+            make,
+        );
     }
 
     fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
@@ -516,16 +535,12 @@ const TestRegistrationStep = struct {
     step: std.Build.Step,
 
     fn create(b: *std.Build) *TestRegistrationStep {
-        const self = b.allocator.create(TestRegistrationStep) catch @panic("OOM");
-        self.* = .{
-            .step = std.Build.Step.init(.{
-                .id = .custom,
-                .name = "test registration and declaration analysis",
-                .owner = b,
-                .makeFn = make,
-            }),
-        };
-        return self;
+        return newCustomStep(
+            b,
+            TestRegistrationStep,
+            "test registration and declaration analysis",
+            make,
+        );
     }
 
     fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
@@ -1597,16 +1612,7 @@ const GateCoverageStep = struct {
     step: std.Build.Step,
 
     fn create(b: *std.Build) *GateCoverageStep {
-        const self = b.allocator.create(GateCoverageStep) catch @panic("OOM");
-        self.* = .{
-            .step = std.Build.Step.init(.{
-                .id = .custom,
-                .name = "gate coverage completeness",
-                .owner = b,
-                .makeFn = make,
-            }),
-        };
-        return self;
+        return newCustomStep(b, GateCoverageStep, "gate coverage completeness", make);
     }
 
     fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
