@@ -38,6 +38,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **fallback** | what `configured`/`combined` do with no live authority: `stall` or `seniority` | PRD 0003 |
 | **reconfigurable** | the setting that allows `leadership.*` to change by a live `settings` entry | PRD 0003, PRD 0004 |
 | **admission** | the receiver-side decision to let a dialing node join: `allowlist`, `prompt`, `open` | PRD 0003 |
+| **admitter** | the existing member (normally the leader) that writes a newcomer's `join` entry after admission; it decides when, so it may reorder concurrent joins ([OQ 58](open-questions.md)), never place anyone before an already-slotted member | PRD 0003, RFC 0002 |
 | **member state** | `joining` → `syncing` → `member` ↔ `unreachable` → `left` | PRD 0003 |
 | **syncing** | admitted and slotted but not yet at head; never leader-eligible | PRD 0003 |
 | **partition** | members that disagree on liveness; each side may elect its own leader | PRD 0003 |
