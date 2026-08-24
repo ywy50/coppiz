@@ -38,6 +38,10 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The `lint` step's description names all four checks again — formatting,
+  line length, test registration and declaration analysis: the string
+  behind `zig build --help` still read "test registration" as the last
+  gate after declaration-analysis enforcement joined it.
 - Two accuracy repairs from a documentation audit: docs/README's
   architecture summary now scopes full replication to the group — the
   unscoped "every member holds every ledger in full" contradicted both

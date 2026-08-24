@@ -140,7 +140,10 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
     // loses its tests silently, and a root import never wrapped in
     // refAllDecls loses every semantic check of the module's public
     // declarations).
-    const lint_step = b.step("lint", "Check formatting, line length and test registration");
+    const lint_step = b.step(
+        "lint",
+        "Check formatting, line length, test registration and declaration analysis",
+    );
 
     // The checked paths come from `checked_paths`, shared with the column
     // cap below, so the two file-covering gates can never drift apart.
