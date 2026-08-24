@@ -88,6 +88,16 @@ Ordering inside each section is by what blocks implementation first.
     leader that is partitioned from everyone keeps writing on its own
     branch — which is the AP behaviour, so this is OQ 2 again from the
     leader's side. *Blocks:* PRD 0003 phase 5.
+60. **`merge.settle_ms` default.** 30 s is a placeholder, on the record like
+    the failure-detector timings above (OQ 37):
+    [PRD 0002](prds/0002-ttl-and-staleness.md) bars a checkpoint for slots
+    newer than the last `merge` until it passes, so the value must exceed the
+    clock skew between the two leaders over the partition (or the surviving
+    side computes an expiry instant the losing side never meant) while not
+    stalling cleanup after every heal. Nothing bounds or derives it yet;
+    its siblings are `cluster.suspect_after_ms` and `checkpoint.every_ms`.
+    *Blocks:* PRD 0002 phases 4–5, PRD 0003 phase 3 (merge). *Answer from:*
+    measurement, against the same skew data OQ 9 wants.
 
 ## C. Membership
 

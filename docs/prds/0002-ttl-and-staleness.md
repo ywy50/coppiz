@@ -162,7 +162,8 @@ a partition names slots of *its* epoch. After a merge, the surviving chain
 contains both sides' checkpoints; each removes only what its own fold says it
 removes, so nothing is removed twice and nothing that the other side slotted
 later is touched. A checkpoint is never emitted for slots newer than the last
-`merge` until `merge.settle_ms` has passed — the conservative rule that
+`merge` until `merge.settle_ms` has passed (default and bounds [OQ
+60](../open-questions.md)) — the conservative rule that
 keeps a just-healed cluster from deleting the other side's fresh writes on a
 clock it did not stamp.
 

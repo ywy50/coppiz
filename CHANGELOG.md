@@ -17,6 +17,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- PRD 0003's `merge.settle_ms` default (30 s) is now registered as a
+  placeholder with its bounds stated both ways (OQ 60) and cited from the
+  settings table and PRD 0002's settle rule, matching every other timing
+  default in the PRDs, each of which already named its open question.
+
 - "All public declarations analyze" tests in both test roots
   (`src/root.zig`, `src/main.zig`): Zig's analyzer is lazy, so an
   unreferenced `pub` declaration was compiled into nothing and checked by

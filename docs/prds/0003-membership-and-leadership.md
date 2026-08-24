@@ -250,7 +250,7 @@ member under `seniority` with `reconfigurable = true`, add members, switch to
 | `cluster.heartbeat_ms` | u64 | 1000 | yes |
 | `cluster.suspect_after_ms` | u64 | 5000 | yes |
 | `membership.evict_after_ms` | u64 | 0 (never) | yes |
-| `merge.settle_ms` | u64 | 30000 | yes |
+| `merge.settle_ms` | u64 | 30000 ([OQ 60](../open-questions.md)) | yes |
 
 **Dependencies.** PRD 0001 (chain, control kinds, backfill), PRD 0004
 (settings entries, the frozen-key refusal), RFC 0002 (decision on the
