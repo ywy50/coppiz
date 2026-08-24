@@ -27,6 +27,18 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Symlink handling in the two file-covering lint gates: directory iteration
+  reports a link as `.sym_link` — the walker never resolves it (verified on
+  0.16.0: Linux's `getdents64` `d_type` reaches the filter untouched), so a
+  symlinked `.zig` file under a checked path was silently outside both gates
+  while they stayed green, and a symlinked directory's subtree went unwalked,
+  against build.zig's own claim that "a linked-in source tree is analyzed
+  like a real one". A walked entry that is a link is now resolved through
+  `statFile`, which follows it (a linked `.zig` file is collected like a
+  real one), and a linked directory fails both gates loudly instead of
+  half-checking — following it would need cycle protection no current tree
+  justifies.
+
 - PRD 0003's `merge.settle_ms` default (30 s) is now registered as a
   placeholder with its bounds stated both ways (OQ 60) and cited from the
   settings table and PRD 0002's settle rule, matching every other timing

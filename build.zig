@@ -173,8 +173,11 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// All paths go through `root_dir` — the build root — not the process cwd:
 /// the runner walks up to find build.zig without changing directory, so a
 /// `zig build` invoked from anywhere under the project must still read this
-/// project's files. Symlinks are followed (statFile's default), so a
-/// linked-in source tree is analyzed like a real one.
+/// project's files. Symlinks are resolved wherever they are met: a listed
+/// path is statted through (`statFile` follows links), and inside a walked
+/// directory each link is resolved by `appendZigFilesUnder`, which analyzes
+/// a linked .zig file like a real one and fails a gate rather than leave a
+/// linked directory's subtree silently unchecked.
 /// `gate_paths` is a parameter rather than a read of `checked_paths` so a
 /// test can drive the dispatch against a temporary tree, the same way `sep`
 /// is a parameter below; production hands in `&checked_paths`.
@@ -196,7 +199,13 @@ fn checkedFiles(
 }
 
 /// Appends every .zig file under the directory `dir_path`, as a path from
-/// the build root ("src/foo.zig"), in walker order.
+/// the build root ("src/foo.zig"), in walker order. A symlink entry is
+/// resolved through `root_dir.statFile`, which follows links (verified on
+/// 0.16.0: the walker itself reports a symlink as `.sym_link` — Linux's
+/// getdents64 d_type, never statted), so a linked .zig file is collected
+/// like a real one; a linked directory is never descended into (Walker only
+/// enters entries reported as directories), so one is rejected loudly
+/// instead of silently dropping its subtree from every gate.
 fn appendZigFilesUnder(
     root_dir: std.Io.Dir,
     io: std.Io,
@@ -209,7 +218,19 @@ fn appendZigFilesUnder(
     var walker = try dir.walk(arena);
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
+        // entry.path is relative to the walked directory, while root_dir
+        // stands at the build root: a link is resolved through its joined
+        // path, the one both gates report and read back.
+        var kind = entry.kind;
+        if (kind == .sym_link) {
+            const linked_path = try std.fs.path.join(arena, &.{ dir_path, entry.path });
+            kind = (try root_dir.statFile(io, linked_path, .{})).kind;
+        }
+        if (kind == .directory) {
+            if (entry.kind == .sym_link) return error.LinkedDirectoryNotWalked;
+            continue;
+        }
+        if (kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
         try paths.append(arena, try std.fs.path.join(arena, &.{ dir_path, entry.path }));
     }
@@ -908,4 +929,55 @@ test "appendZigFilesUnder collects every .zig file below the directory, and only
     try std.testing.expectEqualStrings("src/a/b/deep.zig", found.items[0]);
     try std.testing.expectEqualStrings("src/a/inner.zig", found.items[1]);
     try std.testing.expectEqualStrings("src/top.zig", found.items[2]);
+}
+
+test "appendZigFilesUnder analyzes a symlinked .zig file like a real one" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The silent-drop the raw walker kinds would admit: iteration reports a
+    // link as `.sym_link`, never the kind of its target, so filtering on
+    // `entry.kind == .file` alone leaves a linked source file unchecked by
+    // both gates while they stay green.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/real.zig", .data = "" });
+    try tmp.dir.symLink(io, "real.zig", "src/link.zig", .{});
+
+    var found: std.ArrayListUnmanaged([]const u8) = .empty;
+    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found);
+    std.mem.sort([]const u8, found.items, {}, lessThanStrings);
+
+    try std.testing.expectEqual(@as(usize, 2), found.items.len);
+    try std.testing.expectEqualStrings("src/link.zig", found.items[0]);
+    try std.testing.expectEqualStrings("src/real.zig", found.items[1]);
+}
+
+test "appendZigFilesUnder rejects a linked directory whose walk cannot descend" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The subtree behind the link never reaches either gate (the walker
+    // enters only entries reported as directories, and links are not), and
+    // following it here would need cycle protection the tree does not
+    // warrant — failing loudly is the documented alternative to silently
+    // checking nothing.
+    (try tmp.dir.createDirPathOpen(io, "src/sub", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/sub/deep.zig", .data = "" });
+    try tmp.dir.symLink(io, "sub", "src/vendor", .{});
+
+    var found: std.ArrayListUnmanaged([]const u8) = .empty;
+    try std.testing.expectError(
+        error.LinkedDirectoryNotWalked,
+        appendZigFilesUnder(tmp.dir, io, arena, "src", &found),
+    );
 }
