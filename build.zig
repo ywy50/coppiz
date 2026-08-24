@@ -182,7 +182,7 @@ fn checkedFiles(
     var paths: std.ArrayListUnmanaged([]const u8) = .empty;
     for (gate_paths) |path| {
         if ((try root_dir.statFile(io, path, .{})).kind == .directory) {
-            try appendZigFilesUnder(root_dir, io, path, arena, &paths);
+            try appendZigFilesUnder(root_dir, io, arena, path, &paths);
         } else {
             try paths.append(arena, path);
         }
@@ -195,8 +195,8 @@ fn checkedFiles(
 fn appendZigFilesUnder(
     root_dir: std.Io.Dir,
     io: std.Io,
-    dir_path: []const u8,
     arena: std.mem.Allocator,
+    dir_path: []const u8,
     paths: *std.ArrayListUnmanaged([]const u8),
 ) !void {
     var dir = try root_dir.openDir(io, dir_path, .{ .iterate = true });
@@ -404,7 +404,7 @@ const TestRegistrationStep = struct {
         // The roots sit in src/ themselves, so one walk finds them and no
         // file is read twice.
         var module_paths: std.ArrayListUnmanaged([]const u8) = .empty;
-        appendZigFilesUnder(b.build_root.handle, io, "src", arena, &module_paths) catch |err|
+        appendZigFilesUnder(b.build_root.handle, io, arena, "src", &module_paths) catch |err|
             return step.fail("cannot enumerate the src/ modules: {s}", .{@errorName(err)});
         var sources: std.ArrayListUnmanaged(Source) = .empty;
         for (module_paths.items) |path| {
@@ -524,23 +524,23 @@ const TestRegistrationStep = struct {
         return out.toOwnedSlice(arena);
     }
 
-    /// True when `source` actually calls `@import("target")`, decided on the
-    /// token stream rather than the text: comments are dropped entirely, and
-    /// string literals lex as inert data (a multiline string one token per
-    /// line, under its own tag), so a mention in either registers nothing,
-    /// while an import sharing a line with a trailing comment — or with an
-    /// earlier "//" inside a string — still counts. The builtin's spelling is
-    /// matched too, so
+    /// True when `text` actually calls `@import("wanted")`, decided on the
+    /// token stream rather than the raw bytes: comments are dropped entirely,
+    /// and string literals lex as inert data (a multiline string one token
+    /// per line, under its own tag), so a mention in either registers
+    /// nothing, while an import sharing a line with a trailing comment — or
+    /// with an earlier "//" inside a string — still counts. The builtin's
+    /// spelling is matched too, so
     /// @embedFile("sub/x.zig") is not registration. Only the
     /// two preceding tokens are remembered; that spans any whitespace but not
     /// a computed path (@import(a ++ b)), which fails loudly instead — the
     /// direction the gate accepts.
-    fn hasRealImport(arena: std.mem.Allocator, source: []const u8, target: []const u8) !bool {
-        const terminated = try arena.dupeZ(u8, source);
+    fn hasRealImport(arena: std.mem.Allocator, text: []const u8, wanted_import: []const u8) !bool {
+        const terminated = try arena.dupeZ(u8, text);
         var lexer = std.zig.Tokenizer.init(terminated);
         var prev_tags: [2]std.zig.Token.Tag = .{ .eof, .eof };
         var prev_slices: [2][]const u8 = .{ "", "" };
-        const wanted = try std.fmt.allocPrint(arena, "\"{s}\"", .{target});
+        const wanted = try std.fmt.allocPrint(arena, "\"{s}\"", .{wanted_import});
         while (true) {
             const token = lexer.next();
             if (token.tag == .eof) return false;
@@ -871,7 +871,7 @@ test "appendZigFilesUnder collects every .zig file below the directory, and only
     try tmp.dir.writeFile(io, .{ .sub_path = "src/a/b/deep.zig", .data = "" });
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
-    try appendZigFilesUnder(tmp.dir, io, "src", arena, &found);
+    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found);
     std.mem.sort([]const u8, found.items, {}, lessThanStrings);
 
     // Each result is dir_path joined with the walker-relative path, the
