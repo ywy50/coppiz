@@ -191,7 +191,7 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// a linked .zig file like a real one and fails a gate rather than leave a
 /// linked directory's subtree silently unchecked.
 /// `gate_paths` is a parameter rather than a read of `checked_paths` so a
-/// test can drive the dispatch against a temporary tree, the same way `sep`
+/// test can drive the dispatch against a temporary tree, the same way `separator`
 /// is a parameter below; production hands in `&checked_paths` for the
 /// file-covering gates and `&.{"src"}` for the registration walk.
 ///
@@ -515,12 +515,12 @@ const TestRegistrationStep = struct {
     /// real imports across `sources` and append one report line per module
     /// no chain reaches. O(modules²) tokenizer runs — src/
     /// holds a handful of files today and the point is to fail loudly while
-    /// the tree is small. `sep` is a parameter so any platform can be
+    /// the tree is small. `separator` is a parameter so any platform can be
     /// simulated in a test.
     fn classifyModules(
         arena: std.mem.Allocator,
         sources: []const Source,
-        sep: u8,
+        separator: u8,
         report: *std.ArrayListUnmanaged(u8),
     ) !void {
         // The walk works in indices into `sources`, so the queue can hold no
@@ -531,7 +531,7 @@ const TestRegistrationStep = struct {
         @memset(reached, false);
         var queue: std.ArrayListUnmanaged(usize) = .empty;
         for (sources, 0..) |source, i| {
-            if (!try isTestRoot(arena, source.path, sep)) continue;
+            if (!try isTestRoot(arena, source.path, separator)) continue;
             reached[i] = true;
             try queue.append(arena, i);
         }
@@ -540,7 +540,7 @@ const TestRegistrationStep = struct {
             const from = sources[queue.items[cursor]];
             for (sources, 0..) |candidate, i| {
                 if (reached[i]) continue;
-                const wanted = try importBetween(arena, from.path, candidate.path, sep);
+                const wanted = try importBetween(arena, from.path, candidate.path, separator);
                 if (try hasRealImport(arena, from.text, wanted)) {
                     reached[i] = true;
                     try queue.append(arena, i);
@@ -559,14 +559,14 @@ const TestRegistrationStep = struct {
     /// test_roots is written with '/', so a byte-equal comparison never matches there:
     /// the roots would be checked as ordinary modules and fail the gate (nothing
     /// @imports them as files). Normalize the walked path to '/' separators first —
-    /// the same translation importBetween applies after resolving. `sep` is a
+    /// the same translation importBetween applies after resolving. `separator` is a
     /// parameter so any platform can be simulated in a test.
     fn isTestRoot(
         arena: std.mem.Allocator,
         path: []const u8,
-        sep: u8,
+        separator: u8,
     ) !bool {
-        const normalized = try importSeparators(arena, path, sep);
+        const normalized = try importSeparators(arena, path, separator);
         for (test_roots) |root_path| {
             if (std.mem.eql(u8, normalized, root_path)) return true;
         }
@@ -579,16 +579,16 @@ const TestRegistrationStep = struct {
     /// from a root-level importer, "y.zig" beside the importer,
     /// "../other/y.zig" across branches (a submodule importing a sibling
     /// tree climbs out). Both paths come from one walk of "src/", so
-    /// neither carries a drive or leading separator; `sep` is a parameter
+    /// neither carries a drive or leading separator; `separator` is a parameter
     /// so any platform can be simulated in a test.
     fn importBetween(
         arena: std.mem.Allocator,
         from_path: []const u8,
         to_path: []const u8,
-        sep: u8,
+        separator: u8,
     ) ![]const u8 {
-        const from = try importSeparators(arena, from_path, sep);
-        const to = try importSeparators(arena, to_path, sep);
+        const from = try importSeparators(arena, from_path, separator);
+        const to = try importSeparators(arena, to_path, separator);
         // Longest common prefix ending on a '/' boundary: stopping at the
         // first differing byte instead would treat "src/aa/" and "src/ab/"
         // as one directory because they share "src/a".
@@ -598,14 +598,14 @@ const TestRegistrationStep = struct {
         while (scanned < limit and from[scanned] == to[scanned]) : (scanned += 1) {
             if (from[scanned] == '/') boundary = scanned + 1;
         }
-        var out: std.ArrayListUnmanaged(u8) = .empty;
+        var import_string: std.ArrayListUnmanaged(u8) = .empty;
         // Each directory left under the importer climbs one "..".
         for (from[boundary..]) |c| {
             if (c != '/') continue;
-            try out.appendSlice(arena, "../");
+            try import_string.appendSlice(arena, "../");
         }
-        try out.appendSlice(arena, to[boundary..]);
-        return normalizeImportPath(arena, try out.toOwnedSlice(arena));
+        try import_string.appendSlice(arena, to[boundary..]);
+        return normalizeImportPath(arena, try import_string.toOwnedSlice(arena));
     }
 
     /// Collapses an @import string to the one form Zig resolves it to: empty
@@ -639,11 +639,11 @@ const TestRegistrationStep = struct {
 
     /// Rewrites filesystem separators to import separators ('/'), the only
     /// form that can appear inside an @import string. A no-op where the
-    /// separator is already '/'; `sep` is a parameter so any platform can be
+    /// separator is already '/'; `separator` is a parameter so any platform can be
     /// simulated in a test.
-    fn importSeparators(arena: std.mem.Allocator, path: []const u8, sep: u8) ![]const u8 {
-        if (sep == '/') return path;
-        return std.mem.replaceOwned(u8, arena, path, &.{sep}, "/");
+    fn importSeparators(arena: std.mem.Allocator, path: []const u8, separator: u8) ![]const u8 {
+        if (separator == '/') return path;
+        return std.mem.replaceOwned(u8, arena, path, &.{separator}, "/");
     }
 
     /// True when `text` actually calls `@import("wanted")`, decided on the
@@ -733,11 +733,11 @@ const TestRegistrationStep = struct {
     fn declarationAnalysisGaps(
         arena: std.mem.Allocator,
         sources: []const Source,
-        sep: u8,
+        separator: u8,
         report: *std.ArrayListUnmanaged(u8),
     ) !void {
         for (sources) |root_source| {
-            if (!try isTestRoot(arena, root_source.path, sep)) continue;
+            if (!try isTestRoot(arena, root_source.path, separator)) continue;
 
             // Resolve every other module's import string from this root up
             // front: the string depends on (root, candidate) alone, so
@@ -748,8 +748,13 @@ const TestRegistrationStep = struct {
             var named: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
             for (sources) |candidate| {
                 if (std.mem.eql(u8, candidate.path, root_source.path)) continue;
-                if (try isTestRoot(arena, candidate.path, sep)) continue;
-                const wanted = try importBetween(arena, root_source.path, candidate.path, sep);
+                if (try isTestRoot(arena, candidate.path, separator)) continue;
+                const wanted = try importBetween(
+                    arena,
+                    root_source.path,
+                    candidate.path,
+                    separator,
+                );
                 if (!named.contains(wanted)) try named.put(arena, wanted, candidate.path);
             }
 
@@ -899,7 +904,7 @@ test "importBetween resolves the import string from the importing file's directo
         try TestRegistrationStep.importBetween(arena, "src/aa/f.zig", "src/ab/g.zig", '/'),
     );
 
-    // The Windows case, simulated on every host through the sep argument:
+    // The Windows case, simulated on every host through the separator argument:
     // walked paths are normalized before resolution.
     const win = try TestRegistrationStep.importSeparators(arena, "sub\\x\\y.zig", '\\');
     try std.testing.expectEqualStrings("sub/x/y.zig", win);
@@ -919,7 +924,7 @@ test "test roots match whatever separator the walker produced" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // The form appendZigFilesUnder hands make() on Windows, simulated through the sep
+    // The form appendZigFilesUnder hands make() on Windows, simulated through the separator
     // argument: joined with '\', so a byte-equal match against the '/'-written
     // test_roots would fail and both roots would be reported as unregistered modules.
     try std.testing.expect(try TestRegistrationStep.isTestRoot(arena, "src\\root.zig", '\\'));
@@ -1611,14 +1616,14 @@ fn appendProjectZigFiles(
         var kind = entry.kind;
         if (kind == .sym_link) {
             const linked_path = try std.fs.path.join(arena, &.{ ".", entry.path });
-            const st = build_root.statFile(io, linked_path, .{}) catch |err| {
+            const target_stat = build_root.statFile(io, linked_path, .{}) catch |err| {
                 // next() invalidates its slices on the following call, so
                 // the name is copied out before the walk (or its deinit)
                 // continues.
                 failed_path.* = try arena.dupe(u8, entry.path);
                 return err;
             };
-            kind = st.kind;
+            kind = target_stat.kind;
         }
         if (kind == .directory) {
             if (entry.kind == .sym_link) {
