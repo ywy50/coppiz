@@ -470,17 +470,20 @@ const TestRegistrationStep = struct {
         count: *usize,
     ) !void {
         // Both containers allocate from the caller's arena, which outlives
-        // this function, so they need no deinit of their own.
+        // this function, so they need no deinit of their own. A module is
+        // marked reachable exactly when it is enqueued, so every path enters
+        // the queue once and is visited once — an importer reached twice
+        // cannot enqueue its target twice.
         var reachable: std.StringArrayHashMapUnmanaged(void) = .empty;
         var queue: std.ArrayListUnmanaged([]const u8) = .empty;
         for (sources) |source| {
-            if (try isTestRoot(arena, source.path, sep)) try queue.append(arena, source.path);
+            if (!try isTestRoot(arena, source.path, sep)) continue;
+            try reachable.put(arena, source.path, {});
+            try queue.append(arena, source.path);
         }
         var cursor: usize = 0;
         while (cursor < queue.items.len) : (cursor += 1) {
             const path = queue.items[cursor];
-            if (reachable.contains(path)) continue;
-            try reachable.put(arena, path, {});
             const text = for (sources) |source| {
                 if (std.mem.eql(u8, source.path, path)) break source.text;
             } else unreachable;
@@ -488,8 +491,10 @@ const TestRegistrationStep = struct {
                 if (std.mem.eql(u8, candidate.path, path)) continue;
                 if (reachable.contains(candidate.path)) continue;
                 const wanted = try importBetween(arena, path, candidate.path, sep);
-                if (try hasRealImport(arena, text, wanted))
+                if (try hasRealImport(arena, text, wanted)) {
+                    try reachable.put(arena, candidate.path, {});
                     try queue.append(arena, candidate.path);
+                }
             }
         }
         for (sources) |source| {
