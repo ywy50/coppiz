@@ -93,9 +93,14 @@ test "meetsZigFloor accepts the floor itself and newer, rejects older" {
         meetsZigFloor(try std.SemanticVersion.parse("0.16.0"), "0.16.0-dev.1"),
     );
 
-    // Build metadata orders equal, so it neither admits nor rejects.
+    // Build metadata orders equal, so it neither admits nor rejects — on
+    // either side: a tagged toolchain satisfies a plain floor, and a plain
+    // toolchain satisfies a tagged floor.
     try std.testing.expect(
         meetsZigFloor(try std.SemanticVersion.parse("0.16.0+rust"), floor),
+    );
+    try std.testing.expect(
+        meetsZigFloor(try std.SemanticVersion.parse("0.16.0"), "0.16.0+rust"),
     );
 
     // A floor that does not parse cannot be satisfied by any toolchain —
@@ -299,10 +304,13 @@ test "column cap flags the first line past the limit, with path and line number"
     const over = "a" ** (LineLengthStep.max_columns + 1);
     // Two violations: the first must still be the one named above, and the
     // aggregate — count and every report entry — must survive past it, so a
-    // checker that stops at the first offense cannot pass.
+    // checker that stops at the first offense cannot pass. The second
+    // violation is also the file's last line with no trailing '\n': a file
+    // not ending in a newline must still have that final line checked, the
+    // boundary where a line-walking refactor most easily drops the tail.
     try LineLengthStep.checkBytes(
         arena,
-        "ok\n" ++ over ++ "\nalso ok\n" ++ over ++ "\nlast ok\n",
+        "ok\n" ++ over ++ "\nalso ok\n" ++ over,
         "f.zig",
         &report,
         &count,

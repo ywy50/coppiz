@@ -7,6 +7,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- Two boundary pins in the lint-gate tests: the column-cap test now feeds its
+  second over-limit line as the file's last line with no trailing '\n' (a
+  file not ending in a newline must still have that final line checked),
+  and the toolchain-floor test pins the metadata mirror on the floor side —
+  a plain toolchain satisfies a floor carrying build metadata.
 - Two more lint-gate test repairs: the import-cycle classification test now
   also pins that modules reachable only through an unreachable importer are
   reported beside it (the walk seeds from test roots only), and
