@@ -399,11 +399,13 @@ Ordering inside each section is by what blocks implementation first.
     default, and does `write.ack` mean "owner slotted" or "local forwarded"?
     Relates to OQ 3 and OQ 31. *Blocks:* PRD 0006 phase 2.
 52. **What group identity must the core headers carry now?** Drafted:
-    segment headers carry ledger id + sequencing group id; entry and slot
-    headers carry neither (the slot's `leader` member id implies the group
-    via that group's chain). Is the implication enough for a verifier in
-    another group, or should the slot carry the group id explicitly (16 more
-    bytes per slot, forever)? *Blocks:* PRD 0001 phase 1 — the format freeze.
+    segment headers carry ledger id + sequencing group id; entry headers
+    carry the ledger id but no group id ([PRD
+    0001](prds/0001-ledger-core.md)), and slot headers carry neither (the
+    slot's `leader` member id implies the group via that group's chain).
+    Is the implication enough for a verifier in another group, or should
+    the slot carry the group id explicitly (16 more bytes per slot,
+    forever)? *Blocks:* PRD 0001 phase 1 — the format freeze.
 53. **Membership and discovery at 10⁵.** A new instance must find *a*
     member of *some* group: seed lists in local config (drafted), a
     directory ledger in the federation, or DNS. Which, and how does an
