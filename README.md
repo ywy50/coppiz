@@ -95,7 +95,7 @@ clanker is the first host; it is not the customer.
 | [docs/glossary.md](docs/glossary.md) | every term, defined once |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | what ships in what order |
 | [CHANGELOG.md](CHANGELOG.md), [RELEASES.md](RELEASES.md) | consumer-visible changes; version and release policy |
-| `src/` | `root.zig` is the library, `main.zig` the node; placeholders today |
+| `src/` | `root.zig` is the library, `main.zig` the node; only the package version exists so far |
 
 ## Origin
 

@@ -65,6 +65,10 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The README's `src/` row no longer calls both source files placeholders:
+  the same audit that corrected `src/root.zig`'s module doc and PRD 0001's
+  Status missed this row, and `root.zig` carries the implemented,
+  test-pinned package version, so "placeholders today" understated it.
 - Two accuracy repairs from a documentation audit: `src/root.zig`'s module
   doc no longer says nothing is implemented in the file — the package version
   declaration it sits above is implemented, compile-checked and pinned by a
