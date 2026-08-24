@@ -192,9 +192,11 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// file-covering gates and `&.{"src"}` for the registration walk.
 ///
 /// On failure `failed_path` names the gate path that could not be stat'd or
-/// walked, so the calling step can report it — a bare error name would leave
-/// the operator to re-derive the checked-path list by hand (the same rule
-/// the read failures below follow). Every error return sets it first.
+/// walked, so the caller can report it — a bare error name would leave the
+/// operator to re-derive the checked-path list by hand (the same rule the
+/// read failures in loadCheckedSources follow). An error belonging to no
+/// single gate path — allocation alone, here — leaves it unset, and the
+/// caller falls back to a generic subject.
 fn checkedFiles(
     root_dir: std.Io.Dir,
     io: std.Io,
@@ -258,6 +260,43 @@ fn appendZigFilesUnder(
     }
 }
 
+/// One file a gate covers: its path as checkedFiles hands it out
+/// (build-root-relative, platform separators) and its full text.
+const Source = struct {
+    path: []const u8,
+    text: []const u8,
+};
+
+/// The shared front half of both analysis steps' make(): enumerates the
+/// files `gate_paths` covers and reads each whole, reporting both failure
+/// modes — a gate path that cannot be enumerated, a covered file that
+/// cannot be read — through step.fail with the offending path named. One
+/// copy serves both steps so the report wording and the fallback for an
+/// unnamed path cannot drift apart.
+fn loadCheckedSources(
+    step: *std.Build.Step,
+    root_dir: std.Io.Dir,
+    io: std.Io,
+    arena: std.mem.Allocator,
+    gate_paths: []const []const u8,
+) ![]Source {
+    var failed_path: ?[]const u8 = null;
+    const paths = checkedFiles(root_dir, io, arena, gate_paths, &failed_path) catch |err|
+        return step.fail("cannot enumerate '{s}': {s}", .{
+            failed_path orelse "the checked paths",
+            @errorName(err),
+        });
+    const sources = try arena.alloc(Source, paths.len);
+    for (paths, 0..) |path, i| {
+        sources[i] = .{
+            .path = path,
+            .text = root_dir.readFileAlloc(io, path, arena, .unlimited) catch |err|
+                return step.fail("cannot read '{s}': {s}", .{ path, @errorName(err) }),
+        };
+    }
+    return sources;
+}
+
 /// Fails the build when any checked source line exceeds `max_columns`.
 /// Columns are Unicode code points; invalid UTF-8 falls back to byte count.
 const LineLengthStep = struct {
@@ -289,18 +328,14 @@ const LineLengthStep = struct {
         const arena = arena_state.allocator();
 
         var report: std.ArrayListUnmanaged(u8) = .empty;
-        const root_dir = b.build_root.handle;
-        var failed_path: ?[]const u8 = null;
-        const files = checkedFiles(root_dir, io, arena, &checked_paths, &failed_path) catch |err|
-            return step.fail("cannot enumerate '{s}': {s}", .{
-                failed_path orelse "the checked paths",
-                @errorName(err),
-            });
-        for (files) |path| {
-            const bytes = root_dir.readFileAlloc(io, path, arena, .unlimited) catch |err|
-                return step.fail("cannot read '{s}': {s}", .{ path, @errorName(err) });
-            try checkBytes(arena, bytes, path, &report);
-        }
+        const sources = try loadCheckedSources(
+            step,
+            b.build_root.handle,
+            io,
+            arena,
+            &checked_paths,
+        );
+        for (sources) |source| try checkBytes(arena, source.text, source.path, &report);
         // One report line per violation (pinned by the exact-string tests
         // below), so the tally is the newline count — no second output to
         // keep in lockstep with the appends.
@@ -398,13 +433,6 @@ test "column cap falls back to byte count on invalid UTF-8" {
 /// reachability walk, and the files exempt from requiring reachability.
 const test_roots = [_][]const u8{ "src/root.zig", "src/main.zig" };
 
-/// One walked src/ file: its path as appendZigFilesUnder hands it out
-/// (build-root-relative, platform separators) and its source text.
-const Source = struct {
-    path: []const u8,
-    text: []const u8,
-};
-
 /// Fails the build when no chain of real @imports reaches a src/ module
 /// from a test-module root (src/root.zig or src/main.zig): only such a
 /// chain makes Zig 0.16 collect the module's `test` blocks, so an
@@ -450,25 +478,12 @@ const TestRegistrationStep = struct {
         // Every walked module's text: the reachability walk reads imports
         // out of intermediate modules too, not just out of the two roots.
         // The roots sit in src/ themselves, so one walk finds them and no
-        // file is read twice. Enumeration goes through checkedFiles, the
-        // column cap's dispatcher, so both steps share the walk and its
-        // failed-path reporting instead of carrying parallel scaffolding.
-        const root_dir = b.build_root.handle;
-        var failed_path: ?[]const u8 = null;
-        const module_paths = checkedFiles(root_dir, io, arena, &.{"src"}, &failed_path) catch |err|
-            return step.fail("cannot enumerate '{s}': {s}", .{
-                failed_path orelse "the checked paths",
-                @errorName(err),
-            });
-        var sources: std.ArrayListUnmanaged(Source) = .empty;
-        for (module_paths) |path| {
-            const bytes = root_dir.readFileAlloc(io, path, arena, .unlimited) catch |err|
-                return step.fail("cannot read '{s}': {s}", .{ path, @errorName(err) });
-            try sources.append(arena, .{ .path = path, .text = bytes });
-        }
-        try classifyModules(arena, sources.items, std.fs.path.sep, &report);
+        // file is read twice. Enumeration goes through loadCheckedSources,
+        // so both steps share the dispatcher and its failure reporting.
+        const sources = try loadCheckedSources(step, b.build_root.handle, io, arena, &.{"src"});
+        try classifyModules(arena, sources, std.fs.path.sep, &report);
         var analysis_report: std.ArrayListUnmanaged(u8) = .empty;
-        try declarationAnalysisGaps(arena, sources.items, std.fs.path.sep, &analysis_report);
+        try declarationAnalysisGaps(arena, sources, std.fs.path.sep, &analysis_report);
         // Both cores append one report line per finding (pinned by the
         // exact-string tests below), so each tally is a newline count — no
         // second output to keep in lockstep with the appends.
