@@ -65,6 +65,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Three accuracy repairs from a documentation audit: RELEASES.md and this
+  changelog describe the version mechanism that actually landed — the
+  library parses the raw `build.zig.zon` value and fails compilation on
+  non-Semantic-Versioning input, where both still said the build parsed (or
+  pinned) the value, a path commit "Parse the package version in the
+  library" removed; and the glossary's `checkpoint` definition no longer
+  says stale entries are always removed — they join the removal set only
+  under `stale.cleanup = delete`, as PRD 0002 states.
 - PRD 0001's Storage section now names what keys a ledger's on-disk
   subdirectory: the ledger id in lowercase hex, not its name. The name was
   already a mutable setting while the id is the identity, so a name-keyed
@@ -456,12 +464,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   `build.zig`, where each previously wrote its own: adding a source file or
   directory meant editing both lists, and missing one left the new file
   outside a gate silently. Coverage over the current tree is unchanged.
-- The library's version test now pins `spine.version` to the exact version
-  declared in `build.zig.zon` — passed through to the module as a
-  `version_text` build option alongside the parsed value — where it only
-  checked that the major number was 0, so a build that stopped sourcing the
-  version from the zon file (its single source of truth, per RELEASES.md)
-  would have gone unnoticed.
+- The package version is parsed by the library, not the build script:
+  `build.zig` hands over only the raw `build.zig.zon` declaration and
+  `src/root.zig` parses it into `spine.version`, so the single-source-of-truth
+  value is never carried twice in lockstep, and a value that is not valid
+  Semantic Versioning fails compiling `src/root.zig` instead of surfacing only
+  when the build script runs.
 - Test-registration lint gate no longer counts `@import("...")` mentions
   inside comments: roots are matched with line comments stripped, so a
   commented-out reference cannot mask a module whose tests never run. The

@@ -52,7 +52,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **stale** | hidden from default reads but physically present; by author mark or by TTL under `mark_stale` | PRD 0002 |
 | **expired** | past its expiry instant under `ttl.action = delete`; hidden, awaiting a checkpoint | PRD 0002 |
 | **removed** | payload (and under `retain = none`, header) dropped by a checkpoint; the slot stays | PRD 0002 |
-| **checkpoint** | the leader's control entry that makes removal deterministic: "drop everything expired/stale through slot X" | PRD 0002 |
+| **checkpoint** | the leader's control entry that makes removal deterministic: "drop everything expired/stale through slot X"; stale entries join the removal set only under `stale.cleanup = delete` | PRD 0002 |
 | **retain** | what a removal keeps: `header` or `none` | PRD 0002 |
 | **grace** | read-side skew tolerance in ms; affects visibility on one member, never bytes | PRD 0002 |
 | **archival checkpoint** | a leader-signed root over a chain prefix that lets members drop the slots behind it while keeping verifiability from the root; out of v1, the bound on slot growth | OQ 24 |

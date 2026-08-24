@@ -5,12 +5,12 @@ in `build.zig.zon`; that value alone does not make a release. A version is
 published only when an immutable `vMAJOR.MINOR.PATCH` Git tag and a matching
 dated `CHANGELOG.md` section exist for the same commit.
 
-`build.zig.zon` is the single source of truth for the program version. The
-build reads it (`build.zig`) and exposes it to the library as `spine.version`;
-the node binary imports the library and prints that value in its startup
-banner (the placeholder in `src/main.zig`; flag parsing, including a real
-`--version`, lands with the CLI). The build rejects values that are not valid
-Semantic Versioning.
+`build.zig.zon` is the single source of truth for the program version.
+`build.zig` reads it and hands the raw value to the library, which parses it
+into `spine.version` (`src/root.zig`) and fails the build for values that are
+not valid Semantic Versioning; the node binary imports the library and prints
+that value in its startup banner (the placeholder in `src/main.zig`; flag
+parsing, including a real `--version`, lands with the CLI).
 
 ## Compatibility contract
 
