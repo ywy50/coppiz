@@ -1190,32 +1190,42 @@ test "declaration-analysis gate reports a repeated bare import once per root" {
 
     // The report shape the tally counts: one line per distinct import
     // string per root, whatever the number of bare occurrences — so two
-    // bare mentions of a.zig yield one line, and a second root importing
-    // the same module bare adds its own line naming that root. A regression
-    // that drops either dedup doubles the newline count and inflates the
-    // gate's tally while every module it names stays the same.
+    // bare mentions of a.zig yield one line. A regression that drops that
+    // dedup doubles the newline count and inflates the gate's tally while
+    // every module it names stays the same.
+    //
+    // Wrapping is scoped per root as well: main's refAllDecls of b.zig
+    // excuses only main's own imports, so root's bare b.zig still reports —
+    // each test root compiles into its own test binary (lib_tests vs
+    // exe_tests), and a wrapper in one analyzes nothing for the other.
+    // main comes first in the walk's order, the direction where a merged
+    // wrapper set across roots would silently drop root's line.
     const sources = [_]Source{
+        .{
+            .path = "src\\main.zig",
+            .text = "test {\n" ++
+                "    std.testing.refAllDecls(@import(\"b.zig\"));\n" ++
+                "}\n" ++
+                "_ = @import(\"c.zig\");\n",
+        },
         .{
             .path = "src\\root.zig",
             .text = "_ = @import(\"a.zig\");\n" ++
                 "_ = @import(\"a.zig\");\n" ++
                 "_ = @import(\"b.zig\");\n",
         },
-        .{
-            .path = "src\\main.zig",
-            .text = "_ = @import(\"b.zig\");\n",
-        },
         .{ .path = "src\\a.zig", .text = "" },
         .{ .path = "src\\b.zig", .text = "" },
+        .{ .path = "src\\c.zig", .text = "" },
     };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
     try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '\\', &report);
 
     try std.testing.expectEqualStrings(
+        \\  src\c.zig: imported by src\main.zig without forced declaration analysis
         \\  src\a.zig: imported by src\root.zig without forced declaration analysis
         \\  src\b.zig: imported by src\root.zig without forced declaration analysis
-        \\  src\b.zig: imported by src\main.zig without forced declaration analysis
         \\
     , report.items);
 }

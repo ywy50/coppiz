@@ -44,6 +44,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   cycle — two reachable modules importing each other are both classified as
   reached, the walk terminates, and the orphan outside the cycle is still
   the only module reported.
+- The declaration-analysis test with two active roots now pins that wrapping
+  is scoped per root: a `refAllDecls` in one test root excuses only that
+  root's own imports, so the other root's bare import of the same module is
+  still reported — each test root compiles into its own test binary, and a
+  wrapper in one analyzes nothing for the other. The fixture orders the
+  wrapping root first (main.zig before root.zig, the walk's real order),
+  the direction where merging the wrapper sets across roots would silently
+  drop a report line; verified by temporarily hoisting the set out of the
+  per-root loop and watching the new pin fail.
 
 ### Fixed
 
