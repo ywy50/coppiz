@@ -1008,6 +1008,40 @@ test "test-registration gate reports exactly the modules no chain reaches from a
     );
 }
 
+test "test-registration gate counts an import wrapped in refAllDecls as registering" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The pairing src/root.zig documents makes the refAllDecls line itself
+    // the registration: its import "both registers it and forces every
+    // public declaration through the semantic analyzer". A matcher that
+    // counted only unwrapped calls would report every module registered
+    // solely by its analysis-test line — the shape this tree tells
+    // contributors to write — so the walk must read wrapped imports off the
+    // same token stream. helper.zig is reached only through the wrapper and
+    // must stay silent; ghost.zig keeps the assertion from passing vacuously.
+    const sources = [_]Source{
+        .{
+            .path = "src\\root.zig",
+            .text = "test {\n" ++
+                "    std.testing.refAllDecls(@import(\"helper.zig\"));\n" ++
+                "}\n",
+        },
+        .{ .path = "src\\main.zig", .text = "" },
+        .{ .path = "src\\helper.zig", .text = "" },
+        .{ .path = "src\\ghost.zig", .text = "" },
+    };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    try TestRegistrationStep.classifyModules(arena, &sources, '\\', &report);
+
+    try std.testing.expectEqualStrings(
+        "  src\\ghost.zig: not reachable from a test root\n",
+        report.items,
+    );
+}
+
 test "classifyModules classifies through an import cycle and reports modules below an orphan" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
