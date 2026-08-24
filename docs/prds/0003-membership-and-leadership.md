@@ -286,7 +286,7 @@ join-order mechanism), clanker PRD 0011 (admission modes, reused as design).
 | Two members both believe they lead | by construction they are partitioned; each slots its side; merge on heal |
 | `configured`, no authority live, `fallback = stall` | `append` returns `no_leader`; reads, follows and backfill continue |
 | A `join` arrives for a key already a member | refused `already_member`; a key that `left` may rejoin with new seniority |
-| A member presents a chain whose `join` slots differ from ours | its chain fails `prev_slot_hash` at the first divergence; the later-joining branch is archived by merge, never accepted as truth |
+| A member presents a chain whose `join` slots differ from ours | its chain fails `prev_slot_hash` at the first divergence; the branch the mode's ranking makes the loser (*Partition and merge*, above) is archived, never accepted as truth |
 | `settings` touches `leadership.*` while `reconfigurable = false` | refused by every member, `leadership frozen` |
 | Newcomer cannot reach any member to backfill | stays `syncing`; never eligible; retries with backoff |
 | Authority list names an address no member advertised | that entry matches nobody; `spine doctor` warns; election skips it |

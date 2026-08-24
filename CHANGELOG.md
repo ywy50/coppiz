@@ -56,6 +56,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Two accuracy repairs from a documentation audit: `src/root.zig`'s
+  registration guidance no longer says registering a module keeps its public
+  declarations covered by the "all public declarations analyze" test — that
+  is the refAllDecls line's doing, as the comment's own next paragraph and
+  the lint gate already state; and PRD 0003's failure-mode row no longer
+  hardcodes seniority semantics ("the later-joining branch is archived") for
+  which branch a merge archives, when the mode's ranking decides (*Partition
+  and merge*) — under `configured`, an earlier-joining branch can lose.
 - Both lint-gate walks (the covering gates' `appendZigFilesUnder` and the
   coverage gate's `appendProjectZigFiles`) now resolve an entry the
   filesystem could not classify instead of skipping it. On filesystems whose

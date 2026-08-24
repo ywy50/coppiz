@@ -16,11 +16,11 @@ comptime {
     // Every src/ module should be referenced here (or from src/main.zig
     // for CLI-only code). Tests collect from any module transitively
     // reachable from a test root through analyzed imports, so a module only
-    // another module imports has its tests run too; registering here keeps
-    // each module's public declarations covered by the "all public
-    // declarations analyze" test below, which indirect reachability alone
-    // does not give. The lint gate fails when no chain of real
-    // @imports reaches a module.
+    // another module imports has its tests run too. Registering here makes
+    // this test root the module's direct importer, which is what obliges a
+    // refAllDecls line for it in the analysis test below (next paragraph) —
+    // an obligation indirect reachability never creates. The lint gate
+    // fails when no chain of real @imports reaches a module.
     //
     // Registration alone collects a module's tests but does not check its
     // unreferenced declarations: Zig analyzes a `pub` declaration only once
