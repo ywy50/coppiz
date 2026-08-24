@@ -1,9 +1,10 @@
 //! spine — a replicated, append-only ledger library.
 //!
-//! Nothing here is implemented yet. The design lives in docs/: start at
-//! docs/README.md, then docs/prds/ for what each part is meant to be and
-//! docs/open-questions.md for what is still undecided. This file exists so
-//! `zig build test` has a root and so the module name `spine` is claimed.
+//! Only the package version lives here so far; the ledger design itself is
+//! not started. It lives in docs/: start at docs/README.md, then docs/prds/
+//! for what each part is meant to be and docs/open-questions.md for what is
+//! still undecided. This file is also the library's test root: it gives
+//! `zig build test` its library half and claims the module name `spine`.
 
 const std = @import("std");
 const build_options = @import("build_options");

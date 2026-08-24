@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft — 2026-08-21. Nothing is implemented; `src/root.zig` is a placeholder.
+Draft — 2026-08-21. None of this design is implemented; `src/root.zig`
+carries only the package version so far.
 This PRD is the data model every other PRD builds on: [0002](0002-ttl-and-staleness.md)
 (TTL and staleness), [0003](0003-membership-and-leadership.md) (membership,
 leadership), [0004](0004-settings.md) (settings), [0005](0005-embedding-the-library-as-the-product.md)

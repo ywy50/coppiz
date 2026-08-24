@@ -65,6 +65,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Two accuracy repairs from a documentation audit: `src/root.zig`'s module
+  doc no longer says nothing is implemented in the file — the package version
+  declaration it sits above is implemented, compile-checked and pinned by a
+  test — and PRD 0001's Status no longer calls `src/root.zig` a placeholder
+  for the same reason.
 - RFC 0001's *Current state* no longer presents clanker's shared state as
   JSON/JSONL files in the present tense: its own evidence record (research
   0001) and [PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)
