@@ -511,7 +511,7 @@ const test_roots = [_][]const u8{ "src/root.zig", "src/main.zig" };
 /// on 0.16.0: with root.zig importing a.zig importing b.zig, b's tests run;
 /// an import in a declaration that is never analyzed (an unused
 /// container-level const) collects nothing — so the gate walks real
-/// @import calls across every walked module (hasRealImport), resolving each
+/// @import calls across every walked module (collectImports), resolving each
 /// candidate's import string relative to the importing file's directory
 /// (importBetween), not just against the two roots. Only a literal
 /// `@import("path")` call counts: a mention inside a comment or any string
@@ -710,22 +710,9 @@ const TestRegistrationStep = struct {
         return std.mem.replaceOwned(u8, arena, path, &.{separator}, "/");
     }
 
-    /// True when `text` actually calls `@import("wanted")`, decided on the
-    /// token stream rather than the raw bytes: comments are dropped entirely,
-    /// and string literals lex as inert data (a multiline string one token
-    /// per line, under its own tag), so a mention in either registers
-    /// nothing, while an import sharing a line with a trailing comment — or
-    /// with an earlier "//" inside a string — still counts. A computed path
-    /// (@import(a ++ b)) matches nothing and fails loudly instead — the
-    /// direction the gate accepts.
-    fn hasRealImport(arena: std.mem.Allocator, text: []const u8, wanted_import: []const u8) !bool {
-        return importsPath(try collectImports(arena, text), wanted_import);
-    }
-
     /// True when `imports` — one module's collectImports result — names
-    /// `wanted_import`. The comparison classifyModules applies per candidate
-    /// against the importer's once-collected imports; hasRealImport is its
-    /// whole-text convenience form.
+    /// `wanted_import`: the comparison classifyModules applies per candidate
+    /// against the importer's once-collected imports.
     fn importsPath(imports: []const ImportRef, wanted_import: []const u8) bool {
         for (imports) |imp| {
             if (std.mem.eql(u8, imp.path, wanted_import)) return true;
@@ -740,9 +727,9 @@ const TestRegistrationStep = struct {
     /// list — the form that forces the target's public declarations through
     /// the analyzer, not merely collects its tests. Comments and every kind
     /// of string literal yield nothing, and only a literal path argument
-    /// counts (the rules hasRealImport states, shared here so the two
-    /// questions — does this file import X, and is the import wrapped — can
-    /// never drift apart). Four tokens of look-behind span any whitespace:
+    /// counts — one collector serving both questions, does this file import X
+    /// and is the import wrapped, so they cannot drift apart. Four tokens of
+    /// look-behind span any whitespace:
     /// `refAllDecls` `(` `@import` `(` `path`. The identifier spelling is
     /// matched exactly, so `myRefAllDecls(@import("x"))` is not a wrapper.
     const ImportRef = struct {
@@ -1142,24 +1129,33 @@ test "classifyModules classifies through an import cycle and reports modules bel
     , report.items);
 }
 
-test "hasRealImport counts only a real @import call" {
+test "importsPath counts only a real @import call" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // The forms that register: plain, spaced across lines, sharing a line
-    // with a trailing comment.
-    try std.testing.expect(try TestRegistrationStep.hasRealImport(
-        arena,
-        "_ = @import(\"sub/x.zig\");\n",
-        "sub/x.zig",
-    ));
-    try std.testing.expect(try TestRegistrationStep.hasRealImport(
+    // The question classifyModules asks per candidate, asked of a whole
+    // text: collect then match. The forms that register: plain, spaced
+    // across lines, sharing a line with a trailing comment.
+    const counts = struct {
+        fn counts(
+            a: std.mem.Allocator,
+            text: []const u8,
+            wanted_import: []const u8,
+        ) !bool {
+            return TestRegistrationStep.importsPath(
+                try TestRegistrationStep.collectImports(a, text),
+                wanted_import,
+            );
+        }
+    }.counts;
+    try std.testing.expect(try counts(arena, "_ = @import(\"sub/x.zig\");\n", "sub/x.zig"));
+    try std.testing.expect(try counts(
         arena,
         "comptime {\n    _ = @import(\n        \"sub/x.zig\",\n    );\n}\n",
         "sub/x.zig",
     ));
-    try std.testing.expect(try TestRegistrationStep.hasRealImport(
+    try std.testing.expect(try counts(
         arena,
         "_ = @import(\"sub/x.zig\"); // keep this one\n",
         "sub/x.zig",
@@ -1168,31 +1164,27 @@ test "hasRealImport counts only a real @import call" {
     // The false-pass directions the removed textual matcher admitted:
     // mention inside an ordinary string literal, in a comment, in multiline
     // string data — none of them import anything.
-    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
+    try std.testing.expect(!try counts(
         arena,
         "const msg = \"@import(\\\"sub/x.zig\\\") registers nothing\";\n",
         "sub/x.zig",
     ));
-    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
-        arena,
-        "// _ = @import(\"sub/x.zig\");\n",
-        "sub/x.zig",
-    ));
-    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
+    try std.testing.expect(!try counts(arena, "// _ = @import(\"sub/x.zig\");\n", "sub/x.zig"));
+    try std.testing.expect(!try counts(
         arena,
         "const prose =\n" ++
             "\\\\ @import(\"sub/x.zig\") reads well here.\n" ++
             ";\n",
         "sub/x.zig",
     ));
-    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
+    try std.testing.expect(!try counts(
         arena,
         "// @import(\n// \"sub/x.zig\"); split across comment lines\n",
         "sub/x.zig",
     ));
 
     // A different builtin taking the same path is not registration either.
-    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
+    try std.testing.expect(!try counts(
         arena,
         "const img = @embedFile(\"sub/x.zig\");\n",
         "sub/x.zig",
@@ -1201,18 +1193,14 @@ test "hasRealImport counts only a real @import call" {
     // Neither is a computed path (@import(a ++ b)): only a literal string
     // argument matches, so such a module is reported by the gate — failing
     // loudly, never half-matched.
-    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
+    try std.testing.expect(!try counts(
         arena,
         "const dir = \"sub\"; _ = @import(dir ++ \"/x.zig\");\n",
         "sub/x.zig",
     ));
 
     // A different path does not match.
-    try std.testing.expect(!try TestRegistrationStep.hasRealImport(
-        arena,
-        "_ = @import(\"other/y.zig\");\n",
-        "sub/x.zig",
-    ));
+    try std.testing.expect(!try counts(arena, "_ = @import(\"other/y.zig\");\n", "sub/x.zig"));
 }
 
 test "declaration-analysis gate reports a module its root never wraps in refAllDecls" {
