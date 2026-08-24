@@ -337,7 +337,7 @@ fn newCustomStep(
     b: *std.Build,
     comptime T: type,
     name: []const u8,
-    comptime make_fn: std.Build.Step.MakeFn,
+    comptime make: std.Build.Step.MakeFn,
 ) *T {
     const self = b.allocator.create(T) catch @panic("OOM");
     self.* = .{
@@ -345,7 +345,7 @@ fn newCustomStep(
             .id = .custom,
             .name = name,
             .owner = b,
-            .makeFn = make_fn,
+            .makeFn = make,
         }),
     };
     return self;
@@ -725,8 +725,8 @@ const TestRegistrationStep = struct {
     /// `wanted_import`: the comparison classifyModules applies per candidate
     /// against the importer's once-collected imports.
     fn importsPath(imports: []const ImportRef, wanted_import: []const u8) bool {
-        for (imports) |imp| {
-            if (std.mem.eql(u8, imp.path, wanted_import)) return true;
+        for (imports) |ref| {
+            if (std.mem.eql(u8, ref.path, wanted_import)) return true;
         }
         return false;
     }
@@ -830,15 +830,15 @@ const TestRegistrationStep = struct {
 
             const imports = try collectImports(arena, root_source.text);
             var wrapped_paths: std.StringArrayHashMapUnmanaged(void) = .empty;
-            for (imports) |imp| {
-                if (imp.wrapped) try wrapped_paths.put(arena, imp.path, {});
+            for (imports) |ref| {
+                if (ref.wrapped) try wrapped_paths.put(arena, ref.path, {});
             }
             var reported: std.StringArrayHashMapUnmanaged(void) = .empty;
-            for (imports) |imp| {
-                if (wrapped_paths.contains(imp.path)) continue;
-                if (reported.contains(imp.path)) continue;
-                const candidate_path = named.get(imp.path) orelse continue;
-                try reported.put(arena, imp.path, {});
+            for (imports) |ref| {
+                if (wrapped_paths.contains(ref.path)) continue;
+                if (reported.contains(ref.path)) continue;
+                const candidate_path = named.get(ref.path) orelse continue;
+                try reported.put(arena, ref.path, {});
                 try report.print(
                     arena,
                     "  {s}: imported by {s} without forced declaration analysis\n",
@@ -1063,26 +1063,27 @@ test "test-registration gate reports exactly the modules no chain reaches from a
     );
 
     // The same tree in this host's separator form decides identically.
-    const s = std.fs.path.sep_str;
+    const sep_str = std.fs.path.sep_str;
     const native_sources = [_]Source{
         .{
-            .path = "src" ++ s ++ "main.zig",
+            .path = "src" ++ sep_str ++ "main.zig",
             .text = sources[0].text,
         },
-        .{ .path = "src" ++ s ++ "root.zig", .text = "" },
+        .{ .path = "src" ++ sep_str ++ "root.zig", .text = "" },
         .{
-            .path = "src" ++ s ++ "sub" ++ s ++ "registered.zig",
+            .path = "src" ++ sep_str ++ "sub" ++ sep_str ++ "registered.zig",
             .text = sources[2].text,
         },
-        .{ .path = "src" ++ s ++ "other" ++ s ++ "second.zig", .text = "" },
-        .{ .path = "src" ++ s ++ "sub" ++ s ++ "unregistered.zig", .text = "" },
+        .{ .path = "src" ++ sep_str ++ "other" ++ sep_str ++ "second.zig", .text = "" },
+        .{ .path = "src" ++ sep_str ++ "sub" ++ sep_str ++ "unregistered.zig", .text = "" },
     };
 
     report = .empty;
     try TestRegistrationStep.classifyModules(arena, &native_sources, std.fs.path.sep, &report);
 
     try std.testing.expectEqualStrings(
-        "  src" ++ s ++ "sub" ++ s ++ "unregistered.zig: not reachable from a test root\n",
+        "  src" ++ sep_str ++ "sub" ++ sep_str ++
+            "unregistered.zig: not reachable from a test root\n",
         report.items,
     );
 }
@@ -2112,7 +2113,7 @@ test "column-cap step fails over its build root naming the one offending line" {
     // The end-to-end contract the core tests stop short of: the tally is
     // derived from the report lines, and the header carries the count and
     // cap beside them.
-    const s = std.fs.path.sep_str;
+    const sep_str = std.fs.path.sep_str;
     var graph: std.Build.Graph = undefined;
     const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
     const gate = LineLengthStep.create(b);
@@ -2120,7 +2121,7 @@ test "column-cap step fails over its build root naming the one offending line" {
         &gate.step,
         testMakeOptions(arena),
         "1 line(s) exceed 100 columns:\n" ++
-            "  src" ++ s ++ "big.zig:1\n",
+            "  src" ++ sep_str ++ "big.zig:1\n",
     );
 }
 
@@ -2151,7 +2152,7 @@ test "test-registration step reports unreachable modules then analysis gaps" {
     // headers — the assembly no other test pins; a dropped separator or a
     // miscounted tally prints mangled gate output while every core stays
     // green.
-    const s = std.fs.path.sep_str;
+    const sep_str = std.fs.path.sep_str;
     var graph: std.Build.Graph = undefined;
     const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
     const gate = TestRegistrationStep.create(b);
@@ -2159,10 +2160,10 @@ test "test-registration step reports unreachable modules then analysis gaps" {
         &gate.step,
         testMakeOptions(arena),
         "1 module(s) whose tests never run:\n" ++
-            "  src" ++ s ++ "ghost.zig: not reachable from a test root\n" ++
+            "  src" ++ sep_str ++ "ghost.zig: not reachable from a test root\n" ++
             "\n" ++
             "1 module(s) whose public declarations are never analyzed:\n" ++
-            "  src" ++ s ++ "a.zig: imported by src" ++ s ++
+            "  src" ++ sep_str ++ "a.zig: imported by src" ++ sep_str ++
             "root.zig without forced declaration analysis\n",
     );
 }
