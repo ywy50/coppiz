@@ -8,9 +8,15 @@
 const std = @import("std");
 const build_options = @import("build_options");
 
-/// The package version, read from build.zig.zon by build.zig. The zon file
-/// is the single source of truth (see RELEASES.md).
-pub const version: std.SemanticVersion = build_options.version;
+/// The package version, parsed from the build.zig.zon value the build hands
+/// over as build_options.version_text. The zon file is the single source of
+/// truth (see RELEASES.md); a declaration that is not valid Semantic
+/// Versioning fails the build right here.
+pub const version: std.SemanticVersion =
+    std.SemanticVersion.parse(build_options.version_text) catch
+        @compileError(
+            "build.zig.zon version is not semver: '" ++ build_options.version_text ++ "'",
+        );
 
 comptime {
     // Every src/ module should be referenced here (or from src/main.zig
@@ -39,12 +45,7 @@ test "all public declarations analyze" {
     std.testing.refAllDecls(@This());
 }
 
-test "version is the one build.zig.zon declares" {
+test "version is pre-1.0" {
     // Pre-1.0 pin: a major bump must not happen silently.
     try std.testing.expectEqual(@as(u32, 0), version.major);
-
-    // Not just any version: the exact one parsed from build.zig.zon, so the
-    // build cannot drift off the zon file as its source of truth.
-    const declared = try std.SemanticVersion.parse(build_options.version_text);
-    try std.testing.expect(version.order(declared) == .eq);
 }

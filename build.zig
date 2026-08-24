@@ -9,15 +9,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const version_text = @import("build.zig.zon").version;
-    const version = std.SemanticVersion.parse(version_text) catch
-        std.debug.panic("build.zig.zon version is not semver: '{s}'", .{version_text});
     const options = b.addOptions();
-    options.addOption(std.SemanticVersion, "version", version);
-    // The raw declaration too, so the library's tests can pin `spine.version`
-    // to the literal build.zig.zon value rather than trusting the build's
-    // parse step (RELEASES.md: the zon file is the single source of truth).
-    options.addOption([]const u8, "version_text", version_text);
+    // The raw zon declaration only: the library parses it where `spine.version`
+    // is defined (src/root.zig), so the single-source-of-truth value is never
+    // carried twice in lockstep (RELEASES.md).
+    options.addOption([]const u8, "version_text", @import("build.zig.zon").version);
 
     const lib_mod = b.addModule("spine", .{
         .root_source_file = b.path("src/root.zig"),
