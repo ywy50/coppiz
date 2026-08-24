@@ -48,9 +48,10 @@ clanker is the first host; it is not the customer.
 
 ## What it is meant to be
 
-- **Append-only entries**, author-signed and hash-chained, replicated in full
-  to every member. No update, no delete; the only mutations are TTL expiry
-  and an author marking *its own* entries stale, both opt-in per ledger
+- **Append-only entries**, author-signed and hash-chained, replicated in
+  full to every member of its group. No update, no delete; the only
+  mutations are TTL expiry and an author marking *its own* entries stale,
+  both opt-in per ledger
   ([ADR 0002](docs/adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md)).
 - **TTL with policy**: enforcement off, per entry, or for every entry in the
   ledger; expiry marks stale or deletes; deletion is deterministic across

@@ -38,6 +38,18 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Three accuracy repairs from a documentation audit: the README's
+  append-only bullet now scopes full replication to a member's group (the
+  same unscoped claim an earlier pass fixed in docs/README's architecture
+  summary, and contradicted by
+  [PRD 0006](docs/prds/0006-scaling-to-groups-sharding-and-parity.md)'s
+  ownership-and-routing overlay); `src/main.zig`'s doc comment no longer
+  calls the file a placeholder "until RFC 0001 is decided" — that decision
+  only picks which surface leads
+  ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)), and
+  the placeholder ends when the library API and node CLI land; and PRD
+  0003's Status reads "the design the RFC recommends", restoring a dropped
+  article.
 - The `lint` step's description names all four checks again — formatting,
   line length, test registration and declaration analysis: the string
   behind `zig build --help` still read "test registration" as the last
@@ -261,6 +273,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   (`@embedFile`) is not registration.
 
 ### Changed
+
+- The test-registration lint step enumerates `src/` through the same
+  dispatcher as the 100-column cap (`checkedFiles`) instead of carrying its
+  own copy of the enumerate-and-read scaffolding, and its failures now name
+  what they stopped on like the column cap's (`cannot enumerate 'src': …`,
+  `cannot read 'x.zig': …`, not "the src/ modules"). No gate outcome
+  changes.
 
 - The lint gates' file-access failures now name what they were reading: a
   checked path that could not be read surfaced as a bare OS error

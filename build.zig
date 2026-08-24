@@ -171,9 +171,12 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
 /// rather than silently checking nothing.
 const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 
-/// Every file the column-cap gate checks, derived from `checked_paths`: a
-/// listed directory contributes its .zig descendants; any other entry is
-/// taken whole (build.zig.zon has no .zig suffix but must still be capped).
+/// Every file a checking step covers, derived from its gate paths: a listed
+/// directory contributes its .zig descendants; any other entry is taken
+/// whole (build.zig.zon has no .zig suffix but must still be capped). One
+/// dispatcher serves every step that enumerates files — the two
+/// file-covering gates and the test-registration walk — so their coverage
+/// rules cannot drift apart.
 ///
 /// All paths go through `root_dir` — the build root — not the process cwd:
 /// the runner walks up to find build.zig without changing directory, so a
@@ -185,7 +188,8 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// linked directory's subtree silently unchecked.
 /// `gate_paths` is a parameter rather than a read of `checked_paths` so a
 /// test can drive the dispatch against a temporary tree, the same way `sep`
-/// is a parameter below; production hands in `&checked_paths`.
+/// is a parameter below; production hands in `&checked_paths` for the
+/// file-covering gates and `&.{"src"}` for the registration walk.
 ///
 /// On failure `failed_path` names the gate path that could not be stat'd or
 /// walked, so the calling step can report it — a bare error name would leave
@@ -446,21 +450,20 @@ const TestRegistrationStep = struct {
         // Every walked module's text: the reachability walk reads imports
         // out of intermediate modules too, not just out of the two roots.
         // The roots sit in src/ themselves, so one walk finds them and no
-        // file is read twice.
-        var module_paths: std.ArrayListUnmanaged([]const u8) = .empty;
-        appendZigFilesUnder(b.build_root.handle, io, arena, "src", &module_paths) catch |err|
-            return step.fail("cannot enumerate the src/ modules: {s}", .{@errorName(err)});
+        // file is read twice. Enumeration goes through checkedFiles, the
+        // column cap's dispatcher, so both steps share the walk and its
+        // failed-path reporting instead of carrying parallel scaffolding.
+        const root_dir = b.build_root.handle;
+        var failed_path: ?[]const u8 = null;
+        const module_paths = checkedFiles(root_dir, io, arena, &.{"src"}, &failed_path) catch |err|
+            return step.fail("cannot enumerate '{s}': {s}", .{
+                failed_path orelse "the checked paths",
+                @errorName(err),
+            });
         var sources: std.ArrayListUnmanaged(Source) = .empty;
-        for (module_paths.items) |path| {
-            const bytes = b.build_root.handle.readFileAlloc(
-                io,
-                path,
-                arena,
-                .unlimited,
-            ) catch |err| return step.fail(
-                "cannot read module '{s}': {s}",
-                .{ path, @errorName(err) },
-            );
+        for (module_paths) |path| {
+            const bytes = root_dir.readFileAlloc(io, path, arena, .unlimited) catch |err|
+                return step.fail("cannot read '{s}': {s}", .{ path, @errorName(err) });
             try sources.append(arena, .{ .path = path, .text = bytes });
         }
         try classifyModules(arena, sources.items, std.fs.path.sep, &report);
@@ -584,6 +587,15 @@ const TestRegistrationStep = struct {
         }
         try out.appendSlice(arena, to[boundary..]);
         return out.toOwnedSlice(arena);
+    }
+
+    /// Rewrites filesystem separators to import separators ('/'), the only
+    /// form that can appear inside an @import string. A no-op where the
+    /// separator is already '/'; `sep` is a parameter so any platform can be
+    /// simulated in a test.
+    fn importSeparators(arena: std.mem.Allocator, path: []const u8, sep: u8) ![]const u8 {
+        if (sep == '/') return path;
+        return std.mem.replaceOwned(u8, arena, path, &.{sep}, "/");
     }
 
     /// True when `text` actually calls `@import("wanted")`, decided on the
@@ -710,15 +722,6 @@ const TestRegistrationStep = struct {
     }
 };
 
-/// Rewrites filesystem separators to import separators ('/'), the only form
-/// that can appear inside an @import string. A no-op where the separator is
-/// already '/'; `sep` is a parameter so any platform can be simulated in a
-/// test.
-fn importSeparators(arena: std.mem.Allocator, path: []const u8, sep: u8) ![]const u8 {
-    if (sep == '/') return path;
-    return std.mem.replaceOwned(u8, arena, path, &.{sep}, "/");
-}
-
 test "importBetween resolves the import string from the importing file's directory" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -761,7 +764,7 @@ test "importBetween resolves the import string from the importing file's directo
 
     // The Windows case, simulated on every host through the sep argument:
     // walked paths are normalized before resolution.
-    const win = try importSeparators(arena, "sub\\x\\y.zig", '\\');
+    const win = try TestRegistrationStep.importSeparators(arena, "sub\\x\\y.zig", '\\');
     try std.testing.expectEqualStrings("sub/x/y.zig", win);
     try std.testing.expectEqualStrings(
         "y.zig",
@@ -787,7 +790,11 @@ test "test roots match whatever separator the walker produced" {
     try std.testing.expect(!try TestRegistrationStep.isTestRoot(arena, "src\\sub\\x.zig", '\\'));
 
     // What make() sees on this host.
-    const native = try importSeparators(arena, "src/root.zig", std.fs.path.sep);
+    const native = try TestRegistrationStep.importSeparators(
+        arena,
+        "src/root.zig",
+        std.fs.path.sep,
+    );
     try std.testing.expect(try TestRegistrationStep.isTestRoot(arena, native, std.fs.path.sep));
 }
 

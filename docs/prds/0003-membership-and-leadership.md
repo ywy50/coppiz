@@ -7,7 +7,7 @@ kinds `genesis`, `join`, `leave`, `epoch`, `merge`; slots; chain) and
 [PRD 0004](0004-settings.md) (`leadership.*` settings and the
 `reconfigurable` gate). The unspoofable-join mechanism it relies on is argued
 as [RFC 0002](../rfcs/0002-how-join-order-is-made-unspoofable.md); this PRD
-states the design that RFC recommends and will follow the RFC's decision.
+states the design the RFC recommends and will follow the RFC's decision.
 Source of truth once shipped: `src/cluster/` (membership fold, election,
 failure detection, merge).
 
