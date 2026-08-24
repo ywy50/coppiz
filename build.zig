@@ -1923,3 +1923,277 @@ test "appendProjectZigFiles names a link that no longer resolves" {
     // handled.
     try std.testing.expectEqualStrings("src/dangling.zig", failed_path.?);
 }
+
+/// A real std.Build whose build root is `root_dir`, so the gate steps'
+/// make() functions and loadCheckedSources can run end-to-end over a
+/// temporary tree instead of only their extracted cores. The graph lives in
+/// the caller's frame because the Build borrows it; everything else is
+/// arena-allocated. Construction mirrors what the build runner does, in the
+/// shape std's own Build.Step.Options test uses: the test runner's io, a
+/// resolved native host, and throwaway cache roots the gates never read.
+fn makeTestBuilder(
+    arena: std.mem.Allocator,
+    io: std.Io,
+    root_dir: std.Io.Dir,
+    graph: *std.Build.Graph,
+) anyerror!*std.Build {
+    // anyerror because cwd resolution and native-target detection report
+    // through host-OS error sets no gate ever names.
+    const cwd_path = try std.process.currentPathAlloc(io, arena);
+    graph.* = .{
+        .io = io,
+        .arena = arena,
+        .cache = .{
+            .io = io,
+            .gpa = arena,
+            .manifest_dir = root_dir,
+            .cwd = cwd_path,
+        },
+        .zig_exe = "zig",
+        .environ_map = std.process.Environ.Map.init(arena),
+        .global_cache_root = .{ .path = null, .handle = root_dir },
+        .host = .{
+            .query = .{},
+            .result = try std.zig.system.resolveTargetQuery(io, .{}),
+        },
+        .zig_lib_directory = .{ .path = null, .handle = root_dir },
+        .time_report = false,
+    };
+    return std.Build.create(
+        graph,
+        .{ .path = null, .handle = root_dir },
+        .{ .path = null, .handle = root_dir },
+        &.{},
+    );
+}
+
+/// The MakeOptions a direct make() call needs: no progress reporting, no
+/// watch mode, no per-test timeout — the step bodies read none of it.
+fn testMakeOptions(arena: std.mem.Allocator) std.Build.Step.MakeOptions {
+    return .{
+        .progress_node = .none,
+        .watch = false,
+        .web_server = null,
+        .unit_test_timeout_ns = null,
+        .gpa = arena,
+    };
+}
+
+/// Runs `step`'s make function and pins both halves of a failing report:
+/// the error is MakeFailed (the step already reported) and exactly one
+/// message was recorded, matching `expected` character for character. The
+/// exact-string form every gate's own tests use, applied one layer up.
+fn expectStepFailure(
+    step: *std.Build.Step,
+    options: std.Build.Step.MakeOptions,
+    expected: []const u8,
+) !void {
+    try std.testing.expectError(error.MakeFailed, step.makeFn(step, options));
+    try std.testing.expectEqual(@as(usize, 1), step.result_error_msgs.items.len);
+    try std.testing.expectEqualStrings(expected, step.result_error_msgs.items[0]);
+}
+
+test "loadCheckedSources reads each checked file whole, listed order preserved" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "a.zig", .data = "const a = 1;\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "notes.txt", .data = "hello" });
+
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    var step = std.Build.Step.init(.{
+        .id = .custom,
+        .name = "under test",
+        .owner = b,
+        .makeFn = undefined,
+    });
+
+    const paths = [_][]const u8{ "a.zig", "notes.txt" };
+    const sources = try loadCheckedSources(&step, tmp.dir, io, arena, &paths);
+
+    // Paths come back as listed (the form reports print) with each file's
+    // full text, and a clean run records nothing on the step.
+    try std.testing.expectEqual(@as(usize, 2), sources.len);
+    try std.testing.expectEqualStrings("a.zig", sources[0].path);
+    try std.testing.expectEqualStrings("const a = 1;\n", sources[0].text);
+    try std.testing.expectEqualStrings("notes.txt", sources[1].path);
+    try std.testing.expectEqualStrings("hello", sources[1].text);
+    try std.testing.expectEqual(@as(usize, 0), step.result_error_msgs.items.len);
+}
+
+test "loadCheckedSources names the gate path when enumeration fails" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    var step = std.Build.Step.init(.{
+        .id = .custom,
+        .name = "under test",
+        .owner = b,
+        .makeFn = undefined,
+    });
+
+    // The shared front half of both analysis steps routes enumeration
+    // failures through failEnumeration with the offending path attached —
+    // not a bare error name the operator would have to locate by hand.
+    const paths = [_][]const u8{"missing.zig"};
+    try std.testing.expectError(
+        error.MakeFailed,
+        loadCheckedSources(&step, tmp.dir, io, arena, &paths),
+    );
+    try std.testing.expectEqualStrings(
+        "cannot enumerate 'missing.zig': FileNotFound",
+        step.result_error_msgs.items[0],
+    );
+}
+
+test "failEnumeration falls back to a generic subject when no path owns the error" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    var step = std.Build.Step.init(.{
+        .id = .custom,
+        .name = "under test",
+        .owner = b,
+        .makeFn = undefined,
+    });
+
+    // An error belonging to no single gate path (allocation alone) leaves
+    // failed_path unset, and the report still says what was being enumerated.
+    // failEnumeration returns a bare error set, so the value compares
+    // directly.
+    const err = failEnumeration(&step, error.OutOfMemory, null);
+    try std.testing.expect(err == error.MakeFailed);
+    try std.testing.expectEqualStrings(
+        "cannot enumerate 'the checked paths': OutOfMemory",
+        step.result_error_msgs.items[0],
+    );
+}
+
+test "column-cap step fails over its build root naming the one offending line" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The tree make() enumerates through checked_paths relative to the
+    // build root: src/ plus stubs of the two top-level build files, so
+    // enumeration succeeds and the step reaches the column check itself.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/ok.zig", .data = "" });
+    try tmp.dir.writeFile(
+        io,
+        .{ .sub_path = "src/big.zig", .data = "a" ** (LineLengthStep.columns_max + 1) },
+    );
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+
+    // The end-to-end contract the core tests stop short of: the tally is
+    // derived from the report lines, and the header carries the count and
+    // cap beside them.
+    const s = std.fs.path.sep_str;
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = LineLengthStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "1 line(s) exceed 100 columns:\n" ++
+            "  src" ++ s ++ "big.zig:1\n",
+    );
+}
+
+test "test-registration step reports unreachable modules then analysis gaps" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // One tree exercising both halves of make()'s assembled message in one
+    // run: ghost.zig is imported by nobody (the reachability section) while
+    // a.zig is imported bare by root.zig, reachable but never wrapped in
+    // refAllDecls (the declaration-analysis section). Exactly one finding
+    // per section keeps the report independent of the walker's order.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(
+        io,
+        .{ .sub_path = "src/root.zig", .data = "_ = @import(\"a.zig\");\n" },
+    );
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/a.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/ghost.zig", .data = "" });
+
+    // The two sections join as separate paragraphs under their counted
+    // headers — the assembly no other test pins; a dropped separator or a
+    // miscounted tally prints mangled gate output while every core stays
+    // green.
+    const s = std.fs.path.sep_str;
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = TestRegistrationStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "1 module(s) whose tests never run:\n" ++
+            "  src" ++ s ++ "ghost.zig: not reachable from a test root\n" ++
+            "\n" ++
+            "1 module(s) whose public declarations are never analyzed:\n" ++
+            "  src" ++ s ++ "a.zig: imported by src" ++ s ++
+            "root.zig without forced declaration analysis\n",
+    );
+}
+
+test "gate-coverage step fails naming a project file outside the checked paths" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The tree-today shape plus one stray: everything checked_paths names
+    // exists (so the covered side enumerates), and one top-level .zig file
+    // lies outside the allowlist — the complement this step exists to fail
+    // loudly about. Its end-to-end header and tally are pinned here because
+    // uncoveredPaths' tests stop at the bare report lines.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "stray.zig", .data = "" });
+
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = GateCoverageStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "1 Zig source(s) no analysis gate covers:\n" ++
+            "  stray.zig: not covered by any analysis gate\n",
+    );
+}
