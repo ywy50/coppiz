@@ -513,11 +513,12 @@ const TestRegistrationStep = struct {
     }
 
     /// True when `source` actually calls `@import("target")`, decided on the
-    /// token stream rather than the text: the tokenizer drops comments and
-    /// lexes every kind of string literal as one string token, so a mention
-    /// in either registers nothing, while an import sharing a line with a
-    /// trailing comment — or with an earlier "//" inside a string — still
-    /// counts. The builtin's spelling is matched too, so
+    /// token stream rather than the text: comments are dropped entirely, and
+    /// string literals lex as inert data (a multiline string one token per
+    /// line, under its own tag), so a mention in either registers nothing,
+    /// while an import sharing a line with a trailing comment — or with an
+    /// earlier "//" inside a string — still counts. The builtin's spelling is
+    /// matched too, so
     /// @embedFile("sub/x.zig") is not registration. Only the
     /// two preceding tokens are remembered; that spans any whitespace but not
     /// a computed path (@import(a ++ b)), which fails loudly instead — the

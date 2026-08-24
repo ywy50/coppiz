@@ -21,9 +21,10 @@ pub fn main(init: std.process.Init) !void {
 test "all public declarations analyze" {
     // Zig's analyzer is lazy: an unreferenced `pub` declaration is compiled
     // into nothing and checked by nothing, so this test references them all.
-    // CLI-only submodules registered from this root go here as they are
-    // added (tests collect from any module reachable through imports, but
-    // only registration in a test root analyzes a submodule's declarations):
+    // CLI-only submodules go here as they are added: an import registers a
+    // submodule for test collection, and the refAllDecls line is what also
+    // forces its public declarations through the analyzer (src/root.zig
+    // spells out both halves):
     //     std.testing.refAllDecls(@import("cli/x.zig"));
     std.testing.refAllDecls(@This());
 }

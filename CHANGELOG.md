@@ -16,6 +16,78 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   `std.testing.refAllDecls`; each module registered for test collection now
   also gets a line there, so its declarations are semantically checked too.
 
+- Toolchain-floor enforcement in the build: `zig build` now fails loudly when
+  the running Zig is older than `minimum_zig_version` in build.zig.zon. Zig
+  checks that field only for consumers fetching spine as a dependency, never
+  for a tree built directly, so every analysis gate (`zig fmt --check`,
+  the 100-column cap, test registration — the latter lexing with
+  `std.zig.Tokenizer`) could otherwise run under undeclared toolchain
+  semantics.
+- Spec-consistency fourth pass: PRD 0001's duplicate acceptance-criterion id
+  (two criteria labelled G3) is renumbered — the forgery negative test is now
+  G7, and the roadmap's single-member gate cites G3–G7; PRD 0001's
+  "No multi-cluster federation" non-goal is scoped to v1 with a cross-reference
+  to PRD 0006, whose federation overlay it previously contradicted outright;
+  OQ 3's layer note now records accurately where `write.ack` is called a
+  setting (PRDs 0001 and 0006) versus assumed (PRD 0003) or passed per call
+  (PRD 0005).
+- Spec-consistency pass over the design records: PRD 0002's effective-TTL
+  table and state diagram now match their own prose (`ttl.max_ms` clamps
+  under `per_entry` too; author-staled entries remove only under
+  `stale.cleanup = delete`); PRD 0004's empty-`authorities[]` validation rule
+  carves out PRD 0003's one-member case; and PRD 0001 G6's unnamed bounds get
+  keys (`cluster.max_ledgers`, `sync.unslotted_max_bytes`) with values parked
+  as OQ 55. A follow-up pass repaired research 0001's broken admission row
+  (unescaped pipes split the Markdown table) and aligned ADR 0003's
+  growth-path consequence with PRD 0006 and the roadmap (groups past 32,
+  topology inside large groups; quorum stays a later mode option). A second
+  pass corrected PRD 0001's `storage.fsync` classification (local config per
+  PRD 0004's layer rule, not a chain setting) and the test-registration
+  guidance in `src/root.zig`/`build.zig` (either test root counts), and made
+  the PRD inventory row for 0003 match its title exactly.
+- Spec-consistency follow-up: the `sync.*` knobs named across PRDs 0001–0003
+  (`sync.page_bytes`, `sync.lag_slots`, `sync.gap_timeout_ms`) are now cited
+  to a registered unknown (OQ 56) instead of silently lacking a layer and a
+  default; PRD 0005's CLI list gains `settings` and `migrate` (named by PRD
+  0004 and PRD 0005's own failure modes); RFC 0002 no longer claims PRD 0003
+  documents the admitter-ordering caveat (that is the RFC's own open
+  question); docs/README's planned source layout lists `src/config/`,
+  `src/cli/` and `src/api/`.
+- Spec-consistency third pass: ADR 0002's Decision names the `expired`
+  transition (`live → expired → removed` under `ttl.action = delete`) that
+  PRD 0002's diagram and the glossary already define; the `write.ack` layer
+  (setting in PRDs 0001/0003/0006, per-call argument in PRD 0005's sketch)
+  is registered in OQ 3 instead of silently ambiguous; and the glossary
+  defines `cursor`, `follow`, `snapshot` and `control ledger`, which PRDs
+  0001/0004/0005/0006 used undefined.
+- Lint gates wired into `zig build test` (and a standalone `zig build lint`
+  step): canonical formatting via `zig fmt --check --ast-check`, run with the
+  toolchain executing the build, a hard 100-column cap over `src/`,
+  `build.zig` and `build.zig.zon`, and a test-registration check that fails
+  when a `src/` module is not imported from a test root (its tests would
+  otherwise silently never run). What CI gates once it exists stays open as
+  OQ 45; until then the tests are the blocking entry point.
+- Repository founded: Zig 0.16 skeleton (`spine` library module and node
+  binary, both placeholders), clanker's documentation taxonomy under `docs/`,
+  draft PRDs 0001–0005, RFCs 0001–0002, ADRs 0001–0002, research note 0001,
+  the open-questions register and the glossary.
+- OQ 49 resolved: groups use the same leadership modes and concurrency
+  model as members; no uneven group count is required. PRD 0006 gains the
+  two federation rules that follow (representative validated against the
+  group's own chain; federation suspect timeout exceeds group election time).
+- PRD 0006 (scaling 1 → n → groups: recursive groups, ownership and
+  sharding, parity) with the list of what the core must get right now;
+  scale tiers in the roadmap; OQ 48–54; federation settings scope reserved
+  in PRD 0004; chain-per-ledger and self-describing sealed segments in PRD
+  0001.
+- ADR 0003 (batteries included, no external infrastructure at any size),
+  after the brief was clarified to be general-purpose; PRD 0005 reframed
+  with clanker as a worked example host rather than the target; OQ 46–47.
+- `.gitattributes` declaring LF for all text files, working trees included:
+  `zig fmt --check` inside `zig build test` compares bytes and fails a
+  CRLF checkout or commit, so the policy the build enforces is now pinned
+  where checkouts and commits are made.
+
 ### Fixed
 
 - PRD 0002's open-questions list now cites [OQ
@@ -217,77 +289,3 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   `@import("...")` written as text inside a `\`-string literal counted as
   registration while importing nothing — the false-pass direction, unlike
   every other stripping artifact. Unit-tested with the gate's own tests.
-
-### Added
-
-- Toolchain-floor enforcement in the build: `zig build` now fails loudly when
-  the running Zig is older than `minimum_zig_version` in build.zig.zon. Zig
-  checks that field only for consumers fetching spine as a dependency, never
-  for a tree built directly, so every analysis gate (`zig fmt --check`,
-  the 100-column cap, test registration — the latter lexing with
-  `std.zig.Tokenizer`) could otherwise run under undeclared toolchain
-  semantics.
-- Spec-consistency fourth pass: PRD 0001's duplicate acceptance-criterion id
-  (two criteria labelled G3) is renumbered — the forgery negative test is now
-  G7, and the roadmap's single-member gate cites G3–G7; PRD 0001's
-  "No multi-cluster federation" non-goal is scoped to v1 with a cross-reference
-  to PRD 0006, whose federation overlay it previously contradicted outright;
-  OQ 3's layer note now records accurately where `write.ack` is called a
-  setting (PRDs 0001 and 0006) versus assumed (PRD 0003) or passed per call
-  (PRD 0005).
-- Spec-consistency pass over the design records: PRD 0002's effective-TTL
-  table and state diagram now match their own prose (`ttl.max_ms` clamps
-  under `per_entry` too; author-staled entries remove only under
-  `stale.cleanup = delete`); PRD 0004's empty-`authorities[]` validation rule
-  carves out PRD 0003's one-member case; and PRD 0001 G6's unnamed bounds get
-  keys (`cluster.max_ledgers`, `sync.unslotted_max_bytes`) with values parked
-  as OQ 55. A follow-up pass repaired research 0001's broken admission row
-  (unescaped pipes split the Markdown table) and aligned ADR 0003's
-  growth-path consequence with PRD 0006 and the roadmap (groups past 32,
-  topology inside large groups; quorum stays a later mode option). A second
-  pass corrected PRD 0001's `storage.fsync` classification (local config per
-  PRD 0004's layer rule, not a chain setting) and the test-registration
-  guidance in `src/root.zig`/`build.zig` (either test root counts), and made
-  the PRD inventory row for 0003 match its title exactly.
-- Spec-consistency follow-up: the `sync.*` knobs named across PRDs 0001–0003
-  (`sync.page_bytes`, `sync.lag_slots`, `sync.gap_timeout_ms`) are now cited
-  to a registered unknown (OQ 56) instead of silently lacking a layer and a
-  default; PRD 0005's CLI list gains `settings` and `migrate` (named by PRD
-  0004 and PRD 0005's own failure modes); RFC 0002 no longer claims PRD 0003
-  documents the admitter-ordering caveat (that is the RFC's own open
-  question); docs/README's planned source layout lists `src/config/`,
-  `src/cli/` and `src/api/`.
-- Spec-consistency third pass: ADR 0002's Decision names the `expired`
-  transition (`live → expired → removed` under `ttl.action = delete`) that
-  PRD 0002's diagram and the glossary already define; the `write.ack` layer
-  (setting in PRDs 0001/0003/0006, per-call argument in PRD 0005's sketch)
-  is registered in OQ 3 instead of silently ambiguous; and the glossary
-  defines `cursor`, `follow`, `snapshot` and `control ledger`, which PRDs
-  0001/0004/0005/0006 used undefined.
-- Lint gates wired into `zig build test` (and a standalone `zig build lint`
-  step): canonical formatting via `zig fmt --check --ast-check`, run with the
-  toolchain executing the build, a hard 100-column cap over `src/`,
-  `build.zig` and `build.zig.zon`, and a test-registration check that fails
-  when a `src/` module is not imported from a test root (its tests would
-  otherwise silently never run). What CI gates once it exists stays open as
-  OQ 45; until then the tests are the blocking entry point.
-- Repository founded: Zig 0.16 skeleton (`spine` library module and node
-  binary, both placeholders), clanker's documentation taxonomy under `docs/`,
-  draft PRDs 0001–0005, RFCs 0001–0002, ADRs 0001–0002, research note 0001,
-  the open-questions register and the glossary.
-- OQ 49 resolved: groups use the same leadership modes and concurrency
-  model as members; no uneven group count is required. PRD 0006 gains the
-  two federation rules that follow (representative validated against the
-  group's own chain; federation suspect timeout exceeds group election time).
-- PRD 0006 (scaling 1 → n → groups: recursive groups, ownership and
-  sharding, parity) with the list of what the core must get right now;
-  scale tiers in the roadmap; OQ 48–54; federation settings scope reserved
-  in PRD 0004; chain-per-ledger and self-describing sealed segments in PRD
-  0001.
-- ADR 0003 (batteries included, no external infrastructure at any size),
-  after the brief was clarified to be general-purpose; PRD 0005 reframed
-  with clanker as a worked example host rather than the target; OQ 46–47.
-- `.gitattributes` declaring LF for all text files, working trees included:
-  `zig fmt --check` inside `zig build test` compares bytes and fails a
-  CRLF checkout or commit, so the policy the build enforces is now pinned
-  where checkouts and commits are made.
