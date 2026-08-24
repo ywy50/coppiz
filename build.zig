@@ -488,7 +488,6 @@ const TestRegistrationStep = struct {
                 if (std.mem.eql(u8, source.path, path)) break source.text;
             } else unreachable;
             for (sources) |candidate| {
-                if (std.mem.eql(u8, candidate.path, path)) continue;
                 if (reachable.contains(candidate.path)) continue;
                 const wanted = try importBetween(arena, path, candidate.path, sep);
                 if (try hasRealImport(arena, text, wanted)) {
@@ -886,6 +885,35 @@ test "checkedFiles expands directory entries and takes plain entries whole" {
     try std.testing.expectEqualStrings("build.zig.zon", checked[0]);
     try std.testing.expectEqualStrings("lib/deep/inner.zig", checked[1]);
     try std.testing.expectEqualStrings("lib/top.zig", checked[2]);
+}
+
+test "checkedFiles resolves a listed path that symlinks a directory" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // statFile follows links, so a listed path that is itself a link to a
+    // directory contributes its whole subtree to both file-covering gates —
+    // the top-level counterpart of appendZigFilesUnder's mid-walk rules:
+    // following keeps the subtree checked where descending through a
+    // mid-walk link is rejected. A regression to a non-following stat here
+    // would drop a linked library from both gates while they stay green.
+    (try tmp.dir.createDirPathOpen(io, "vendor/nested", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "vendor/nested/deep.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "vendor/notes.md", .data = "" });
+    try tmp.dir.symLink(io, "vendor", "linked-lib", .{});
+
+    const gate_paths = [_][]const u8{"linked-lib"};
+    const checked = try checkedFiles(tmp.dir, io, arena, &gate_paths);
+
+    // Paths stay as listed (through the link), the shape both gates report;
+    // the non-.zig file is filtered like any walked entry.
+    try std.testing.expectEqual(@as(usize, 1), checked.len);
+    try std.testing.expectEqualStrings("linked-lib/nested/deep.zig", checked[0]);
 }
 
 test "checkedFiles fails loudly when a checked path stops existing" {
