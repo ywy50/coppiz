@@ -851,6 +851,7 @@ test "normalizeImportPath collapses the legal spellings Zig resolves to one targ
         .{ "sub/x.zig", "sub/x.zig" },
         .{ "./sub/x.zig", "sub/x.zig" },
         .{ "sub//x.zig", "sub/x.zig" },
+        .{ "sub/", "sub" },
         .{ "sub/./x.zig", "sub/x.zig" },
         .{ "sub/../sub/x.zig", "sub/x.zig" },
         .{ "a/b/../../c.zig", "c.zig" },
@@ -878,6 +879,9 @@ test "test-registration gate matches imports spelled with a redundant '.' or '..
 
     // Both imports are real calls whose targets' tests run; only their
     // spelling differs from the canonical form importBetween computes.
+    // ghost.zig has no importer: naming it alone is what separates "the
+    // variants matched" from a walk gone silent that reports nothing at
+    // all — the same non-vacuity guard the refAllDecls test carries.
     const sources = [_]Source{
         .{
             .path = "src\\main.zig",
@@ -889,12 +893,16 @@ test "test-registration gate matches imports spelled with a redundant '.' or '..
         .{ .path = "src\\root.zig", .text = "" },
         .{ .path = "src\\helper.zig", .text = "" },
         .{ .path = "src\\lateral.zig", .text = "" },
+        .{ .path = "src\\ghost.zig", .text = "" },
     };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
     try TestRegistrationStep.classifyModules(arena, &sources, '\\', &report);
 
-    try std.testing.expectEqual(@as(usize, 0), report.items.len);
+    try std.testing.expectEqualStrings(
+        "  src\\ghost.zig: not reachable from a test root\n",
+        report.items,
+    );
 }
 
 test "declaration-analysis gate treats wrapped spellings as wrapping the module" {
@@ -904,23 +912,31 @@ test "declaration-analysis gate treats wrapped spellings as wrapping the module"
 
     // The wrapper and the bare import name the same file through different
     // spellings; normalization puts both on one form, so the documented
-    // pairing is satisfied and neither is reported.
+    // pairing is satisfied and a.zig is not reported. c.zig is imported
+    // bare with no wrapper and must still be — otherwise an empty report
+    // could not tell "the wrapped spelling counted" from a gate that
+    // stopped reporting altogether.
     const sources = [_]Source{
         .{
             .path = "src\\root.zig",
             .text = "_ = @import(\"./a.zig\");\n" ++
                 "test {\n" ++
                 "    std.testing.refAllDecls(@import(\".//a.zig\"));\n" ++
-                "}\n",
+                "}\n" ++
+                "_ = @import(\"c.zig\");\n",
         },
         .{ .path = "src\\main.zig", .text = "" },
         .{ .path = "src\\a.zig", .text = "" },
+        .{ .path = "src\\c.zig", .text = "" },
     };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
     try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '\\', &report);
 
-    try std.testing.expectEqual(@as(usize, 0), report.items.len);
+    try std.testing.expectEqualStrings(
+        "  src\\c.zig: imported by src\\root.zig without forced declaration analysis\n",
+        report.items,
+    );
 }
 
 test "importBetween resolves the import string from the importing file's directory" {
@@ -1331,18 +1347,24 @@ test "declaration-analysis gate constrains only the test roots' own imports" {
 
     // The documented convention puts both halves at the roots, so an
     // intermediate module's ordinary-use import (a.zig reaching b.zig) asks
-    // for no wrapper, and neither does one root importing the other.
+    // for no wrapper, and neither does one root importing the other. root's
+    // own bare d.zig still reports — proof the two exemptions above come
+    // from the scoping rule and not from a gate gone quiet altogether.
     const sources = [_]Source{
-        .{ .path = "src\\root.zig", .text = "" },
+        .{ .path = "src\\root.zig", .text = "_ = @import(\"d.zig\");\n" },
         .{ .path = "src\\main.zig", .text = "_ = @import(\"root.zig\");\n" },
         .{ .path = "src\\a.zig", .text = "_ = @import(\"b.zig\");\n" },
         .{ .path = "src\\b.zig", .text = "" },
+        .{ .path = "src\\d.zig", .text = "" },
     };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
     try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '\\', &report);
 
-    try std.testing.expectEqual(@as(usize, 0), report.items.len);
+    try std.testing.expectEqualStrings(
+        "  src\\d.zig: imported by src\\root.zig without forced declaration analysis\n",
+        report.items,
+    );
 }
 
 test "collectImports reads paths and wrapper position off the token stream" {

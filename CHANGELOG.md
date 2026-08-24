@@ -53,6 +53,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the direction where merging the wrapper sets across roots would silently
   drop a report line; verified by temporarily hoisting the set out of the
   per-root loop and watching the new pin fail.
+- The three lint-gate tests that asserted an empty report no longer pass
+  vacuously: each carries a control case the gate must still name, so a
+  regression that silenced the walk or the declaration-analysis report
+  altogether fails them instead of slipping through. The redundant-spelling
+  registration test and the constrained-roots declaration-analysis test add
+  an orphan module to their fixtures; the wrapped-spelling test adds a bare,
+  never-wrapped import expected as the one reported module. normalizeImportPath's
+  table also pins its trailing-empty-component boundary ("sub/" collapses to
+  "sub"), the same rule "sub//x.zig" exercises mid-path.
 
 ### Fixed
 
