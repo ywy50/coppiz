@@ -359,21 +359,21 @@ fn loadCheckedSources(
     return sources;
 }
 
-/// Fails the build when any checked source line exceeds `max_columns`.
+/// Fails the build when any checked source line exceeds `columns_max`.
 /// Columns are Unicode code points; invalid UTF-8 falls back to byte count.
 const LineLengthStep = struct {
     step: std.Build.Step,
 
-    const max_columns = 100;
+    const columns_max = 100;
 
     fn create(b: *std.Build) *LineLengthStep {
         const self = b.allocator.create(LineLengthStep) catch @panic("OOM");
         self.* = .{
             .step = std.Build.Step.init(.{
                 .id = .custom,
-                // Computed from max_columns so the displayed name cannot
+                // Computed from columns_max so the displayed name cannot
                 // drift from the cap it describes.
-                .name = std.fmt.comptimePrint("{d}-column cap", .{max_columns}),
+                .name = std.fmt.comptimePrint("{d}-column cap", .{columns_max}),
                 .owner = b,
                 .makeFn = make,
             }),
@@ -404,7 +404,7 @@ const LineLengthStep = struct {
         const violations = std.mem.count(u8, report.items, "\n");
         if (violations > 0)
             return step.fail("{d} line(s) exceed {d} columns:\n{s}", .{
-                violations, max_columns, report.items,
+                violations, columns_max, report.items,
             });
     }
 
@@ -423,8 +423,8 @@ const LineLengthStep = struct {
             // Code points can only outnumber bytes, so a line at or under
             // the cap in bytes cannot exceed it in columns and needs no
             // UTF-8 decode — the common case in a conforming tree.
-            if (line.len <= max_columns) continue;
-            if ((std.unicode.utf8CountCodepoints(line) catch line.len) <= max_columns) continue;
+            if (line.len <= columns_max) continue;
+            if ((std.unicode.utf8CountCodepoints(line) catch line.len) <= columns_max) continue;
             try report.print(arena, "  {s}:{d}\n", .{ path, line_no });
         }
     }
@@ -436,7 +436,7 @@ test "column cap admits a line at exactly the limit" {
     const arena = arena_state.allocator();
     var report: std.ArrayListUnmanaged(u8) = .empty;
 
-    const exact = "a" ** LineLengthStep.max_columns;
+    const exact = "a" ** LineLengthStep.columns_max;
     try LineLengthStep.checkLineLengths(arena, exact ++ "\nsecond\n", "f.zig", &report);
 
     try std.testing.expectEqual(@as(usize, 0), report.items.len);
@@ -448,7 +448,7 @@ test "column cap flags the first line past the limit, with path and line number"
     const arena = arena_state.allocator();
     var report: std.ArrayListUnmanaged(u8) = .empty;
 
-    const over = "a" ** (LineLengthStep.max_columns + 1);
+    const over = "a" ** (LineLengthStep.columns_max + 1);
     // Two violations, both reported in order: a checker that stops at the
     // first offense cannot pass. The second violation is also the file's
     // last line with no trailing '\n': a file not ending in a newline must
@@ -476,7 +476,7 @@ test "column cap measures code points, not bytes" {
 
     // The invalid side of the same boundary: 101 code points is over the cap
     // whatever the encoding, so wide characters are not skipped wholesale.
-    const wide_over = "\u{00e9}" ** (LineLengthStep.max_columns + 1);
+    const wide_over = "\u{00e9}" ** (LineLengthStep.columns_max + 1);
     try LineLengthStep.checkLineLengths(arena, wide_over, "f.zig", &report);
     try std.testing.expectEqualStrings("  f.zig:1\n", report.items);
 }
@@ -487,7 +487,7 @@ test "column cap falls back to byte count on invalid UTF-8" {
     const arena = arena_state.allocator();
     var report: std.ArrayListUnmanaged(u8) = .empty;
 
-    const bad = "\xff" ** (LineLengthStep.max_columns + 1);
+    const bad = "\xff" ** (LineLengthStep.columns_max + 1);
     try LineLengthStep.checkLineLengths(arena, bad, "f.zig", &report);
 
     // Same path:line report as the valid-UTF-8 over-limit case.
