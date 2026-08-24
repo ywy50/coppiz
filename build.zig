@@ -420,6 +420,10 @@ const LineLengthStep = struct {
         var lines = std.mem.splitScalar(u8, bytes, '\n');
         while (lines.next()) |line| {
             line_no += 1;
+            // Code points can only outnumber bytes, so a line at or under
+            // the cap in bytes cannot exceed it in columns and needs no
+            // UTF-8 decode — the common case in a conforming tree.
+            if (line.len <= max_columns) continue;
             if ((std.unicode.utf8CountCodepoints(line) catch line.len) <= max_columns) continue;
             try report.print(arena, "  {s}:{d}\n", .{ path, line_no });
         }
@@ -571,10 +575,11 @@ const TestRegistrationStep = struct {
     /// The gate's decision core, I/O-free so tests drive it directly, the
     /// way checkLineLengths serves the column cap: from the test roots, follow
     /// real imports across `sources` and append one report line per module
-    /// no chain reaches. O(modules²) tokenizer runs — src/
-    /// holds a handful of files today and the point is to fail loudly while
-    /// the tree is small. `separator` is a parameter so any platform can be
-    /// simulated in a test.
+    /// no chain reaches. Each module's text is tokenized once when it is
+    /// dequeued and its imports matched against every candidate after that —
+    /// re-collecting per candidate would make the tokenizer runs quadratic
+    /// where only the cheap string comparisons are. `separator` is a
+    /// parameter so any platform can be simulated in a test.
     fn classifyModules(
         arena: std.mem.Allocator,
         sources: []const Source,
@@ -596,10 +601,11 @@ const TestRegistrationStep = struct {
         var cursor: usize = 0;
         while (cursor < queue.items.len) : (cursor += 1) {
             const from = sources[queue.items[cursor]];
+            const from_imports = try collectImports(arena, from.text);
             for (sources, 0..) |candidate, i| {
                 if (reached[i]) continue;
                 const wanted = try importBetween(arena, from.path, candidate.path, separator);
-                if (try hasRealImport(arena, from.text, wanted)) {
+                if (importsPath(from_imports, wanted)) {
                     reached[i] = true;
                     try queue.append(arena, i);
                 }
@@ -713,7 +719,15 @@ const TestRegistrationStep = struct {
     /// (@import(a ++ b)) matches nothing and fails loudly instead — the
     /// direction the gate accepts.
     fn hasRealImport(arena: std.mem.Allocator, text: []const u8, wanted_import: []const u8) !bool {
-        for (try collectImports(arena, text)) |imp| {
+        return importsPath(try collectImports(arena, text), wanted_import);
+    }
+
+    /// True when `imports` — one module's collectImports result — names
+    /// `wanted_import`. The comparison classifyModules applies per candidate
+    /// against the importer's once-collected imports; hasRealImport is its
+    /// whole-text convenience form.
+    fn importsPath(imports: []const ImportRef, wanted_import: []const u8) bool {
+        for (imports) |imp| {
             if (std.mem.eql(u8, imp.path, wanted_import)) return true;
         }
         return false;

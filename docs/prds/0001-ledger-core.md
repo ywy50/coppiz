@@ -236,7 +236,15 @@ reached the leader's head, and a `syncing` member is never leader-eligible
 files of slots+entries in chain order, each record length-prefixed and
 CRC-checked so a torn tail write is detected and truncated at startup, and
 a sparse position→offset index per segment (position = `(epoch, seq)`;
-`seq` alone cannot key it — it restarts at 1 every epoch). A segment's header carries the
+`seq` alone cannot key it — it restarts at 1 every epoch). The per-ledger
+subdirectory is named for the ledger's id in lowercase hex, never for its
+name: the name is a mutable setting, and keying a directory by a chosen
+string drags filesystem naming rules into ledger identity — on
+case-insensitive filesystems such as Windows NTFS and macOS's default APFS,
+ledgers named `Foo` and `foo` would share one directory and one chain;
+Windows refuses reserved device names (`con`, `nul`) and names ending in a
+dot or space; a name carrying `/` or `\` escapes the member directory.
+None of that is spellable in hex digits. A segment's header carries the
 format version, the ledger id and the id of the group that sequenced it, so
 a segment is self-describing when it moves between groups (ownership
 transfer or parity reconstruction, PRD 0006); a **sealed** segment — one

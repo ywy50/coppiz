@@ -56,6 +56,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- PRD 0001's Storage section now names what keys a ledger's on-disk
+  subdirectory: the ledger id in lowercase hex, not its name. The name was
+  already a mutable setting while the id is the identity, so a name-keyed
+  directory would have to migrate on rename; worse, a host-chosen string as
+  a directory name imports filesystem naming rules into ledger identity —
+  on case-insensitive filesystems such as Windows NTFS and macOS's default
+  APFS, ledgers named `Foo` and `foo` would silently share one directory
+  and one chain, Windows refuses reserved device names (`con`, `nul`) and
+  trailing-dot/space names outright, and a name carrying `/` or `\`
+  escapes the member directory. Hex digits spell none of that.
 - `checkedFiles`'s doc comment in build.zig names its callers again: it
   claimed to serve "every step that enumerates files" but listed only the
   two file-covering gates and the test-registration walk — the enumeration
