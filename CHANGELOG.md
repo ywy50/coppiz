@@ -18,6 +18,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- PRD 0002's open-questions list now cites [OQ
+  57](docs/open-questions.md), which concerns that PRD's own schema — whether
+  the `stale` cause is switchable per ledger as ADR 0002 records — but was
+  reachable only from the ADR and the register, not from the schema it is
+  about.
+
 - The test-registration lint gate now follows imports transitively. Zig
   0.16 collects a module's tests whenever a chain of analyzed imports
   reaches it from a test root, not only when a root imports it directly

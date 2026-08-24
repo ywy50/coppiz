@@ -221,3 +221,8 @@ clock it did not stamp.
 - Slot count grows forever even under `retain = none`; whether an
   *archival checkpoint* (a signed root that lets old slots be archived) is
   needed, and when ([OQ 24](../open-questions.md)).
+- Whether the `stale` cause is itself switchable per ledger: [ADR
+  0002](../adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md)
+  records both mutations as opt-in by setting, but the schema above turns the
+  `stale` cause off nowhere — `stale.who` and `stale.cleanup` govern only who
+  may mark and what happens after ([OQ 57](../open-questions.md)).
