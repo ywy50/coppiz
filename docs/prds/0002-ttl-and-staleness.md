@@ -5,8 +5,8 @@
 Draft — 2026-08-21. Depends on [PRD 0001](0001-ledger-core.md) (entries,
 slots, control kinds, `checkpoint`) and [PRD 0004](0004-settings.md) (where
 the `ttl.*` / `stale.*` settings live and how they change). Source of truth
-once shipped: `src/ledger/expiry.zig` (pure expiry/stale predicates, host
-tested) and the `checkpoint` validation rule in `src/ledger/chain.zig`.
+once shipped: `src/ledger/expiry.zig` (pure expiry/stale predicates) and
+the `checkpoint` validation rule in `src/ledger/chain.zig`.
 
 ## Problem
 

@@ -172,11 +172,11 @@ the same hash, and can be folded deterministically by every member:
 | `genesis` | founding member | creates the cluster and its first ledger; carries initial settings and the founder's key | PRD 0003, 0004 |
 | `join` | an existing member (the admitter) | admits a new member: id, public key, address. Its slot is the new member's seniority | PRD 0003 |
 | `leave` | the leaving member, or the leader evicting it | removes a member; its seniority is gone | PRD 0003 |
-| `epoch` | the new leader | opens a leadership term: why (predecessor gone / mode change / merge), who | PRD 0003 |
+| `epoch` | the new leader | opens a leadership term: why (`leader_lost`, `mode_change`, `merge`, or `manual` — the reason list PRD 0003 defines), who | PRD 0003 |
 | `merge` | the surviving leader | imports another epoch's slots after a partition heals | PRD 0003 |
 | `settings` | the leader | changes one or more settings; refused by validation when the setting is not live-changeable | PRD 0004 |
 | `stale` | the target's author | marks one of the author's own entries stale | PRD 0002 |
-| `checkpoint` | the leader | makes expiry deletions deterministic: "every member may now drop payloads expired through slot X" | PRD 0002 |
+| `checkpoint` | the leader | makes removal deterministic: "every member may now drop entries expired through slot X — and entries marked stale, when `stale.cleanup = delete`" | PRD 0002 |
 
 A control entry is validated by every member on receipt, not only by the
 leader. Validation is pure: a function of the entry, the slot, and the folded

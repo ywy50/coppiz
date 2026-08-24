@@ -38,6 +38,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Three accuracy repairs from a documentation audit: PRD 0001's control-entry
+  table now names the `epoch` reason list PRD 0003 defines (`leader_lost`,
+  `mode_change`, `merge`, `manual`) where it paraphrased three of the four
+  values under different spellings, and its `checkpoint` row no longer
+  describes removal as covering only TTL-expired payloads — author-staled
+  entries join the same removal set when `stale.cleanup = delete`
+  ([PRD 0002](docs/prds/0002-ttl-and-staleness.md), the glossary); and PRD
+  0002's Status drops an ambiguous "host tested" qualifier from its
+  `src/ledger/expiry.zig` source-of-truth line.
 - Three accuracy repairs from a documentation audit: the README's
   append-only bullet now scopes full replication to a member's group (the
   same unscoped claim an earlier pass fixed in docs/README's architecture
