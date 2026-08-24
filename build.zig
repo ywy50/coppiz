@@ -1041,6 +1041,43 @@ test "declaration-analysis gate admits wrappers, duplicates and non-module impor
     );
 }
 
+test "declaration-analysis gate reports a repeated bare import once per root" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The report shape the tally counts: one line per distinct import
+    // string per root, whatever the number of bare occurrences — so two
+    // bare mentions of a.zig yield one line, and a second root importing
+    // the same module bare adds its own line naming that root. A regression
+    // that drops either dedup doubles the newline count and inflates the
+    // gate's tally while every module it names stays the same.
+    const sources = [_]Source{
+        .{
+            .path = "src\\root.zig",
+            .text = "_ = @import(\"a.zig\");\n" ++
+                "_ = @import(\"a.zig\");\n" ++
+                "_ = @import(\"b.zig\");\n",
+        },
+        .{
+            .path = "src\\main.zig",
+            .text = "_ = @import(\"b.zig\");\n",
+        },
+        .{ .path = "src\\a.zig", .text = "" },
+        .{ .path = "src\\b.zig", .text = "" },
+    };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '\\', &report);
+
+    try std.testing.expectEqualStrings(
+        \\  src\a.zig: imported by src\root.zig without forced declaration analysis
+        \\  src\b.zig: imported by src\root.zig without forced declaration analysis
+        \\  src\b.zig: imported by src\main.zig without forced declaration analysis
+        \\
+    , report.items);
+}
+
 test "declaration-analysis gate constrains only the test roots' own imports" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -1172,6 +1209,33 @@ test "checkedFiles fails loudly when a checked path stops existing" {
         checkedFiles(tmp.dir, io, arena, &gate_paths, &failed_path),
     );
     try std.testing.expectEqualStrings("gone", failed_path.?);
+}
+
+test "checkedFiles names the gate path when a directory walk fails" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The walk half of the failed-path contract: a link to a directory
+    // inside a listed path rejects the walk, and the error surfaces with
+    // failed_path naming the *gate path* — "src", not the link — the value
+    // make()'s report prints. The stat branch above pins its own half; this
+    // pins that the dispatcher's walk catch sets it too.
+    (try tmp.dir.createDirPathOpen(io, "src/sub", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/sub/deep.zig", .data = "" });
+    try tmp.dir.symLink(io, "sub", "src/vendor", .{});
+
+    const gate_paths = [_][]const u8{"src"};
+    var failed_path: ?[]const u8 = null;
+    try std.testing.expectError(
+        error.LinkedDirectoryNotWalked,
+        checkedFiles(tmp.dir, io, arena, &gate_paths, &failed_path),
+    );
+    try std.testing.expectEqualStrings("src", failed_path.?);
 }
 
 test "appendZigFilesUnder collects every .zig file below the directory, and only files" {
