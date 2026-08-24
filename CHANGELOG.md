@@ -7,6 +7,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- Two more lint-gate test repairs: the import-cycle classification test now
+  also pins that modules reachable only through an unreachable importer are
+  reported beside it (the walk seeds from test roots only), and
+  importBetween's climb-out is checked two directories deep — one "../" per
+  level left under the importing file's directory.
 - Two coverage repairs in the lint-gate tests: the toolchain-floor test now
   pins the complementary prerelease boundary (a release toolchain satisfies
   a prerelease floor of the same release; build metadata orders equal), and

@@ -589,6 +589,18 @@ test "importBetween resolves the import string from the importing file's directo
         "../other/y.zig",
         try TestRegistrationStep.importBetween(arena, "src/sub/x.zig", "src/other/y.zig", '/'),
     );
+    // One ".." per directory left under the importer: c.zig sits in
+    // src/a/b/, two levels below src/. Backslashes here double as another
+    // pass through the separator normalization.
+    try std.testing.expectEqualStrings(
+        "../../top.zig",
+        try TestRegistrationStep.importBetween(
+            arena,
+            "src\\a\\b\\c.zig",
+            "src\\top.zig",
+            '\\',
+        ),
+    );
     // The shared prefix must stop on a '/' boundary: src/aa/ and src/ab/
     // share "src/a" byte-wise but are different directories.
     try std.testing.expectEqualStrings(
@@ -699,33 +711,41 @@ test "test-registration gate reports exactly the modules no chain reaches from a
     );
 }
 
-test "classifyModules classifies through an import cycle and still reports the orphan" {
+test "classifyModules classifies through an import cycle and reports modules below an orphan" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     // Two reachable modules importing each other: real trees do this for
     // shared types, and the walk must visit the pair once — reporting both
-    // as reached, terminating, and still naming the module outside the
+    // as reached, terminating, and still naming the modules outside the
     // cycle. The exact report doubles as the termination proof: a walk
     // that re-enqueued visited modules never reached these assertions.
+    //
+    // The chain below the cycle matters too: down.zig is imported by
+    // orphan.zig, which no root reaches, so down.zig has no chain from a
+    // test root either and must be reported beside its importer — a walk
+    // that seeded from unreachable modules instead of only the roots would
+    // quietly classify the pair as covered.
     const sources = [_]Source{
         .{ .path = "src\\root.zig", .text = "_ = @import(\"a.zig\");\n" },
         .{ .path = "src\\main.zig", .text = "" },
         .{ .path = "src\\a.zig", .text = "_ = @import(\"b.zig\");\n" },
         .{ .path = "src\\b.zig", .text = "_ = @import(\"a.zig\");\n" },
-        .{ .path = "src\\orphan.zig", .text = "" },
+        .{ .path = "src\\orphan.zig", .text = "_ = @import(\"down.zig\");\n" },
+        .{ .path = "src\\down.zig", .text = "" },
     };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
     var count: usize = 0;
     try TestRegistrationStep.classifyModules(arena, &sources, '\\', &report, &count);
 
-    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqual(@as(usize, 2), count);
     try std.testing.expectEqualStrings(
-        "  src\\orphan.zig: not reachable from a test root\n",
-        report.items,
-    );
+        \\  src\orphan.zig: not reachable from a test root
+        \\  src\down.zig: not reachable from a test root
+        \\
+    , report.items);
 }
 
 test "hasRealImport counts only a real @import call" {
