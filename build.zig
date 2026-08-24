@@ -39,9 +39,10 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    // addRunArtifact already ties the run to the freshly built binary; no
+    // step here needs the install performed first.
     const run_step = b.step("run", "Build and run the spine node");
     const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
     run_step.dependOn(&run_cmd.step);
 
@@ -428,10 +429,10 @@ const TestRegistrationStep = struct {
         report: *std.ArrayListUnmanaged(u8),
         count: *usize,
     ) !void {
+        // Both containers allocate from the caller's arena, which outlives
+        // this function, so they need no deinit of their own.
         var reachable: std.StringArrayHashMapUnmanaged(void) = .empty;
-        defer reachable.deinit(arena);
         var queue: std.ArrayListUnmanaged([]const u8) = .empty;
-        defer queue.deinit(arena);
         for (sources) |source| {
             if (try isTestRoot(arena, source.path, sep)) try queue.append(arena, source.path);
         }
