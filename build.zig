@@ -278,12 +278,28 @@ const Source = struct {
     text: []const u8,
 };
 
+/// Reports a checkedFiles enumeration failure through `step`, naming the
+/// gate path that stopped it when there is one and falling back to a
+/// generic subject when none belongs to the error. Every caller of
+/// checkedFiles reports through this one copy, so the wording and the
+/// unnamed-path fallback cannot drift apart between the gates.
+fn failEnumeration(
+    step: *std.Build.Step,
+    err: anyerror,
+    failed_path: ?[]const u8,
+) error{ OutOfMemory, MakeFailed } {
+    return step.fail("cannot enumerate '{s}': {s}", .{
+        failed_path orelse "the checked paths",
+        @errorName(err),
+    });
+}
+
 /// The shared front half of both analysis steps' make(): enumerates the
 /// files `gate_paths` covers and reads each whole, reporting both failure
-/// modes — a gate path that cannot be enumerated, a covered file that
-/// cannot be read — through step.fail with the offending path named. One
-/// copy serves both steps so the report wording and the fallback for an
-/// unnamed path cannot drift apart.
+/// modes — a gate path that cannot be enumerated (failEnumeration), a
+/// covered file that cannot be read — through step.fail with the offending
+/// path named. One copy serves both steps so the report wording and the
+/// fallback for an unnamed path cannot drift apart.
 fn loadCheckedSources(
     step: *std.Build.Step,
     root_dir: std.Io.Dir,
@@ -293,10 +309,7 @@ fn loadCheckedSources(
 ) ![]Source {
     var failed_path: ?[]const u8 = null;
     const paths = checkedFiles(root_dir, io, arena, gate_paths, &failed_path) catch |err|
-        return step.fail("cannot enumerate '{s}': {s}", .{
-            failed_path orelse "the checked paths",
-            @errorName(err),
-        });
+        return failEnumeration(step, err, failed_path);
     const sources = try arena.alloc(Source, paths.len);
     for (paths, 0..) |path, i| {
         sources[i] = .{
@@ -1549,7 +1562,8 @@ const GateCoverageStep = struct {
         // The covered side comes from the same dispatcher the two
         // file-covering gates use, so this gate compares against exactly
         // what they check — never against its own re-derivation of the
-        // checked set that could drift from theirs.
+        // checked set that could drift from theirs. Its enumeration failure
+        // reports through the same one copy they use.
         var failed_path: ?[]const u8 = null;
         const covered = checkedFiles(
             b.build_root.handle,
@@ -1557,11 +1571,7 @@ const GateCoverageStep = struct {
             arena,
             &checked_paths,
             &failed_path,
-        ) catch |err|
-            return step.fail("cannot enumerate '{s}': {s}", .{
-                failed_path orelse "the checked paths",
-                @errorName(err),
-            });
+        ) catch |err| return failEnumeration(step, err, failed_path);
 
         var candidates: std.ArrayListUnmanaged([]const u8) = .empty;
         // The walk can fail on one specific entry (a linked directory it
