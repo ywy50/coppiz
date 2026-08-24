@@ -605,7 +605,36 @@ const TestRegistrationStep = struct {
             try out.appendSlice(arena, "../");
         }
         try out.appendSlice(arena, to[boundary..]);
-        return out.toOwnedSlice(arena);
+        return normalizeImportPath(arena, try out.toOwnedSlice(arena));
+    }
+
+    /// Collapses an @import string to the one form Zig resolves it to: empty
+    /// components ("a//b"), "." components ("./a.zig", "a/./b.zig") and
+    /// "name/.." pairs ("sub/../x.zig") disappear — each spelling reaches
+    /// the same file and collects its tests, so the gates must not tell them
+    /// apart (an exact-byte match failed a tree whose tests ran). Leading
+    /// ".." runs survive: they climb out of the importer's directory, which
+    /// has no further parent to pop into. Applied where import strings enter
+    /// the gates — collectImports' recorded paths and importBetween's
+    /// computed ones — so every comparison below sees canonical text.
+    fn normalizeImportPath(arena: std.mem.Allocator, raw: []const u8) ![]const u8 {
+        var parts: std.ArrayListUnmanaged([]const u8) = .empty;
+        var it = std.mem.splitScalar(u8, raw, '/');
+        while (it.next()) |part| {
+            if (part.len == 0 or std.mem.eql(u8, part, ".")) continue;
+            if (std.mem.eql(u8, part, "..")) {
+                const poppable = parts.items.len > 0 and
+                    !std.mem.eql(u8, parts.items[parts.items.len - 1], "..");
+                if (poppable) {
+                    _ = parts.pop();
+                } else {
+                    try parts.append(arena, part);
+                }
+                continue;
+            }
+            try parts.append(arena, part);
+        }
+        return std.mem.join(arena, "/", parts.items);
     }
 
     /// Rewrites filesystem separators to import separators ('/'), the only
@@ -633,7 +662,8 @@ const TestRegistrationStep = struct {
     }
 
     /// One real `@import("path")` call found in a token stream: `path` is the
-    /// literal between the quotes, `wrapped` whether the call sits directly
+    /// literal between the quotes, normalized (normalizeImportPath), and
+    /// `wrapped` whether the call sits directly
     /// inside a `std.testing.refAllDecls`/`refAllDeclsRecursive` argument
     /// list — the form that forces the target's public declarations through
     /// the analyzer, not merely collects its tests. Comments and every kind
@@ -668,7 +698,10 @@ const TestRegistrationStep = struct {
                     (std.mem.eql(u8, prev_slices[0], "refAllDecls") or
                         std.mem.eql(u8, prev_slices[0], "refAllDeclsRecursive"));
                 try refs.append(arena, .{
-                    .path = terminated[token.loc.start + 1 .. token.loc.end - 1],
+                    .path = try normalizeImportPath(
+                        arena,
+                        terminated[token.loc.start + 1 .. token.loc.end - 1],
+                    ),
                     .wrapped = wrapped,
                 });
             }
@@ -740,6 +773,91 @@ const TestRegistrationStep = struct {
         }
     }
 };
+
+test "normalizeImportPath collapses the legal spellings Zig resolves to one target" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Every right-hand spelling reaches the same file as the left-hand one
+    // (verified on 0.16.0: @import("./sub/x.zig") collects the target's
+    // tests), so an exact-byte comparison reported a reachable module as
+    // unreachable — and hid bare imports behind wrappers spelled with "./".
+    const cases = [_][2][]const u8{
+        .{ "sub/x.zig", "sub/x.zig" },
+        .{ "./sub/x.zig", "sub/x.zig" },
+        .{ "sub//x.zig", "sub/x.zig" },
+        .{ "sub/./x.zig", "sub/x.zig" },
+        .{ "sub/../sub/x.zig", "sub/x.zig" },
+        .{ "a/b/../../c.zig", "c.zig" },
+        // Leading ".." runs climb out of the importer's directory: nothing
+        // above them to pop, so they survive verbatim.
+        .{ "../other/y.zig", "../other/y.zig" },
+        .{ "../../..", "../../.." },
+        .{ "a/../../b.zig", "../b.zig" },
+        // Package and builtin names pass through untouched.
+        .{ "std", "std" },
+        .{ "", "" },
+    };
+    for (cases) |case| {
+        try std.testing.expectEqualStrings(
+            case[1],
+            try TestRegistrationStep.normalizeImportPath(arena, case[0]),
+        );
+    }
+}
+
+test "test-registration gate matches imports spelled with a redundant '.' or '..'" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Both imports are real calls whose targets' tests run; only their
+    // spelling differs from the canonical form importBetween computes.
+    const sources = [_]Source{
+        .{
+            .path = "src\\main.zig",
+            .text = "comptime {\n" ++
+                "    _ = @import(\"./helper.zig\");\n" ++
+                "    _ = @import(\"sub/../lateral.zig\");\n" ++
+                "}\n",
+        },
+        .{ .path = "src\\root.zig", .text = "" },
+        .{ .path = "src\\helper.zig", .text = "" },
+        .{ .path = "src\\lateral.zig", .text = "" },
+    };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    try TestRegistrationStep.classifyModules(arena, &sources, '\\', &report);
+
+    try std.testing.expectEqual(@as(usize, 0), report.items.len);
+}
+
+test "declaration-analysis gate treats wrapped spellings as wrapping the module" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The wrapper and the bare import name the same file through different
+    // spellings; normalization puts both on one form, so the documented
+    // pairing is satisfied and neither is reported.
+    const sources = [_]Source{
+        .{
+            .path = "src\\root.zig",
+            .text = "_ = @import(\"./a.zig\");\n" ++
+                "test {\n" ++
+                "    std.testing.refAllDecls(@import(\".//a.zig\"));\n" ++
+                "}\n",
+        },
+        .{ .path = "src\\main.zig", .text = "" },
+        .{ .path = "src\\a.zig", .text = "" },
+    };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    try TestRegistrationStep.declarationAnalysisGaps(arena, &sources, '\\', &report);
+
+    try std.testing.expectEqual(@as(usize, 0), report.items.len);
+}
 
 test "importBetween resolves the import string from the importing file's directory" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);

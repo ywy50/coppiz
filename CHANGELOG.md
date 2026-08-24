@@ -47,6 +47,20 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The test-registration and declaration-analysis gates now match `@import`
+  strings in their resolved form instead of byte-for-byte. Zig accepts
+  spellings the exact comparison rejected or mismatched — a comptime
+  `_ = @import("./sub/x.zig")` from a test root collected the target's
+  tests (verified on 0.16.0 with a deliberately failing probe test) while
+  the registration gate failed the tree as "not reachable from a test
+  root"; a wrapper spelled `refAllDecls(@import(".//a.zig"))` did not
+  silence a bare `@import("a.zig")` beside it; and interior `"name/.."`
+  pairs matched nothing. Import strings are canonicalized where they enter
+  the gates (`collectImports`' recorded paths, `importBetween`'s computed
+  ones): empty components ("a//b"), "." components and resolvable "name/.."
+  pairs collapse; leading ".." runs survive, there being no parent above
+  them to pop into.
+
 - Two accuracy repairs from this audit: docs/README no longer says every PRD
   cites the brief — PRD
   [0006](docs/prds/0006-scaling-to-groups-sharding-and-parity.md) postdates
