@@ -333,22 +333,22 @@ fn enterForcedDirectory(
 /// out of both covering gates while they stayed green. A linked directory
 /// is still rejected loudly instead of half-checked.
 ///
-/// On failure `failed_entry` names the walked entry that could not be
+/// On failure `failed_path` names the walked entry that could not be
 /// handled — the link or unclassifiable entry whose resolution failed, or
 /// the linked directory the walk rejects — joined under `dir_path`, the
 /// build-root-relative form both gates report, so the caller can name it
 /// instead of leaving the operator to find it inside `dir_path` by hand
-/// (the same rule appendProjectZigFiles follows for its walk; next()
-/// invalidates its slices, so each name is copied out before returning). A
-/// failure belonging to no single entry — allocation alone — leaves it
-/// unset, and checkedFiles falls back to naming the gate path.
+/// (the same rule appendProjectZigFiles' `failed_path` follows for its
+/// walk; next() invalidates its slices, so each name is copied out before
+/// returning). A failure belonging to no single entry — allocation alone —
+/// leaves it unset, and checkedFiles falls back to naming the gate path.
 fn appendZigFilesUnder(
     root_dir: std.Io.Dir,
     io: std.Io,
     arena: std.mem.Allocator,
     dir_path: []const u8,
     paths: *std.ArrayListUnmanaged([]const u8),
-    failed_entry: *?[]const u8,
+    failed_path: *?[]const u8,
 ) !void {
     var dir = try root_dir.openDir(io, dir_path, .{ .iterate = true });
     defer dir.close(io);
@@ -359,13 +359,13 @@ fn appendZigFilesUnder(
         // stands at the build root: classification probes and collects
         // through dir_path joined onto it, the form both gates report.
         const classified = classifyWalkedEntry(root_dir, io, arena, dir_path, entry) catch |err| {
-            failed_entry.* = try std.fs.path.join(arena, &.{ dir_path, entry.path });
+            failed_path.* = try std.fs.path.join(arena, &.{ dir_path, entry.path });
             return err;
         };
         switch (classified) {
             .zig_source => |path| try paths.append(arena, path),
             .linked_directory => {
-                failed_entry.* = try std.fs.path.join(arena, &.{ dir_path, entry.path });
+                failed_path.* = try std.fs.path.join(arena, &.{ dir_path, entry.path });
                 return error.LinkedDirectoryNotWalked;
             },
             .directory => try enterForcedDirectory(&walker, io, entry),
@@ -2128,15 +2128,15 @@ test "appendZigFilesUnder collects every .zig file below the directory, and only
     try tmp.dir.writeFile(io, .{ .sub_path = "src/a/b/deep.zig", .data = "" });
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
-    var failed_entry: ?[]const u8 = null;
-    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_entry);
+    var failed_path: ?[]const u8 = null;
+    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_path);
     std.mem.sort([]const u8, found.items, {}, lessThanStrings);
 
     // Each result is dir_path joined with the walker-relative path, the
     // shape both gates report and read back through root_dir — joined with
     // the platform separator on every host.
     try std.testing.expectEqual(@as(usize, 3), found.items.len);
-    try std.testing.expect(failed_entry == null);
+    try std.testing.expect(failed_path == null);
     const sep_str = std.fs.path.sep_str;
     try std.testing.expectEqualStrings(
         "src" ++ sep_str ++ "a" ++ sep_str ++ "b" ++ sep_str ++ "deep.zig",
@@ -2167,8 +2167,8 @@ test "appendZigFilesUnder analyzes a symlinked .zig file like a real one" {
     try symLinkOrSkip(tmp.dir, io, .{ .target = "real.zig", .link = "src/link.zig" }, .{});
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
-    var failed_entry: ?[]const u8 = null;
-    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_entry);
+    var failed_path: ?[]const u8 = null;
+    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_path);
     std.mem.sort([]const u8, found.items, {}, lessThanStrings);
 
     try std.testing.expectEqual(@as(usize, 2), found.items.len);
@@ -2292,10 +2292,10 @@ test "appendZigFilesUnder rejects a linked directory whose walk cannot descend" 
     );
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
-    var failed_entry: ?[]const u8 = null;
+    var failed_path: ?[]const u8 = null;
     try std.testing.expectError(
         error.LinkedDirectoryNotWalked,
-        appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_entry),
+        appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_path),
     );
 
     // The rejection names the walked entry — the link itself, joined under
@@ -2304,7 +2304,7 @@ test "appendZigFilesUnder rejects a linked directory whose walk cannot descend" 
     // appendProjectZigFiles applies to its own walk.
     try std.testing.expectEqualStrings(
         "src" ++ std.fs.path.sep_str ++ "vendor",
-        failed_entry.?,
+        failed_path.?,
     );
 }
 
