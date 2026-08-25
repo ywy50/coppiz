@@ -53,6 +53,26 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A linked directory listed in `checked_paths` no longer fails the
+  gate-coverage walk that the covering gates themselves bless. `checkedFiles`
+  follows a listed path that symlinks a directory so its subtree reaches every
+  covering gate (pinned by its own test), but the coverage-completeness walk
+  rejected *every* linked directory it met — including that same listed link —
+  so no spelling of the allowlist admitted a symlinked library directory:
+  unlisted, the rejection named it ("cannot walk 'linked-lib':
+  LinkedDirectoryNotWalked"); listed, the coverage walk hit the link again and
+  rejected the very tree the allowlist blessed, with `zig build test` failing
+  either way. The coverage walk now follows a linked directory exactly where
+  its walked path names a gate path — one hop through the same
+  `appendZigFilesUnder` call the covering gates use, so both sides of the
+  covered/candidate comparison derive from one policy — and keeps the loud
+  rejection for unlisted links, whose subtree would otherwise escape every
+  gate silently and whose blanket following would need cycle protection no
+  tree justifies. Near-miss `.zig` names behind a followed link are collected
+  beside its sources (`appendZigFilesUnder` gained an include-near-miss arm
+  the covering gates leave off), matching how such names behave behind a
+  listed real directory.
+
 - Stale gate counts in build.zig's comments: `checked_paths`'s doc listed
   only three of the four surfaces sharing it (the test-registration walk was
   missing) and said a vanished path fails "both gates" where every consumer

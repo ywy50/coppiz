@@ -229,7 +229,15 @@ fn checkedFiles(
         };
         if (stat.kind == .directory) {
             var failed_entry: ?[]const u8 = null;
-            appendZigFilesUnder(root_dir, io, arena, path, &paths, &failed_entry) catch |err| {
+            appendZigFilesUnder(
+                root_dir,
+                io,
+                arena,
+                path,
+                &paths,
+                &failed_entry,
+                false,
+            ) catch |err| {
                 failed_path.* = failed_entry orelse path;
                 return err;
             };
@@ -257,8 +265,9 @@ const WalkedEntry = union(enum) {
     directory,
     /// A link resolving to a directory: neither walker may descend into it
     /// (following it would need cycle protection no current tree
-    /// justifies), so its subtree would escape every gate silently —
-    /// reject loudly instead.
+    /// justifies), so its subtree would escape every gate silently — the
+    /// covering walks reject it loudly, and the coverage walk follows it
+    /// one hop only where the allowlist already lists it (appendProjectZigFiles).
     linked_directory,
     /// Anything else: not a Zig source.
     other,
@@ -324,6 +333,17 @@ fn enterForcedDirectory(
     try walker.enter(io, descend);
 }
 
+/// Rewrites filesystem separators to '/' — the only form inside an @import
+/// string, and the form `checked_paths` is written in. A no-op where the
+/// separator is already '/'. One copy serves every walked-path-vs-listed-path
+/// comparison (the test roots', and the coverage walk's linked-directory
+/// check against the gate paths) so they cannot drift apart; `separator` is a
+/// parameter so any platform can be simulated in a test.
+fn normalizeSeparators(arena: std.mem.Allocator, path: []const u8, separator: u8) ![]const u8 {
+    if (separator == '/') return path;
+    return std.mem.replaceOwned(u8, arena, path, &.{separator}, "/");
+}
+
 /// Appends every .zig file under the directory `dir_path`, as a path from
 /// the build root ("src/foo.zig"), in walker order. The walk is selective
 /// so directories are entered explicitly: a d_type-less mount (XFS with
@@ -342,6 +362,15 @@ fn enterForcedDirectory(
 /// walk; next() invalidates its slices, so each name is copied out before
 /// returning). A failure belonging to no single entry — allocation alone —
 /// leaves it unset, and checkedFiles falls back to naming the gate path.
+///
+/// `include_near_miss` widens the collection by exactly one class: a file
+/// whose name names a Zig source in a spelling every covering gate's filter
+/// skips ("Legacy.ZIG", "root.zig~"; zigNearMissName's whole set) classifies
+/// as .other and is appended as a candidate beside the sources. The covering
+/// gates pass false — those files are invisible to them by design, and
+/// collecting them here would change what they check; the coverage walk's
+/// followed linked directories pass true, so a near-miss source behind a
+/// listed link is reported exactly like one behind a listed real directory.
 fn appendZigFilesUnder(
     root_dir: std.Io.Dir,
     io: std.Io,
@@ -349,6 +378,7 @@ fn appendZigFilesUnder(
     dir_path: []const u8,
     paths: *std.ArrayListUnmanaged([]const u8),
     failed_path: *?[]const u8,
+    include_near_miss: bool,
 ) !void {
     var dir = try root_dir.openDir(io, dir_path, .{ .iterate = true });
     defer dir.close(io);
@@ -369,7 +399,15 @@ fn appendZigFilesUnder(
                 return error.LinkedDirectoryNotWalked;
             },
             .directory => try enterForcedDirectory(&walker, io, entry),
-            .other => {},
+            .other => if (include_near_miss and zigNearMissName(entry.basename)) {
+                // The widened collection include_near_miss asks for: joined
+                // under dir_path like a source's path, the form the coverage
+                // walk reports and compares against its covered set. The join
+                // is freshly allocated, so it survives next() invalidating
+                // the walker's slices — the same rule the .zig_source branch
+                // follows through classifyWalkedEntry.
+                try paths.append(arena, try std.fs.path.join(arena, &.{ dir_path, entry.path }));
+            },
         }
     }
 }
@@ -1023,7 +1061,7 @@ const TestRegistrationStep = struct {
         path: []const u8,
         separator: u8,
     ) !bool {
-        const normalized = try importSeparators(arena, path, separator);
+        const normalized = try normalizeSeparators(arena, path, separator);
         for (test_roots) |root_path| {
             if (std.mem.eql(u8, normalized, root_path)) return true;
         }
@@ -1056,8 +1094,8 @@ const TestRegistrationStep = struct {
         pair: ImportPair,
         separator: u8,
     ) ![]const u8 {
-        const from = try importSeparators(arena, pair.from, separator);
-        const to = try importSeparators(arena, pair.to, separator);
+        const from = try normalizeSeparators(arena, pair.from, separator);
+        const to = try normalizeSeparators(arena, pair.to, separator);
         // Resolution is anchored at the importing file's directory, so the
         // filename comes off before the relative walk: "src/root.zig"
         // reaches its neighbor as "sub/x.zig", not "../sub/x.zig". A
@@ -1101,15 +1139,6 @@ const TestRegistrationStep = struct {
             if (!named.contains(wanted)) try named.put(arena, wanted, candidate.path);
         }
         return named;
-    }
-
-    /// Rewrites filesystem separators to import separators ('/'), the only
-    /// form that can appear inside an @import string. A no-op where the
-    /// separator is already '/'; `separator` is a parameter so any platform can be
-    /// simulated in a test.
-    fn importSeparators(arena: std.mem.Allocator, path: []const u8, separator: u8) ![]const u8 {
-        if (separator == '/') return path;
-        return std.mem.replaceOwned(u8, arena, path, &.{separator}, "/");
     }
 
     /// True when `imports` — one module's collectImports result — contains
@@ -1467,7 +1496,7 @@ test "importBetween resolves the import string from the importing file's directo
 
     // The Windows case, simulated on every host through the separator argument:
     // walked paths are normalized before resolution.
-    const win = try TestRegistrationStep.importSeparators(arena, "sub\\x\\y.zig", '\\');
+    const win = try normalizeSeparators(arena, "sub\\x\\y.zig", '\\');
     try std.testing.expectEqualStrings("sub/x/y.zig", win);
     try std.testing.expectEqualStrings(
         "y.zig",
@@ -1492,7 +1521,7 @@ test "test roots match whatever separator the walker produced" {
     try std.testing.expect(!try TestRegistrationStep.isTestRoot(arena, "src\\sub\\x.zig", '\\'));
 
     // What make() sees on this host.
-    const native = try TestRegistrationStep.importSeparators(
+    const native = try normalizeSeparators(
         arena,
         "src/root.zig",
         std.fs.path.sep,
@@ -2131,7 +2160,7 @@ test "appendZigFilesUnder collects every .zig file below the directory, and only
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     var failed_path: ?[]const u8 = null;
-    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_path);
+    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_path, false);
     std.mem.sort([]const u8, found.items, {}, lessThanStrings);
 
     // Each result is dir_path joined with the walker-relative path, the
@@ -2170,7 +2199,7 @@ test "appendZigFilesUnder analyzes a symlinked .zig file like a real one" {
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     var failed_path: ?[]const u8 = null;
-    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_path);
+    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_path, false);
     std.mem.sort([]const u8, found.items, {}, lessThanStrings);
 
     try std.testing.expectEqual(@as(usize, 2), found.items.len);
@@ -2297,7 +2326,7 @@ test "appendZigFilesUnder rejects a linked directory whose walk cannot descend" 
     var failed_path: ?[]const u8 = null;
     try std.testing.expectError(
         error.LinkedDirectoryNotWalked,
-        appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_path),
+        appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_path, false),
     );
 
     // The rejection names the walked entry — the link itself, joined under
@@ -2349,11 +2378,12 @@ const GateCoverageStep = struct {
         ) catch |err| return failEnumeration(step, err, failed_path);
 
         var candidates: std.ArrayListUnmanaged([]const u8) = .empty;
-        // The walk can fail on one specific entry (a linked directory it
-        // must reject, a link that no longer resolves): failed_entry names
-        // it, the way checkedFiles now names the entry its own walk stopped
-        // on — a bare error name would leave the operator to find the entry
-        // by hand among everything the walk visited.
+        // The walk can fail on one specific entry (an unlisted linked
+        // directory it must reject, a link that no longer resolves):
+        // failed_entry names it, the way checkedFiles now names the entry
+        // its own walk stopped on — a bare error name would leave the
+        // operator to find the entry by hand among everything the walk
+        // visited.
         var failed_entry: ?[]const u8 = null;
         appendProjectZigFiles(
             b.build_root.handle,
@@ -2361,6 +2391,12 @@ const GateCoverageStep = struct {
             arena,
             &candidates,
             &failed_entry,
+            // The same allowlist the covered side expands, so a listed
+            // linked directory is followed on both sides of the comparison
+            // and an unlisted one rejected: the walk can never disagree
+            // with the covering gates about which links are walked.
+            &checked_paths,
+            std.fs.path.sep,
         ) catch |err| {
             if (failed_entry) |entry|
                 return step.fail("cannot walk '{s}': {s}", .{ entry, @errorName(err) });
@@ -2491,10 +2527,9 @@ test "zigNearMissName catches every spelling a gate's filters skip" {
 /// thousands of entries that would otherwise be visited on every lint run.
 /// Entry classification goes through classifyWalkedEntry, the same policy
 /// appendZigFilesUnder applies for the covering gates — a linked .zig file
-/// is collected like a real one (entering is explicit with a selective
-/// walker, so classifyWalkedEntry rejects a linked directory loudly while a
-/// directory only the probe reveals is entered with its kind forced, its
-/// subtree reportable like any other on a d_type-less mount). One class of
+/// is collected like a real one, and a directory only the probe reveals is
+/// entered with its kind forced, its subtree reportable like any other on a
+/// d_type-less mount. One class of
 /// entry lands here beyond the classifier's own:
 /// a file whose name names a Zig source in a spelling every gate skips —
 /// a wrong-case ".zig" suffix ("Legacy.ZIG") or a backup/reject file
@@ -2503,6 +2538,22 @@ test "zigNearMissName catches every spelling a gate's filters skip" {
 /// source no gate sees, so the .other branch collects it as a candidate
 /// the covering set cannot match — the report names it, and renaming to
 /// the lowercase spelling (or deleting it) ends the failure.
+///
+/// A linked directory splits by whether its walked path names one of
+/// `gate_paths` (the allowlist, '/'-separated; `separator` translates the
+/// walked form so any platform can be simulated in a test). Listed, the
+/// covering gates follow it — checkedFiles stats through the link and hands
+/// the target's subtree to appendZigFilesUnder — so rejecting it here would
+/// fail the very tree the allowlist blesses, with no checked_paths spelling
+/// left that admits a linked library directory: unlisted, its subtree would
+/// escape every gate and the rejection below fails loudly; listed, that
+/// escape argument does not hold and this walk follows it one hop through
+/// appendZigFilesUnder, collecting exactly the paths the covered side holds
+/// (plus near-miss names, which no covering gate sees inside either real or
+/// linked directories). Unlisted, it stays the loud rejection: following
+/// every link met mid-walk needs cycle protection no tree justifies, and an
+/// unlisted link's subtree reaches no gate — the silent-escape shape this
+/// walk exists to name.
 ///
 /// On failure `failed_path` names the walked entry that could not be handled —
 /// the link or unclassifiable entry whose resolution failed or the directory
@@ -2517,6 +2568,8 @@ fn appendProjectZigFiles(
     arena: std.mem.Allocator,
     paths: *std.ArrayListUnmanaged([]const u8),
     failed_path: *?[]const u8,
+    gate_paths: []const []const u8,
+    separator: u8,
 ) !void {
     var dir = try root_dir.openDir(io, ".", .{ .iterate = true });
     defer dir.close(io);
@@ -2534,8 +2587,38 @@ fn appendProjectZigFiles(
         switch (classified) {
             .directory => try enterForcedDirectory(&walker, io, entry),
             .linked_directory => {
-                failed_path.* = try arena.dupe(u8, entry.path);
-                return error.LinkedDirectoryNotWalked;
+                const normalized = try normalizeSeparators(arena, entry.path, separator);
+                var listed = false;
+                for (gate_paths) |gate_path| {
+                    if (std.mem.eql(u8, normalized, gate_path)) {
+                        listed = true;
+                        break;
+                    }
+                }
+                if (!listed) {
+                    failed_path.* = try arena.dupe(u8, entry.path);
+                    return error.LinkedDirectoryNotWalked;
+                }
+                // The listed link: follow it one hop, exactly as checkedFiles
+                // does for the covering gates — openDir resolves the link and
+                // appendZigFilesUnder walks the target, joining under the
+                // link's walked path, the form the covered set was built in.
+                // A link inside the target still rejects loudly, here and in
+                // the covering walk alike. next() invalidates its slices, so
+                // the failure name is copied out before returning.
+                var failed_entry: ?[]const u8 = null;
+                appendZigFilesUnder(
+                    root_dir,
+                    io,
+                    arena,
+                    entry.path,
+                    paths,
+                    &failed_entry,
+                    true,
+                ) catch |err| {
+                    failed_path.* = failed_entry orelse try arena.dupe(u8, entry.path);
+                    return err;
+                };
             },
             // The "" prefix joins to the entry's walked path itself: the
             // fresh copy outlives the walker slice it was derived from.
@@ -2685,7 +2768,7 @@ test "appendProjectZigFiles walks the tree minus tooling directories, links incl
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     var failed_path: ?[]const u8 = null;
-    try appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path);
+    try appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path, &.{}, std.fs.path.sep);
     std.mem.sort([]const u8, found.items, {}, lessThanStrings);
 
     // A clean walk names no failing entry: make()'s report stays generic
@@ -2729,7 +2812,7 @@ test "appendProjectZigFiles collects a near-miss .zig name as a candidate" {
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     var failed_path: ?[]const u8 = null;
-    try appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path);
+    try appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path, &.{}, std.fs.path.sep);
     std.mem.sort([]const u8, found.items, {}, lessThanStrings);
 
     try std.testing.expectEqual(@as(usize, 3), found.items.len);
@@ -2751,10 +2834,12 @@ test "appendProjectZigFiles rejects a linked directory like the gate-path walk" 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    // One policy everywhere: SelectiveWalker enters only entries reported
-    // as directories and links are not, so the subtree behind the link
-    // would silently escape this gate too — fail loudly instead, the
+    // One policy everywhere for an *unlisted* link: SelectiveWalker enters
+    // only entries reported as directories and links are not, so the subtree
+    // behind it would silently escape every gate — fail loudly instead, the
     // direction appendZigFilesUnder already chose for the covering gates.
+    // The empty gate_paths make this the unlisted case by construction; a
+    // link the gate paths list is the followed counterpart in the test below.
     (try tmp.dir.createDirPathOpen(io, "tools/sub", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "tools/sub/deep.zig", .data = "" });
     // The link's target resolves relative to the link's own directory, the
@@ -2770,16 +2855,82 @@ test "appendProjectZigFiles rejects a linked directory like the gate-path walk" 
     var failed_path: ?[]const u8 = null;
     try std.testing.expectError(
         error.LinkedDirectoryNotWalked,
-        appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path),
+        appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path, &.{}, std.fs.path.sep),
     );
-
-    // The rejection names the walked entry — the link itself, in walked-path
-    // form (platform separators) — so make()'s report says which entry
-    // stopped the walk instead of a bare error name the operator would have
-    // to locate by hand.
     try std.testing.expectEqualStrings(
         "tools" ++ std.fs.path.sep_str ++ "vendor",
         failed_path.?,
+    );
+}
+
+test "appendProjectZigFiles follows a linked directory the gate paths list" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The catch-22 this pins shut: checkedFiles follows a *listed* link and
+    // hands its subtree to the covering gates ("a listed path that symlinks
+    // a directory must contribute its subtree"), so rejecting that same link
+    // here failed every spelling of the allowlist — unlisted, the rejection
+    // above; listed, this same walk met the link again and rejected a tree
+    // the allowlist blessed. Listed, the coverage walk now follows one hop
+    // through the same appendZigFilesUnder call the covering gates use, so
+    // both sides of the covered/candidate comparison derive from one policy.
+    // The layout is the checkedFiles link test's plus two controls: a
+    // near-miss name inside the followed subtree — no covering gate sees it,
+    // exactly as behind a listed real directory, so the widened collection
+    // keeps it reportable — and an ordinary source outside the link.
+    (try tmp.dir.createDirPathOpen(io, "vendor/nested", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "vendor/nested/deep.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "vendor/Legacy.ZIG", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/ok.zig", .data = "" });
+    try symLinkOrSkip(
+        tmp.dir,
+        io,
+        .{ .target = "vendor", .link = "linked-lib" },
+        .{ .is_directory = true },
+    );
+
+    const gate_paths = [_][]const u8{"linked-lib"};
+    var found: std.ArrayListUnmanaged([]const u8) = .empty;
+    var failed_path: ?[]const u8 = null;
+    try appendProjectZigFiles(
+        tmp.dir,
+        io,
+        arena,
+        &found,
+        &failed_path,
+        &gate_paths,
+        std.fs.path.sep,
+    );
+    std.mem.sort([]const u8, found.items, {}, lessThanStrings);
+
+    // Five entries, each subtree spelling twice: the walk descends the real
+    // vendor/ directory natively and follows the listed link beside it, so
+    // every file arrives under both prefixes — the same dual reachability a
+    // real listed link produces, and harmless to the gate (candidates the
+    // covered set holds stay silent whatever their multiplicity). The
+    // near-miss name appears under both prefixes too: no covering gate sees
+    // either spelling, so both stay reportable, matching how the same file
+    // behind a listed *real* directory behaves.
+    try std.testing.expectEqual(@as(usize, 5), found.items.len);
+    try std.testing.expect(failed_path == null);
+    const sep_str = std.fs.path.sep_str;
+    try std.testing.expectEqualStrings("linked-lib" ++ sep_str ++ "Legacy.ZIG", found.items[0]);
+    try std.testing.expectEqualStrings(
+        "linked-lib" ++ sep_str ++ "nested" ++ sep_str ++ "deep.zig",
+        found.items[1],
+    );
+    try std.testing.expectEqualStrings("src" ++ sep_str ++ "ok.zig", found.items[2]);
+    try std.testing.expectEqualStrings("vendor" ++ sep_str ++ "Legacy.ZIG", found.items[3]);
+    try std.testing.expectEqualStrings(
+        "vendor" ++ sep_str ++ "nested" ++ sep_str ++ "deep.zig",
+        found.items[4],
     );
 }
 
@@ -2805,7 +2956,7 @@ test "appendProjectZigFiles names a link that no longer resolves" {
     var failed_path: ?[]const u8 = null;
     try std.testing.expectError(
         error.FileNotFound,
-        appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path),
+        appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path, &.{}, std.fs.path.sep),
     );
 
     // The link, not its missing target: it is the tree entry that cannot be
