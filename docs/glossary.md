@@ -61,6 +61,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **local config** | `spine.toml`: paths, identity, peers, fsync — things whose disagreement cannot fork the ledger | PRD 0004 |
 | **scope** | whether a setting is cluster-wide, per ledger, or federation-scoped (reserved, PRD 0006) | PRD 0004 |
 | **control ledger** | the ledger whose chain carries a scope's control entries (membership, settings); whether the cluster's is its own ledger or the first data ledger is OQ 7 | PRD 0004, PRD 0006 |
+| **control chain** | the chain of a control ledger: a group's `genesis`, `join`, `leave`, `epoch` and `merge` slots; what federated groups exchange so a representative can be validated against its own chain | PRD 0006 |
 | **live-changeable** | a setting that a `settings` entry may alter; may depend on other settings | PRD 0004 |
 | **host** | any program that links the spine library; the `spine` binary, the examples and clanker's `serve` are instances | PRD 0005 |
 | **service API** | the optional HTTP surface over the library for non-Zig hosts and operators | PRD 0005, RFC 0001 |

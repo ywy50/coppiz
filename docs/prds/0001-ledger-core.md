@@ -171,7 +171,7 @@ the same hash, and can be folded deterministically by every member:
 
 | Kind | Author | Meaning | Defined in |
 |---|---|---|---|
-| `genesis` | founding member | creates the cluster and its first ledger; carries initial settings and the founder's key | PRD 0003, 0004 |
+| `genesis` | the founder | creates the cluster and its first ledger; carries initial settings and the founder's key | PRD 0003, 0004 |
 | `join` | an existing member (the admitter) | admits a new member: id, public key, address. Its slot is the new member's seniority | PRD 0003 |
 | `leave` | the leaving member, or the leader evicting it | removes a member; its seniority is gone | PRD 0003 |
 | `epoch` | the new leader | opens a leadership term: why (`leader_lost`, `mode_change`, `merge`, or `manual` — the reason list PRD 0003 defines), who | PRD 0003 |
