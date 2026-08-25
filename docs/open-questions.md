@@ -346,9 +346,13 @@ Ordering inside each section is by what blocks implementation first.
     the most likely place for a subtle divergence. *Blocks:* PRD 0002 phase
     5 acceptance.
 45. **CI and toolchain pin.** Which Zig build to pin in CI (0.16.0 release),
-    whether to test on musl and glibc targets, and whether `zig fmt --check`
-    and a lint step gate merges as clanker's `gate` does. *Blocks:* first PR
-    after the initial commit.
+    and whether to test musl and glibc targets there. The merge-gate half of
+    this question is settled in-tree rather than in CI: `zig build test` runs
+    the lint gates — formatting, the 100-column cap, test registration,
+    declaration analysis, gate coverage; `zig build lint` runs them alone —
+    and build.zig names this question for the CI half that remains open.
+    *Blocks:* the first external contribution; the repository's own commits
+    are gated locally by `zig build test` today.
 59. **Does the fetchable package carry the design docs?** The `.paths` list
     in `build.zig.zon` — the declaration of what the package contains —
     names only `CHANGELOG.md`, `README.md`, `RELEASES.md`, `build.zig`,
