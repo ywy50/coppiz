@@ -48,7 +48,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **merge** | the control entry and rule by which the surviving branch re-slots the losing branch's entries after it | PRD 0003 |
 | **re-slot** | giving an unchanged entry a new slot after a merge; its entry id does not change | PRD 0003 |
 | **TTL** | an entry's time to live in ms; 0 = none | PRD 0002 |
-| **effective TTL** | the TTL after the ledger's `ttl.enforce`/`default`/`max` are applied | PRD 0002 |
+| **effective TTL** | the TTL after the ledger's `ttl.enforce`, `ttl.default_ms` and `ttl.max_ms` are applied | PRD 0002 |
 | **expiry instant** | `slot_ts_ms + effective TTL`; computed from the slot, never from the author's clock | PRD 0002 |
 | **stale** | hidden from default reads but physically present; by author mark or by TTL under `mark_stale` | PRD 0002 |
 | **expired** | past its expiry instant under `ttl.action = delete`; hidden, awaiting a checkpoint | PRD 0002 |

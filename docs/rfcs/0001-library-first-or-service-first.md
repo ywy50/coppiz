@@ -49,7 +49,8 @@ beyond Zig (roadmap).
 
 ## Current state
 
-Nothing is implemented. clanker's shared state was JSON/JSONL files under
+Nothing of the design is implemented; `src/root.zig` carries only the package
+version so far. clanker's shared state was JSON/JSONL files under
 `state/` when RFC 0019 surveyed it (2026-08-19); since its ADR 0033
 (accepted 2026-08-20) sessions are per-session SQLite databases written
 directly in-process, their append-only `events` stream replicating to mesh
