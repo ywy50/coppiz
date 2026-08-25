@@ -53,6 +53,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The lint-gate fixtures that link directories (`symLinkOrSkip` call sites
+  for the linked-directory and dangling-link cases) created them with
+  default `SymLinkFlags`, which std spells out is ignored everywhere but
+  Windows and load-bearing there: without `.is_directory = true` the link
+  cannot be traversed as a directory, so those tests died in setup on
+  exactly the link-capable Windows hosts (Developer Mode) where the skip
+  logic's other direction is meant to run. The helper now forwards flags to
+  the creation call, every directory-linking fixture spells the flag, and a
+  test pins a directory link through the helper beside the file-link one.
+
 - PRD 0001's acceptance criterion G6 now cites [OQ
   36](docs/open-questions.md) for `ledger.max_entry_bytes`, whose default is
   unset there: the criterion demands the bound be enforced with a trip test,
