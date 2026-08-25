@@ -413,11 +413,16 @@ test "fmtArgs falls back to the raw gate paths when expansion fails" {
 
     const argv = fmtArgs(arena, io, tmp.dir, "zig", &gate_paths);
 
-    try std.testing.expectEqual(@as(usize, 6), argv.len);
-    try std.testing.expectEqualStrings("zig", argv[0]);
-    try std.testing.expectEqualStrings("--ast-check", argv[3]);
-    try std.testing.expectEqualStrings("gone", argv[4]);
-    try std.testing.expectEqualStrings("build.zig", argv[5]);
+    // The unchanged list means unchanged end to end: the fixed prefix in its
+    // pinned order — a reordered flag would still hand zig fmt the same set
+    // of words while meaning something different — then the raw gate paths.
+    const want = [_][]const u8{
+        "zig", "fmt", "--check", "--ast-check", "gone", "build.zig",
+    };
+    try std.testing.expectEqual(@as(usize, want.len), argv.len);
+    for (want, argv) |expected, actual| {
+        try std.testing.expectEqualStrings(expected, actual);
+    }
 }
 
 /// Reports a checkedFiles enumeration failure through `step`, naming the
@@ -1910,6 +1915,21 @@ fn excludedFromGates(basename: []const u8, depth: usize) bool {
 /// it merge with zero analysis.
 fn zigSuffixAnyCase(basename: []const u8) bool {
     return basename.len >= 4 and std.ascii.eqlIgnoreCase(basename[basename.len - 4 ..], ".zig");
+}
+
+test "zigSuffixAnyCase answers any letter case of .zig and nothing shorter" {
+    // The boundaries the walk-driven test cannot isolate: every letter case
+    // of the suffix matches at any position, while a basename under four
+    // bytes carries no suffix at all — the guard a regression to '>' would
+    // flip for exactly the four-byte ".ZIG", and a startsWith rewrite would
+    // flip for "x.zig.tar".
+    try std.testing.expect(zigSuffixAnyCase("Legacy.ZIG"));
+    try std.testing.expect(zigSuffixAnyCase("y.ZiG"));
+    try std.testing.expect(zigSuffixAnyCase("plain.zig"));
+    try std.testing.expect(zigSuffixAnyCase("archive.x.zig"));
+    try std.testing.expect(zigSuffixAnyCase(".ZIG"));
+    try std.testing.expect(!zigSuffixAnyCase("zig"));
+    try std.testing.expect(!zigSuffixAnyCase("notes.md"));
 }
 
 /// Appends every project-owned .zig file — everything under the build root
