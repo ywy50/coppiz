@@ -31,7 +31,31 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   silence the report either: a wrong-case source is named whatever the
   allowlist holds.
 
+- Wrong-case `@import` strings are no longer invisible to the test-registration
+  gate: an import like `@import("Helper.zig")` when the walked file is
+  `helper.zig` resolved on a case-insensitive filesystem (macOS's default
+  APFS, Windows NTFS) and failed to resolve on a case-sensitive one (Linux —
+  the musl static binary is the strictest declared host, ADR 0001), and when
+  any other chain reached the target module neither gate half said anything.
+  The gate now matches every gated module's imports against the walked files
+  case-folded as well as exactly, and a spelling that resolves only where the
+  filesystem ignores case fails the gate naming importer, target and the
+  exact-case spelling.
+
 ### Fixed
+
+- The two load-bearing `statFile` probes in build.zig spell
+  `.follow_symlinks = true` explicitly instead of inheriting it as the
+  default: symlink-following is the documented contract both gate walks
+  depend on (a listed path linking a directory must contribute its subtree;
+  the probe behind a link reveals the target's kind), and a default flipped
+  upstream would otherwise have changed that behavior silently. `symLink`'s
+  empty flags stay defaulted; nothing load-bearing lives there.
+- `zigSuffixAnyCase`'s doc comment no longer claims the exact-lowercase
+  suffix "never reaches a caller": one of its two callers,
+  `GateCoverageStep.wrongCaseLines`, receives every walked candidate and
+  skips the exact case with its own `endsWith` guard. The comment now states
+  what each caller narrows and how.
 
 - Nine lint-gate tests hard-required symlink creation in their fixtures
   (`try tmp.dir.symLink(...)`), so on a host that cannot make symlinks —

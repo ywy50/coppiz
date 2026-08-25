@@ -215,7 +215,12 @@ fn checkedFiles(
 ) ![][]const u8 {
     var paths: std.ArrayListUnmanaged([]const u8) = .empty;
     for (gate_paths) |path| {
-        const stat = root_dir.statFile(io, path, .{}) catch |err| {
+        // follow_symlinks is the load-bearing choice, not the ambient
+        // default: a listed path that links a directory must contribute its
+        // subtree (the test "checkedFiles resolves a listed path that
+        // symlinks a directory" pins it), so the flag is spelled here rather
+        // than inherited.
+        const stat = root_dir.statFile(io, path, .{ .follow_symlinks = true }) catch |err| {
             failed_path.* = path;
             return err;
         };
@@ -273,7 +278,10 @@ fn classifyWalkedEntry(
     var kind = entry.kind;
     if (kind == .sym_link or kind == .unknown) {
         const probe_path = try std.fs.path.join(arena, &.{ prefix, entry.path });
-        kind = (try root_dir.statFile(io, probe_path, .{})).kind;
+        // The probe must follow the link — that following is what reveals
+        // the target's kind — so it is spelled here rather than inherited
+        // from StatFileOptions' default.
+        kind = (try root_dir.statFile(io, probe_path, .{ .follow_symlinks = true })).kind;
     }
     if (kind == .directory) {
         return if (entry.kind == .directory) .directory else .linked_directory;
@@ -414,6 +422,41 @@ test "symLinkOrSkip creates the link, and skips only where links cannot be made"
     // The skip direction needs an environment that refuses every symlink
     // creation; none can be synthesized portably here, so it is exercised
     // by running the suite on such a host (Windows without Developer Mode).
+}
+
+/// Makes `sub_path` unreadable for the calling process, skipping the calling
+/// test where no mode can deny a read. Running as root (Linux's
+/// CAP_DAC_OVERRIDE) or on a filesystem that ignores mode bits reads any
+/// file whatever its permissions, so the denial is probed before it is
+/// trusted: a probe open succeeding means the environment grants every read
+/// and the test skips (`error.SkipZigTest`) — the same capability rule
+/// symLinkOrSkip applies to link creation, decided by behavior never OS
+/// name. The mode is restored on the skip path so tmpDir cleanup sees an
+/// ordinary file; the consuming test restores it on the proceed path.
+fn setUnreadableOrSkip(dir: std.Io.Dir, io: std.Io, sub_path: []const u8) !void {
+    const unreadable: std.Io.File.Permissions = @enumFromInt(0);
+    try dir.setFilePermissions(io, sub_path, unreadable, .{});
+    if (dir.openFile(io, sub_path, .{})) |file| {
+        file.close(io);
+        dir.setFilePermissions(io, sub_path, .default_file, .{}) catch {};
+        return error.SkipZigTest;
+    } else |_| {}
+}
+
+test "setUnreadableOrSkip propagates its own errors where permission changes work" {
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The loud-failure direction, mirror of symLinkOrSkip's: a permission
+    // change on a path that does not exist fails with that call's own error
+    // everywhere setFilePermissions resolves paths — a broken fixture must
+    // surface as itself, never as an environment skip.
+    try std.testing.expectError(
+        error.FileNotFound,
+        setUnreadableOrSkip(tmp.dir, io, "nowhere.zig"),
+    );
 }
 
 test "fmtArgs hands zig fmt every covered file, links included" {
@@ -744,10 +787,13 @@ const test_roots = [_][]const u8{ "src/root.zig", "src/main.zig", "build.zig" };
 /// an import in a declaration that is never analyzed (an unused
 /// container-level const) collects nothing — so the gate walks real
 /// @import calls across every walked module (collectImports), resolving each
-/// candidate's import string relative to the importing file's directory
-/// (importBetween), not just against the roots. Only a literal
+/// canonical form normalizeImportPath defines for recorded imports. Only a
+/// literal
 /// `@import("path")` call counts: a mention inside a comment or any string
-/// literal registers nothing.
+/// literal registers nothing. A third half (caseMismatchLines) reports an
+/// import that differs from the walked module it resolves to only by letter
+/// case — it compiles on a case-insensitive filesystem and fails on a
+/// case-sensitive one, and hides behind any other chain reaching the module.
 const TestRegistrationStep = struct {
     step: std.Build.Step,
 
@@ -789,26 +835,54 @@ const TestRegistrationStep = struct {
         try classifyModules(arena, sources.items, std.fs.path.sep, &report);
         var analysis_report: std.ArrayListUnmanaged(u8) = .empty;
         try declarationAnalysisGaps(arena, sources.items, std.fs.path.sep, &analysis_report);
-        // Both cores append one report line per finding (pinned by the
+        var case_report: std.ArrayListUnmanaged(u8) = .empty;
+        try caseMismatchLines(arena, sources.items, std.fs.path.sep, &case_report);
+        // Each core appends one report line per finding (pinned by the
         // exact-string tests below), so each tally is a newline count — no
         // second output to keep in lockstep with the appends.
         const count = std.mem.count(u8, report.items, "\n");
         const analysis_count = std.mem.count(u8, analysis_report.items, "\n");
+        const case_count = std.mem.count(u8, case_report.items, "\n");
         var message: std.ArrayListUnmanaged(u8) = .empty;
-        if (count > 0)
-            try message.print(arena, "{d} module(s) whose tests never run:\n{s}", .{
-                count, report.items,
-            });
-        if (analysis_count > 0) {
-            if (message.items.len > 0) try message.append(arena, '\n');
-            try message.print(
-                arena,
-                "{d} module(s) whose public declarations are never analyzed:\n{s}",
-                .{ analysis_count, analysis_report.items },
-            );
-        }
+        try appendSection(
+            arena,
+            &message,
+            count,
+            "module(s) whose tests never run",
+            report.items,
+        );
+        try appendSection(
+            arena,
+            &message,
+            analysis_count,
+            "module(s) whose public declarations are never analyzed",
+            analysis_report.items,
+        );
+        try appendSection(
+            arena,
+            &message,
+            case_count,
+            "import(s) that resolve only on a case-insensitive filesystem",
+            case_report.items,
+        );
         if (message.items.len > 0)
             return step.fail("{s}", .{message.items});
+    }
+
+    /// Appends one counted section of make()'s assembled failure message:
+    /// "{count} {header}:" followed by the section's report lines, separated
+    /// from any earlier section by a blank line. One copy serves all three
+    /// sections so their join and skip-when-empty rules cannot drift apart.
+    fn appendSection(
+        arena: std.mem.Allocator,
+        message: *std.ArrayListUnmanaged(u8),
+        count: usize,
+        header: []const u8,
+        body: []const u8,
+    ) !void {
+        if (count == 0) return;
+        if (message.items.len > 0) try message.append(arena, '\n');
+        try message.print(arena, "{d} {s}:\n{s}", .{ count, header, body });
     }
 
     /// The gate's decision core, I/O-free so tests drive it directly, the
@@ -1070,6 +1144,64 @@ const TestRegistrationStep = struct {
                     arena,
                     "  {s}: imported by {s} without forced declaration analysis\n",
                     .{ candidate_path, root_source.path },
+                );
+            }
+        }
+    }
+
+    /// The gate's third half, I/O-free so tests drive it directly beside
+    /// classifyModules and declarationAnalysisGaps: appends one report line
+    /// per real @import whose spelling differs from the walked module it
+    /// resolves to only by letter case. Such an import compiles on a
+    /// case-insensitive filesystem (macOS's default APFS, Windows NTFS) and
+    /// fails to resolve on a case-sensitive one (Linux — the musl static
+    /// binary is the strictest declared host, ADR 0001), and whenever any
+    /// other chain reaches the target module neither earlier half says
+    /// anything: the walk compares exact bytes, so the wrong-case string
+    /// matches nothing and exempts itself. Every gated module's imports are
+    /// scanned, not only the test roots': resolution correctness is not a
+    /// roots-only convention, and an ordinary module's wrong-case import
+    /// hides behind another module's correct one just the same. The
+    /// wrong-case *filename* counterpart lives in GateCoverageStep
+    /// (wrongCaseLines); this covers the import strings. One report line per
+    /// distinct import string per importing file, whatever the number of
+    /// occurrences. `separator` is a parameter so any platform can be
+    /// simulated in a test.
+    fn caseMismatchLines(
+        arena: std.mem.Allocator,
+        sources: []const Source,
+        separator: u8,
+        report: *std.ArrayListUnmanaged(u8),
+    ) !void {
+        for (sources) |source| {
+            // The import string from this importer to every walked module,
+            // keyed exactly (named) and case-folded (folded): an import
+            // matching named resolves everywhere and needs no report; one
+            // matching folded alone resolves only where the filesystem
+            // ignores case. Package and builtin imports ("std",
+            // "build_options", the spine package) match neither and stay
+            // out, as does anything pointing outside the walked tree.
+            var named: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+            var folded: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+            for (sources) |candidate| {
+                if (std.mem.eql(u8, candidate.path, source.path)) continue;
+                const wanted = try importBetween(arena, source.path, candidate.path, separator);
+                if (!named.contains(wanted)) try named.put(arena, wanted, candidate.path);
+                const key = try std.ascii.allocLowerString(arena, wanted);
+                if (!folded.contains(key)) try folded.put(arena, key, wanted);
+            }
+            var reported: std.StringArrayHashMapUnmanaged(void) = .empty;
+            for (try collectImports(arena, source.text)) |ref| {
+                if (named.contains(ref.path)) continue;
+                const canonical =
+                    folded.get(try std.ascii.allocLowerString(arena, ref.path)) orelse continue;
+                if (reported.contains(ref.path)) continue;
+                try reported.put(arena, ref.path, {});
+                try report.print(
+                    arena,
+                    "  {s}: imported by {s} as \"{s}\"; " ++
+                        "only \"{s}\" resolves on every filesystem\n",
+                    .{ named.get(canonical).?, source.path, ref.path, canonical },
                 );
             }
         }
@@ -1612,6 +1744,87 @@ test "declaration-analysis gate constrains only the test roots' own imports" {
     );
 }
 
+test "case-mismatch gate names a wrong-case import hiding behind a correct chain" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The shape that used to pass every half silently: root.zig reaches
+    // helper.zig through the exact-case wrapped import, so the module is
+    // registered and analyzed — and the wrong-case spelling beside it matched
+    // nothing byte-exact in either earlier half, exempting itself via the
+    // orelse-continue path. "std" is the control that stays out: it matches
+    // no walked module exactly or folded, like any package import. ghost.zig
+    // keeps the assertion from passing vacuously on an empty walk.
+    const sources = [_]Source{
+        .{
+            .path = "src\\root.zig",
+            .text = "test {\n" ++
+                "    std.testing.refAllDecls(@import(\"helper.zig\"));\n" ++
+                "}\n" ++
+                "_ = @import(\"Helper.zig\");\n" ++
+                "_ = @import(\"std\");\n",
+        },
+        .{ .path = "src\\main.zig", .text = "" },
+        .{ .path = "src\\helper.zig", .text = "" },
+        .{ .path = "src\\ghost.zig", .text = "" },
+    };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    try TestRegistrationStep.caseMismatchLines(arena, &sources, '\\', &report);
+
+    try std.testing.expectEqualStrings(
+        "  src\\helper.zig: imported by src\\root.zig as \"Helper.zig\"; " ++
+            "only \"helper.zig\" resolves on every filesystem\n",
+        report.items,
+    );
+}
+
+test "case-mismatch gate scans non-root modules and stays silent on exact spellings" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // An ordinary module's wrong-case import breaks a case-sensitive build
+    // exactly like a root's, so the scan is not scoped to the test roots:
+    // inner.zig's "../Helper.zig" is reported with its canonical spelling.
+    // The second tree holds what must pass without a line: exact-case
+    // imports of walked modules, package imports, and an import whose target
+    // does not exist at all (no walked module to fold against).
+    const sources = [_]Source{
+        .{ .path = "src\\main.zig", .text = "_ = @import(\"sub/inner.zig\");\n" },
+        .{ .path = "src\\root.zig", .text = "" },
+        .{ .path = "src\\sub\\inner.zig", .text = "_ = @import(\"../Helper.zig\");\n" },
+        .{ .path = "src\\helper.zig", .text = "" },
+    };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    try TestRegistrationStep.caseMismatchLines(arena, &sources, '\\', &report);
+
+    try std.testing.expectEqualStrings(
+        "  src\\helper.zig: imported by src\\sub\\inner.zig as \"../Helper.zig\"; " ++
+            "only \"../helper.zig\" resolves on every filesystem\n",
+        report.items,
+    );
+
+    const clean = [_]Source{
+        .{
+            .path = "src/root.zig",
+            .text = "_ = @import(\"helper.zig\");\n" ++
+                "_ = @import(\"./sub/inner.zig\");\n" ++
+                "const o = @import(\"build_options\");\n" ++
+                "_ = @import(\"nowhere.zig\");\n",
+        },
+        .{ .path = "src/main.zig", .text = "" },
+        .{ .path = "src/helper.zig", .text = "" },
+        .{ .path = "src/sub/inner.zig", .text = "" },
+    };
+
+    report = .empty;
+    try TestRegistrationStep.caseMismatchLines(arena, &clean, '/', &report);
+    try std.testing.expectEqual(@as(usize, 0), report.items.len);
+}
+
 test "collectImports reads paths and wrapper position off the token stream" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -2066,11 +2279,14 @@ fn excludedFromGates(basename: []const u8, depth: usize) bool {
 }
 
 /// True when `basename` carries a ".zig" suffix spelled in any letter case
-/// ("x.ZIG", "y.ZiG"). The exact-suffix case never reaches a caller: the
-/// shared classifier has already claimed it as .zig_source. This is the
-/// wrong-case remainder — a file every gate's filter skips — that the
-/// coverage walk collects so the gate can fail naming it instead of letting
-/// it merge with zero analysis.
+/// ("x.ZIG", "y.ZiG"), exact lowercase included — each caller narrows the
+/// exact case itself, differently: in appendProjectZigFiles' .other branch
+/// the shared classifier has already claimed exact-lowercase names as
+/// .zig_source, so only a wrong-case spelling arrives; wrongCaseLines sees
+/// every walked candidate and skips the exact case with its own endsWith.
+/// This is the wrong-case remainder — a file every gate's filter skips —
+/// that the coverage walk collects so the gate can fail naming it instead
+/// of letting it merge with zero analysis.
 fn zigSuffixAnyCase(basename: []const u8) bool {
     return basename.len >= 4 and std.ascii.eqlIgnoreCase(basename[basename.len - 4 ..], ".zig");
 }
@@ -2550,6 +2766,40 @@ test "loadCheckedSources names the gate path when enumeration fails" {
     );
 }
 
+test "loadCheckedSources names the covered file when its text cannot be read" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The read half of the failure contract loadCheckedSources' docstring
+    // spells beside enumeration's: a covered file that exists and stats
+    // fine but whose bytes cannot be read is reported naming that file —
+    // not a bare error name, and not silently skipped as an empty source.
+    // Permission denial is capability-probed (setUnreadableOrSkip): where
+    // no mode can deny a read — root, mode-ignoring filesystems — the test
+    // skips rather than pass without exercising the branch.
+    try tmp.dir.writeFile(io, .{ .sub_path = "a.zig", .data = "const a = 1;\n" });
+    try setUnreadableOrSkip(tmp.dir, io, "a.zig");
+    defer tmp.dir.setFilePermissions(io, "a.zig", .default_file, .{}) catch {};
+
+    var graph: std.Build.Graph = undefined;
+    var step = try makeUnderTestStep(arena, io, tmp.dir, &graph);
+
+    const paths = [_][]const u8{"a.zig"};
+    try std.testing.expectError(
+        error.MakeFailed,
+        loadCheckedSources(&step, tmp.dir, io, arena, &paths),
+    );
+    try std.testing.expectEqualStrings(
+        "cannot read 'a.zig': AccessDenied",
+        step.result_error_msgs.items[0],
+    );
+}
+
 test "failEnumeration falls back to a generic subject when no path owns the error" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -2758,6 +3008,52 @@ test "test-registration step does not mistake build.zig.zon for an unregistered 
     // Success records nothing on the step: a stray message appended beside
     // a pass would read as a failure to whoever reads the run's output.
     try std.testing.expectEqual(@as(usize, 0), gate.step.result_error_msgs.items.len);
+}
+
+test "test-registration step reports a wrong-case import beside its clean chain" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The end-to-end shape of the import-string escape this step's third
+    // half closes: helper.zig is registered and analyzed through the
+    // exact-case wrapper, so both earlier halves stay silent while the
+    // wrong-case spelling beside it compiles on macOS or Windows and fails
+    // on Linux. Only the case section fires — the single-section assembly
+    // shape for the third report half.
+    // build.zig and build.zig.zon are stubbed because make() enumerates the
+    // whole allowlist.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(
+        io,
+        .{
+            .sub_path = "src/root.zig",
+            .data = "test {\n" ++
+                "    std.testing.refAllDecls(@import(\"helper.zig\"));\n" ++
+                "}\n" ++
+                "_ = @import(\"Helper.zig\");\n",
+        },
+    );
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/helper.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+
+    const sep_str = std.fs.path.sep_str;
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = TestRegistrationStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "1 import(s) that resolve only on a case-insensitive filesystem:\n" ++
+            "  src" ++ sep_str ++ "helper.zig: imported by src" ++ sep_str ++
+            "root.zig as \"Helper.zig\"; only \"helper.zig\" resolves on every filesystem\n",
+    );
 }
 
 test "test-registration step reports analysis gaps alone, with no leading section" {
