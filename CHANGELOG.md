@@ -22,6 +22,21 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Nine lint-gate tests hard-required symlink creation in their fixtures
+  (`try tmp.dir.symLink(...)`), so on a host that cannot make symlinks —
+  Windows denies it to unprivileged users unless Developer Mode is enabled,
+  and some mounted filesystems refuse it outright — `zig build test` died in
+  fixture setup instead of testing the gates' link handling (links followed
+  as sources, linked directories rejected, dangling links named). The calls
+  now go through `symLinkOrSkip`, which decides the skip by capability, not
+  by OS name: when the requested link fails, a control link with known-good
+  arguments is attempted beside it, and only if even that fails does the test
+  return `error.SkipZigTest`; where links work, a broken fixture's own error
+  still propagates and fails loudly. A test pins both the created link and
+  the loud-failure direction; the skip direction has no portable way to
+  synthesize a link-less environment and is exercised by running the suite
+  on such a host.
+
 - The gate-coverage report survives listing a wrong-case `.zig` path in
   `checked_paths`. The coverage walk collects such a file as a candidate,
   but `checkedFiles` takes a listed plain entry whole, so the listing joined

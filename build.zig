@@ -354,6 +354,66 @@ fn fmtArgs(
     return argv.toOwnedSlice(allocator) catch @panic("OOM");
 }
 
+/// Creates `sym_link_path` pointing at `target_path` inside `dir`, skipping
+/// the calling test when the host cannot make symlinks at all. Creating one
+/// is a privilege on Windows (unprivileged users are refused unless Developer
+/// Mode is enabled) and some mounted filesystems refuse them outright, so the
+/// gate fixtures that exercise link handling — links followed as sources,
+/// linked directories rejected, dangling links named — would otherwise die in
+/// setup on such hosts instead of passing where links exist and skipping where
+/// they cannot be made. The skip is decided by capability, never by OS name:
+/// when the requested link fails, a control link with known-good arguments is
+/// attempted beside it. The control failing too means the environment lacks
+/// the capability and the test skips (`error.SkipZigTest`); the control
+/// succeeding means links work here, so the original error was that call's
+/// own and propagates — a broken fixture still fails loudly wherever links
+/// can be created.
+fn symLinkOrSkip(
+    dir: std.Io.Dir,
+    io: std.Io,
+    target_path: []const u8,
+    sym_link_path: []const u8,
+) !void {
+    if (dir.symLink(io, target_path, sym_link_path, .{})) |_| return else |err| {
+        const probe = ".sym-link-capability-probe";
+        if (dir.symLink(io, "capability-probe-target", probe, .{})) |_| {
+            dir.deleteFile(io, probe) catch {};
+            return err;
+        } else |_| {
+            return error.SkipZigTest;
+        }
+    }
+}
+
+test "symLinkOrSkip creates the link, and skips only where links cannot be made" {
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The working direction: the link lands and resolves to its target —
+    // read through it rather than stat, which follows links and would
+    // report the target's kind.
+    try tmp.dir.writeFile(io, .{ .sub_path = "real.zig", .data = "" });
+    try symLinkOrSkip(tmp.dir, io, "real.zig", "link.zig");
+    var link_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const read = try tmp.dir.readLink(io, "link.zig", &link_buf);
+    try std.testing.expectEqualStrings("real.zig", link_buf[0..read]);
+
+    // The loud-failure direction: a link whose parent directory does not
+    // exist fails with that call's own error wherever links work — the
+    // control probe succeeds beside it, so a broken fixture must not be
+    // mistaken for an environment without symlinks and silently skipped.
+    try std.testing.expectError(
+        error.FileNotFound,
+        symLinkOrSkip(tmp.dir, io, "real.zig", "nowhere/link.zig"),
+    );
+
+    // The skip direction needs an environment that refuses every symlink
+    // creation; none can be synthesized portably here, so it is exercised
+    // by running the suite on such a host (Windows without Developer Mode).
+}
+
 test "fmtArgs hands zig fmt every covered file, links included" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -369,7 +429,7 @@ test "fmtArgs hands zig fmt every covered file, links included" {
     // zig fmt checks through to the target when given the path explicitly.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/real.zig", .data = "" });
-    try tmp.dir.symLink(io, "real.zig", "src/link.zig", .{});
+    try symLinkOrSkip(tmp.dir, io, "real.zig", "src/link.zig");
     try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
@@ -1608,7 +1668,7 @@ test "checkedFiles resolves a listed path that symlinks a directory" {
     (try tmp.dir.createDirPathOpen(io, "vendor/nested", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "vendor/nested/deep.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "vendor/notes.md", .data = "" });
-    try tmp.dir.symLink(io, "vendor", "linked-lib", .{});
+    try symLinkOrSkip(tmp.dir, io, "vendor", "linked-lib");
 
     const gate_paths = [_][]const u8{"linked-lib"};
     var failed_path: ?[]const u8 = null;
@@ -1660,7 +1720,7 @@ test "checkedFiles names the gate path when a directory walk fails" {
     // pins that the dispatcher's walk catch sets it too.
     (try tmp.dir.createDirPathOpen(io, "src/sub", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/sub/deep.zig", .data = "" });
-    try tmp.dir.symLink(io, "sub", "src/vendor", .{});
+    try symLinkOrSkip(tmp.dir, io, "sub", "src/vendor");
 
     const gate_paths = [_][]const u8{"src"};
     var failed_path: ?[]const u8 = null;
@@ -1725,7 +1785,7 @@ test "appendZigFilesUnder analyzes a symlinked .zig file like a real one" {
     // both gates while they stay green.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/real.zig", .data = "" });
-    try tmp.dir.symLink(io, "real.zig", "src/link.zig", .{});
+    try symLinkOrSkip(tmp.dir, io, "real.zig", "src/link.zig");
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     try appendZigFilesUnder(tmp.dir, io, arena, "src", &found);
@@ -1824,7 +1884,7 @@ test "appendZigFilesUnder rejects a linked directory whose walk cannot descend" 
     // checking nothing.
     (try tmp.dir.createDirPathOpen(io, "src/sub", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/sub/deep.zig", .data = "" });
-    try tmp.dir.symLink(io, "sub", "src/vendor", .{});
+    try symLinkOrSkip(tmp.dir, io, "sub", "src/vendor");
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     try std.testing.expectError(
@@ -2188,7 +2248,7 @@ test "appendProjectZigFiles walks the tree minus tooling directories, links incl
     try tmp.dir.writeFile(io, .{ .sub_path = "notes.md", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = ".hidden/cache.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "zig-out/bin/made.zig", .data = "" });
-    try tmp.dir.symLink(io, "top.zig", "src/link.zig", .{});
+    try symLinkOrSkip(tmp.dir, io, "top.zig", "src/link.zig");
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     var failed_path: ?[]const u8 = null;
@@ -2262,7 +2322,7 @@ test "appendProjectZigFiles rejects a linked directory like the gate-path walk" 
     try tmp.dir.writeFile(io, .{ .sub_path = "tools/sub/deep.zig", .data = "" });
     // The link's target resolves relative to the link's own directory, the
     // same shape the gate-path walk's twin test uses.
-    try tmp.dir.symLink(io, "sub", "tools/vendor", .{});
+    try symLinkOrSkip(tmp.dir, io, "sub", "tools/vendor");
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     var failed_path: ?[]const u8 = null;
@@ -2297,7 +2357,7 @@ test "appendProjectZigFiles names a link that no longer resolves" {
     // the operator to find which of every walked entry was dangling.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/real.zig", .data = "" });
-    try tmp.dir.symLink(io, "nowhere.zig", "src/dangling.zig", .{});
+    try symLinkOrSkip(tmp.dir, io, "nowhere.zig", "src/dangling.zig");
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     var failed_path: ?[]const u8 = null;
@@ -2710,7 +2770,7 @@ test "gate-coverage step names the walked entry when the project walk fails" {
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
-    try tmp.dir.symLink(io, "nowhere.zig", "dangling.zig", .{});
+    try symLinkOrSkip(tmp.dir, io, "nowhere.zig", "dangling.zig");
 
     var graph: std.Build.Graph = undefined;
     const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
