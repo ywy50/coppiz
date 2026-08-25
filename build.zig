@@ -1715,22 +1715,20 @@ const GateCoverageStep = struct {
 
         var candidates: std.ArrayListUnmanaged([]const u8) = .empty;
         // The walk can fail on one specific entry (a linked directory it
-        // must reject, a link that no longer resolves): failed_path names
+        // must reject, a link that no longer resolves): failed_entry names
         // it, the way checkedFiles names the gate path it stopped on — a
         // bare error name would leave the operator to find the entry by
-        // hand among everything the walk visited. The variable is reused
-        // from the covered side above: its enumeration outcome was already
-        // handled by then.
-        failed_path = null;
+        // hand among everything the walk visited.
+        var failed_entry: ?[]const u8 = null;
         appendProjectZigFiles(
             b.build_root.handle,
             io,
             arena,
             &candidates,
-            &failed_path,
+            &failed_entry,
         ) catch |err| {
-            if (failed_path) |path|
-                return step.fail("cannot walk '{s}': {s}", .{ path, @errorName(err) });
+            if (failed_entry) |entry|
+                return step.fail("cannot walk '{s}': {s}", .{ entry, @errorName(err) });
             return step.fail("cannot walk the project tree: {s}", .{@errorName(err)});
         };
 
