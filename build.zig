@@ -170,11 +170,11 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
 /// The paths every analysis gate covers, relative to the build root: all
 /// Zig sources under `src/` plus the two build files at the top level.
 /// One list serves every file-covering surface — `zig fmt --check
-/// --ast-check` (via fmtArgs' expansion), the 100-column cap below and the
-/// coverage-completeness walk — so they can never disagree about what is
-/// analyzed: a new source directory or file is added once and all of them
-/// pick it up. A path here that stops existing fails both gates loudly
-/// rather than silently checking nothing.
+/// --ast-check` (via fmtArgs' expansion), the 100-column cap, the
+/// test-registration walk and the coverage-completeness walk — so they can
+/// never disagree about what is analyzed: a new source directory or file is
+/// added once and all of them pick it up. A path here that stops existing
+/// fails each of them loudly rather than silently checking nothing.
 const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 
 /// Every file a checking step covers, derived from its gate paths: a listed
@@ -385,8 +385,8 @@ const Source = struct {
 /// followed by every file `gate_paths` expands to through checkedFiles, so
 /// the formatter covers exactly what the column-cap and test-registration
 /// walks collect. Handing zig fmt the raw gate paths instead left a
-/// symlinked `.zig` source outside the formatter while the other two
-/// file-covering gates analyzed it: zig fmt's own directory walk does not
+/// symlinked `.zig` source outside the formatter while those two walks
+/// still analyzed it: zig fmt's own directory walk does not
 /// follow symlinks (verified on 0.16.0: with `src/link.zig` pointing at an
 /// unformatted real source, `zig fmt --check src` passed while
 /// `zig fmt --check src/link.zig` failed), and the walk is also what let a
@@ -2022,11 +2022,12 @@ test "checkedFiles resolves a listed path that symlinks a directory" {
     defer tmp.cleanup();
 
     // statFile follows links, so a listed path that is itself a link to a
-    // directory contributes its whole subtree to both file-covering gates —
-    // the top-level counterpart of appendZigFilesUnder's mid-walk rules:
-    // following keeps the subtree checked where descending through a
-    // mid-walk link is rejected. A regression to a non-following stat here
-    // would drop a linked library from both gates while they stay green.
+    // directory contributes its whole subtree to every gate expanding the
+    // listed paths through checkedFiles — the top-level counterpart of
+    // appendZigFilesUnder's mid-walk rules: following keeps the subtree
+    // checked where descending through a mid-walk link is rejected. A
+    // regression to a non-following stat here would drop a linked library
+    // from every one of them while they stay green.
     (try tmp.dir.createDirPathOpen(io, "vendor/nested", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "vendor/nested/deep.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "vendor/notes.md", .data = "" });
@@ -2041,7 +2042,7 @@ test "checkedFiles resolves a listed path that symlinks a directory" {
     var failed_path: ?[]const u8 = null;
     const checked = try checkedFiles(tmp.dir, io, arena, &gate_paths, &failed_path);
 
-    // Paths stay as listed (through the link), the shape both gates report;
+    // Paths stay as listed (through the link), the shape the gates report;
     // the non-.zig file is filtered like any walked entry.
     try std.testing.expectEqual(@as(usize, 1), checked.len);
     try std.testing.expectEqualStrings(
@@ -2333,11 +2334,11 @@ const GateCoverageStep = struct {
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 
-        // The covered side comes from the same dispatcher the two
-        // file-covering gates use, so this gate compares against exactly
-        // what they check — never against its own re-derivation of the
-        // checked set that could drift from theirs. Its enumeration failure
-        // reports through the same one copy they use.
+        // The covered side comes from the same shared dispatcher every
+        // other enumerating gate uses, so this gate compares against
+        // exactly what they check — never against its own re-derivation of
+        // the checked set that could drift from theirs. Its enumeration
+        // failure reports through the same one copy they use.
         var failed_path: ?[]const u8 = null;
         const covered = checkedFiles(
             b.build_root.handle,

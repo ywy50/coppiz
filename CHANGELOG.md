@@ -53,6 +53,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Stale gate counts in build.zig's comments: `checked_paths`'s doc listed
+  only three of the four surfaces sharing it (the test-registration walk was
+  missing) and said a vanished path fails "both gates" where every consumer
+  fails loudly; fmtArgs' doc called the column-cap and registration walks
+  "the other two file-covering gates", a set no other comment agrees on; and
+  the coverage step's make() and the linked-directory test spoke of "the two
+  file-covering gates" where three other gates expand the listed paths. The
+  comments now name or count the consumers as the code has them; no behavior
+  changed.
+
 - A walk failure inside a listed directory now names the walked entry that
   stopped it instead of the whole gate path: a rejected linked directory
   inside `src/` used to report "cannot enumerate 'src':
