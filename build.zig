@@ -1893,6 +1893,12 @@ const GateCoverageStep = struct {
 
         var report: std.ArrayListUnmanaged(u8) = .empty;
         try GateCoverageStep.uncoveredPaths(arena, covered, candidates.items, &report);
+        // uncoveredPaths matches by equality, and checkedFiles takes a listed
+        // file whole, so a wrong-case path listed in checked_paths joins the
+        // covered set and would silence itself there. The gate's contract is
+        // that a wrong-case source is named whatever the allowlist holds, so
+        // exactly those absorbed candidates get their line back.
+        try GateCoverageStep.wrongCaseLines(arena, covered, candidates.items, &report);
 
         // One report line per violation (pinned by the exact-string tests
         // below), so the tally is the newline count — no second output to
@@ -1902,6 +1908,33 @@ const GateCoverageStep = struct {
             return step.fail("{d} Zig source(s) no analysis gate covers:\n{s}", .{
                 violations, report.items,
             });
+    }
+
+    /// The wrong-case half of the coverage report, I/O-free so tests drive
+    /// it directly beside uncoveredPaths: appends one report line per
+    /// candidate whose basename carries a `.zig` suffix in any letter case
+    /// except the exact lowercase spelling and that `covered` holds anyway.
+    /// Candidates the covered list does not hold were already reported by
+    /// uncoveredPaths; naming them here too would double the tally. The
+    /// point is that listing a wrong-case path in `checked_paths` cannot buy
+    /// silence: the exact-case filters every covering surface applies are
+    /// what make such a file invisible, and only renaming ends that.
+    fn wrongCaseLines(
+        arena: std.mem.Allocator,
+        covered: []const []const u8,
+        candidates: []const []const u8,
+        report: *std.ArrayListUnmanaged(u8),
+    ) !void {
+        outer: for (candidates) |path| {
+            const basename = std.fs.path.basename(path);
+            if (!zigSuffixAnyCase(basename)) continue;
+            if (std.mem.endsWith(u8, basename, ".zig")) continue;
+            for (covered) |checked| {
+                if (!std.mem.eql(u8, checked, path)) continue;
+                try report.print(arena, "  {s}: not covered by any analysis gate\n", .{path});
+                continue :outer;
+            }
+        }
     }
 
     /// The gate's decision core, I/O-free so tests drive it directly, the
@@ -2073,6 +2106,42 @@ test "gate coverage stays silent when every candidate is covered" {
     try GateCoverageStep.uncoveredPaths(arena, &covered, &candidates, &report);
 
     try std.testing.expectEqual(@as(usize, 0), report.items.len);
+}
+
+test "gate coverage names a wrong-case source even when checked_paths lists it" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The listed shape uncoveredPaths alone cannot judge: "Legacy.ZIG" sat in
+    // checked_paths, checkedFiles took it whole, and the equality match
+    // accepted the very escape this gate closes — a silent report while the
+    // file stayed outside every exact-case filter. wrongCaseLines returns
+    // the line whatever the allowlist holds; ok.zig shows an ordinary
+    // covered candidate stays silent.
+    const covered = [_][]const u8{ "src/ok.zig", "Legacy.ZIG" };
+    const candidates = [_][]const u8{ "src/ok.zig", "Legacy.ZIG" };
+
+    var report: std.ArrayListUnmanaged(u8) = .empty;
+    try GateCoverageStep.uncoveredPaths(arena, &covered, &candidates, &report);
+    try GateCoverageStep.wrongCaseLines(arena, &covered, &candidates, &report);
+
+    try std.testing.expectEqualStrings(
+        \\  Legacy.ZIG: not covered by any analysis gate
+        \\
+    , report.items);
+
+    // The unlisted shape keeps its single line: a wrong-case candidate the
+    // covered list never held was already reported by uncoveredPaths, so
+    // the second half adds nothing — no doubled tally.
+    const bare_covered = [_][]const u8{"src/ok.zig"};
+    report = .empty;
+    try GateCoverageStep.uncoveredPaths(arena, &bare_covered, &candidates, &report);
+    try GateCoverageStep.wrongCaseLines(arena, &bare_covered, &candidates, &report);
+    try std.testing.expectEqualStrings(
+        \\  Legacy.ZIG: not covered by any analysis gate
+        \\
+    , report.items);
 }
 
 test "excludedFromGates prunes tooling entries only" {

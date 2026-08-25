@@ -16,11 +16,23 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   The gate-coverage walk now collects files whose name carries a `.zig`
   suffix in any letter case as candidates the covering set can never match,
   so the gate fails naming the file until it carries the lowercase spelling
-  every gate applies. Listing the wrong-case path in `checked_paths` does
-  not silence the report: that would cover the name while `zig fmt` still
-  skipped the file.
+  every gate applies. Listing the wrong-case path in `checked_paths` does not
+  silence the report either: a wrong-case source is named whatever the
+  allowlist holds.
 
 ### Fixed
+
+- The gate-coverage report survives listing a wrong-case `.zig` path in
+  `checked_paths`. The coverage walk collects such a file as a candidate,
+  but `checkedFiles` takes a listed plain entry whole, so the listing joined
+  the covered set and the equality match in `uncoveredPaths` silenced the
+  report — the exact escape the wrong-case collection exists to close,
+  reproduced end-to-end with a planted `Legacy.ZIG` named in `checked_paths`
+  (the gate passed; without the listing it failed naming the file). make()
+  now appends a report line for every wrong-case candidate the covered set
+  absorbed, via the same I/O-free core pattern as `uncoveredPaths`; a
+  wrong-case candidate outside the covered set keeps its single line, so no
+  tally doubles.
 
 - Ten lint-gate tests built their expected walked paths with `/` literals
   while the paths they compare against come from `std.fs.path.join` and the
