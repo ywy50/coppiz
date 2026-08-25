@@ -42,6 +42,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **member state** | `joining` → `syncing` → `member` ↔ `unreachable` → `left` | PRD 0003 |
 | **syncing** | admitted and slotted but not yet at head; never leader-eligible | PRD 0003 |
 | **partition** | members that disagree on liveness; each side may elect its own leader | PRD 0003 |
+| **AP / CP** | the two partition postures, from CAP: an AP choice keeps accepting writes during a partition and heals the divergence afterwards (merge); a CP choice refuses writes rather than risk two leaders (`stall`) | PRD 0001, PRD 0003 |
 | **branch** | the slots one side of a partition produced in its own epoch | PRD 0003 |
 | **archived branch** | a losing branch's original slots after a merge: its entries are re-slotted into the surviving chain, and these slots are kept (delivered to members without them) so the partition stays verifiable; never appended to again; not to be confused with an archival checkpoint | PRD 0003 |
 | **merge** | the control entry and rule by which the surviving branch re-slots the losing branch's entries after it | PRD 0003 |

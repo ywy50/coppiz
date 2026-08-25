@@ -99,8 +99,6 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   table also pins its trailing-empty-component boundary ("sub/" collapses to
   "sub"), the same rule "sub//x.zig" exercises mid-path.
 
-### Fixed
-
 - The README's `src/` row no longer calls both source files placeholders:
   the same audit that corrected `src/root.zig`'s module doc and PRD 0001's
   Status missed this row, and `root.zig` carries the implemented,
