@@ -1393,6 +1393,14 @@ test "importBetween resolves the import string from the importing file's directo
         try TestRegistrationStep.importBetween(arena, "src/root.zig", "src/sub/x.zig", '/'),
     );
 
+    // A top-level importer has no directory to strip: the target's
+    // build-root-relative path goes out verbatim — the branch only the
+    // build.zig-imports-src end-to-end test exercises otherwise.
+    try std.testing.expectEqualStrings(
+        "src/helper.zig",
+        try TestRegistrationStep.importBetween(arena, "build.zig", "src/helper.zig", '/'),
+    );
+
     // Modules in one subdirectory are siblings: a bare filename.
     try std.testing.expectEqualStrings(
         "y.zig",
