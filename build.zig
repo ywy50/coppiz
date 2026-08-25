@@ -3371,6 +3371,38 @@ test "gate-coverage step names the walked entry when the project walk fails" {
     );
 }
 
+test "gate-coverage step names the checked path when its enumeration fails" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The covered side's own failure contract, end to end: a checked path
+    // missing from the tree stops checkedFiles before any comparison, and
+    // make() routes that through failEnumeration naming the gate path — the
+    // wording loadCheckedSources' tests pin for the other two gates, from
+    // the one shared reporter. The message can only come from this branch:
+    // a project-walk failure prints "cannot walk", a violation the tally
+    // header, so a pass here proves the routing ran.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
+    // build.zig is deliberately absent: checked_paths lists it, so the
+    // covered expansion fails with that path named.
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = GateCoverageStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "cannot enumerate 'build.zig': FileNotFound",
+    );
+}
+
 test "all three gate steps pass a conforming tree recording nothing" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
