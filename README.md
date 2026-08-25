@@ -13,11 +13,20 @@ building skeleton and the design records; `spine` is a working codename
 
 ## Quick start
 
-Build and run the tests (a Zig 0.16 toolchain is the only prerequisite; the
-minimum version is pinned in `build.zig.zon`):
+Build and run the unit tests plus the analysis gates — formatting (`zig fmt
+--check --ast-check`), the 100-column cap, test registration and forced
+declaration analysis, and gate-coverage completeness ([OQ
+45](docs/open-questions.md) records this as today's merge gate; a Zig 0.16
+toolchain is the only prerequisite, its minimum pinned in `build.zig.zon`):
 
 ```bash
 zig build test
+```
+
+Run the analysis gates alone:
+
+```bash
+zig build lint
 ```
 
 Run the placeholder binary:

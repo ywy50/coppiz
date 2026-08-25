@@ -53,6 +53,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The README's Quick start no longer describes `zig build test` as only
+  "build and run the tests": it is the merge gate (OQ 45) and carries the
+  analysis gates — formatting, the 100-column cap, test registration and
+  forced declaration analysis, gate-coverage completeness — and the gates'
+  standalone entry point, `zig build lint`, was absent from the README
+  altogether. Both are now named with what they run.
+
 - Two more lint-gate test repairs, each confirmed to bite by temporarily
   breaking the branch it guards: the case-mismatch report's
   once-per-distinct-import-string dedup is now pinned (the fixture repeats a
