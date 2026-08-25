@@ -31,6 +31,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   silence the report either: a wrong-case source is named whatever the
   allowlist holds.
 
+- Near-miss `.zig` names are no longer invisible either: a file whose name
+  keeps ".zig" mid-name ("root.zig~" editor backups, "a.zig.bak",
+  "b.zig.rej", emacs's "c.zig.~1.2~") classified as other exactly like the
+  wrong-case suffix and reached no gate while `zig build lint` stayed green.
+  The coverage walk collects such files beside the wrong-case ones and fails
+  naming each until it is renamed to the lowercase spelling or deleted.
+  Package manifests are exempt: any ".zon" suffix keeps ".zig" mid-name by
+  its own convention (`build.zig.zon`) without carrying a source obligation.
+
 - Wrong-case `@import` strings are no longer invisible to the test-registration
   gate: an import like `@import("Helper.zig")` when the walked file is
   `helper.zig` resolved on a case-insensitive filesystem (macOS's default

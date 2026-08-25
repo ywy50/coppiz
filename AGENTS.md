@@ -44,10 +44,11 @@ one ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md),
   registration without declaration analysis can no longer hide behind a
   green run.
 - The gates cover exactly the paths in `checked_paths` (build.zig); a
-  coverage-completeness gate fails any other `.zig` file in the tree
-  (leading-dot tooling entries and `zig-out/` excepted), so a new source
-  location joins `checked_paths` instead of going silently unformatted,
-  uncapped and untested.
+  coverage-completeness gate fails any other `.zig` file — or near-miss
+  spelling of one (`Legacy.ZIG`, `root.zig~`; `.zon` manifests exempt) — in
+  the tree (leading-dot tooling entries and `zig-out/` excepted), so a new
+  source location joins `checked_paths` instead of going silently
+  unformatted, uncapped and untested.
 - Write the failing test first, beside the shipped function, and confirm it
   fails for the intended reason. Pure logic (codecs, fold, election, merge,
   expiry) stays I/O-free so it can be unit-tested and later driven by a

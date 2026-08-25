@@ -1165,7 +1165,7 @@ const TestRegistrationStep = struct {
     /// roots-only convention, and an ordinary module's wrong-case import
     /// hides behind another module's correct one just the same. The
     /// wrong-case *filename* counterpart lives in GateCoverageStep
-    /// (wrongCaseLines); this covers the import strings. One report line per
+    /// (nearMissLines); this covers the import strings. One report line per
     /// distinct import string per importing file, whatever the number of
     /// occurrences. `separator` is a parameter so any platform can be
     /// simulated in a test.
@@ -2195,11 +2195,12 @@ const GateCoverageStep = struct {
         var report: std.ArrayListUnmanaged(u8) = .empty;
         try GateCoverageStep.uncoveredPaths(arena, covered, candidates.items, &report);
         // uncoveredPaths matches by equality, and checkedFiles takes a listed
-        // file whole, so a wrong-case path listed in checked_paths joins the
-        // covered set and would silence itself there. The gate's contract is
-        // that a wrong-case source is named whatever the allowlist holds, so
-        // exactly those absorbed candidates get their line back.
-        try GateCoverageStep.wrongCaseLines(arena, covered, candidates.items, &report);
+        // file whole, so a near-miss Zig spelling listed in checked_paths
+        // joins the covered set and would silence itself there. The gate's
+        // contract is that a file no gate's filter matches is named whatever
+        // the allowlist holds, so exactly those absorbed candidates get
+        // their line back.
+        try GateCoverageStep.nearMissLines(arena, covered, candidates.items, &report);
 
         // One report line per violation (pinned by the exact-string tests
         // below), so the tally is the newline count — no second output to
@@ -2221,25 +2222,25 @@ const GateCoverageStep = struct {
         return false;
     }
 
-    /// The wrong-case half of the coverage report, I/O-free so tests drive
+    /// The near-miss half of the coverage report, I/O-free so tests drive
     /// it directly beside uncoveredPaths: appends one report line per
-    /// candidate whose basename carries a `.zig` suffix in any letter case
-    /// except the exact lowercase spelling and that `covered` holds anyway.
+    /// candidate whose basename names a Zig source in a spelling no gate's
+    /// filter matches (zigNearMissName: ".zig" in any letter case, not as
+    /// the exact lowercase suffix — wrong-case names and suffixed backups
+    /// or reject files alike) and that `covered` holds anyway.
     /// Candidates the covered list does not hold were already reported by
     /// uncoveredPaths; naming them here too would double the tally. The
     /// point is that listing a wrong-case path in `checked_paths` cannot buy
     /// silence: the exact-case filters every covering surface applies are
     /// what make such a file invisible, and only renaming ends that.
-    fn wrongCaseLines(
+    fn nearMissLines(
         arena: std.mem.Allocator,
         covered: []const []const u8,
         candidates: []const []const u8,
         report: *std.ArrayListUnmanaged(u8),
     ) !void {
         for (candidates) |path| {
-            const basename = std.fs.path.basename(path);
-            if (!zigSuffixAnyCase(basename)) continue;
-            if (std.mem.endsWith(u8, basename, ".zig")) continue;
+            if (!zigNearMissName(std.fs.path.basename(path))) continue;
             if (!coveredContains(covered, path)) continue;
             try report.print(arena, "  {s}: not covered by any analysis gate\n", .{path});
         }
@@ -2280,32 +2281,52 @@ fn excludedFromGates(basename: []const u8, depth: usize) bool {
     return depth == 1 and std.mem.eql(u8, basename, "zig-out");
 }
 
-/// True when `basename` carries a ".zig" suffix spelled in any letter case
-/// ("x.ZIG", "y.ZiG"), exact lowercase included — each caller narrows the
-/// exact case itself, differently: in appendProjectZigFiles' .other branch
-/// the shared classifier has already claimed exact-lowercase names as
-/// .zig_source, so only a wrong-case spelling arrives; wrongCaseLines sees
-/// every walked candidate and skips the exact case with its own endsWith.
-/// This is the wrong-case remainder — a file every gate's filter skips —
-/// that the coverage walk collects so the gate can fail naming it instead
-/// of letting it merge with zero analysis.
-fn zigSuffixAnyCase(basename: []const u8) bool {
-    return basename.len >= 4 and std.ascii.eqlIgnoreCase(basename[basename.len - 4 ..], ".zig");
+/// True when a basename names a possible Zig source without spelling it
+/// the one way every covering gate matches: ".zig" occurs in any letter
+/// case somewhere in the name, but never as the exact lowercase suffix.
+/// The wrong-case suffix ("x.ZIG", "y.ZiG") is the original member; the
+/// same net must also catch a suffixed backup or reject file whose
+/// ".zig" is no longer the end of the name ("root.zig~", "a.zig.bak",
+/// "b.zig.rej", emacs's "c.zig.~1.2~") — each classifies as .other, so
+/// every covering gate's filter skips it just the same. Two exemptions:
+/// the exact lowercase suffix (the covering gates' own territory) and
+/// any ".zon" suffix — the package-manifest spelling keeps ".zig"
+/// mid-name by its own convention ("build.zig.zon", listed whole in
+/// checked_paths) while carrying no source obligation. Callers narrow
+/// further per role: appendProjectZigFiles' .other branch has already
+/// claimed exact-lowercase names as .zig_source, and nearMissLines
+/// guards the exact case with its own endsWith.
+fn zigNearMissName(basename: []const u8) bool {
+    if (std.mem.endsWith(u8, basename, ".zig")) return false;
+    if (std.mem.endsWith(u8, basename, ".zon")) return false;
+    return std.ascii.indexOfIgnoreCase(basename, ".zig") != null;
 }
 
-test "zigSuffixAnyCase answers any letter case of .zig and nothing shorter" {
-    // The boundaries the walk-driven test cannot isolate: every letter case
-    // of the suffix matches at any position, while a basename under four
-    // bytes carries no suffix at all — the guard a regression to '>' would
-    // flip for exactly the four-byte ".ZIG", and a startsWith rewrite would
-    // flip for "x.zig.tar".
-    try std.testing.expect(zigSuffixAnyCase("Legacy.ZIG"));
-    try std.testing.expect(zigSuffixAnyCase("y.ZiG"));
-    try std.testing.expect(zigSuffixAnyCase("plain.zig"));
-    try std.testing.expect(zigSuffixAnyCase("archive.x.zig"));
-    try std.testing.expect(zigSuffixAnyCase(".ZIG"));
-    try std.testing.expect(!zigSuffixAnyCase("zig"));
-    try std.testing.expect(!zigSuffixAnyCase("notes.md"));
+test "zigNearMissName catches every spelling a gate's filters skip" {
+    // The boundaries: every letter case of the suffix matches at any
+    // position, the exact lowercase suffix is excluded (the callers see
+    // it already as .zig_source or guard it themselves), and a basename
+    // under four bytes carries no suffix at all — the guard a regression
+    // to '>' would flip for exactly the four-byte ".ZIG".
+    try std.testing.expect(zigNearMissName("Legacy.ZIG"));
+    try std.testing.expect(zigNearMissName("y.ZiG"));
+    try std.testing.expect(zigNearMissName("archive.x.zig.tar"));
+    try std.testing.expect(zigNearMissName(".ZIG"));
+    // The near-miss spellings a suffix-only check let through: editor
+    // backups and patch rejects keep ".zig" mid-name.
+    try std.testing.expect(zigNearMissName("root.zig~"));
+    try std.testing.expect(zigNearMissName("main.zig.bak"));
+    try std.testing.expect(zigNearMissName("patch.zig.rej"));
+    try std.testing.expect(zigNearMissName("v.zig.~1.2~"));
+    // Exact-lowercase sources are the covering gates' own territory, and
+    // ".zon" is the manifest spelling whose ".zig" is conventional.
+    try std.testing.expect(!zigNearMissName("plain.zig"));
+    try std.testing.expect(!zigNearMissName("build.zig.zon"));
+    try std.testing.expect(!zigNearMissName("spine.zon"));
+    // Names merely resembling Zig stay out: no ".zig" substring.
+    try std.testing.expect(!zigNearMissName("zig"));
+    try std.testing.expect(!zigNearMissName("ziggurat"));
+    try std.testing.expect(!zigNearMissName("notes.md"));
 }
 
 /// Appends every project-owned .zig file — everything under the build root
@@ -2320,10 +2341,13 @@ test "zigSuffixAnyCase answers any letter case of .zig and nothing shorter" {
 /// reported as directories, so classifyWalkedEntry rejects a linked
 /// directory loudly and its subtree would otherwise escape this gate
 /// silently). One class of entry lands here beyond the classifier's own:
-/// a file with a wrong-case ".zig" suffix ("Legacy.ZIG") classifies as
-/// .other everywhere, yet it is exactly the source no gate sees, so the
-/// .other branch collects it as a candidate the covering set cannot match —
-/// the report names it, and the lowercase spelling ends the failure.
+/// a file whose name names a Zig source in a spelling every gate skips —
+/// a wrong-case ".zig" suffix ("Legacy.ZIG") or a backup/reject file
+/// keeping ".zig" mid-name ("root.zig~", "a.zig.bak"; zigNearMissName's
+/// whole set) — classifies as .other everywhere, yet it is exactly the
+/// source no gate sees, so the .other branch collects it as a candidate
+/// the covering set cannot match — the report names it, and renaming to
+/// the lowercase spelling (or deleting it) ends the failure.
 ///
 /// On failure `failed_path` names the walked entry that could not be handled —
 /// the link or unclassifiable entry whose resolution failed or the directory
@@ -2363,20 +2387,21 @@ fn appendProjectZigFiles(
             // The "" prefix joins to the entry's walked path itself: the
             // fresh copy outlives the walker slice it was derived from.
             .zig_source => |path| try paths.append(arena, path),
-            .other => if (zigSuffixAnyCase(entry.basename)) {
-                // A source file whose extension is not spelled ".zig"
-                // ("Legacy.ZIG", "x.ZiG") classifies as other: the covering
-                // gates' suffix filter and zig fmt's own directory walk are
-                // both exact-match (verified on 0.16.0: `zig fmt --check`
-                // over a directory leaves Bad.ZIG untouched), so the file
-                // would reach no formatter, no column cap, no registration
-                // walk and no test binary — and stay invisible here too,
+            .other => if (zigNearMissName(entry.basename)) {
+                // A file whose name names a Zig source in a spelling no
+                // gate's filter matches ("Legacy.ZIG", "root.zig~",
+                // "a.zig.bak") classifies as other: the covering gates'
+                // suffix filter and zig fmt's own directory walk are both
+                // exact-match (verified on 0.16.0: `zig fmt --check` over a
+                // directory leaves Bad.ZIG untouched), so the file would
+                // reach no formatter, no column cap, no registration walk
+                // and no test binary — and stay invisible here too,
                 // candidates carrying only what classifyWalkedEntry calls
                 // .zig_source. Collect it anyway: the covering set can never
                 // hold it, so the gate names it until the file carries the
-                // lowercase spelling every gate applies. next() invalidates
-                // its slices, so the walked path is copied out like a
-                // classified source's.
+                // lowercase spelling every gate applies — or is deleted.
+                // next() invalidates its slices, so the walked path is
+                // copied out like a classified source's.
                 try paths.append(arena, try arena.dupe(u8, entry.path));
             },
         }
@@ -2420,7 +2445,7 @@ test "gate coverage stays silent when every candidate is covered" {
     try std.testing.expectEqual(@as(usize, 0), report.items.len);
 }
 
-test "gate coverage names a wrong-case source even when checked_paths lists it" {
+test "gate coverage names a near-miss source even when checked_paths lists it" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -2428,30 +2453,34 @@ test "gate coverage names a wrong-case source even when checked_paths lists it" 
     // The listed shape uncoveredPaths alone cannot judge: "Legacy.ZIG" sat in
     // checked_paths, checkedFiles took it whole, and the equality match
     // accepted the very escape this gate closes — a silent report while the
-    // file stayed outside every exact-case filter. wrongCaseLines returns
-    // the line whatever the allowlist holds; ok.zig shows an ordinary
+    // file stayed outside every exact-case filter. nearMissLines returns
+    // the line whatever the allowlist holds — for the suffixed backup
+    // spelling ("main.zig.bak") exactly as for the wrong-case suffix, since
+    // both are spellings no gate's filter matches; ok.zig shows an ordinary
     // covered candidate stays silent.
-    const covered = [_][]const u8{ "src/ok.zig", "Legacy.ZIG" };
-    const candidates = [_][]const u8{ "src/ok.zig", "Legacy.ZIG" };
+    const covered = [_][]const u8{ "src/ok.zig", "Legacy.ZIG", "src/main.zig.bak" };
+    const candidates = [_][]const u8{ "src/ok.zig", "Legacy.ZIG", "src/main.zig.bak" };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
     try GateCoverageStep.uncoveredPaths(arena, &covered, &candidates, &report);
-    try GateCoverageStep.wrongCaseLines(arena, &covered, &candidates, &report);
+    try GateCoverageStep.nearMissLines(arena, &covered, &candidates, &report);
 
     try std.testing.expectEqualStrings(
         \\  Legacy.ZIG: not covered by any analysis gate
+        \\  src/main.zig.bak: not covered by any analysis gate
         \\
     , report.items);
 
-    // The unlisted shape keeps its single line: a wrong-case candidate the
-    // covered list never held was already reported by uncoveredPaths, so
-    // the second half adds nothing — no doubled tally.
+    // The unlisted shape keeps its single line per file: a near-miss
+    // candidate the covered list never held was already reported by
+    // uncoveredPaths, so the second half adds nothing — no doubled tally.
     const bare_covered = [_][]const u8{"src/ok.zig"};
     report = .empty;
     try GateCoverageStep.uncoveredPaths(arena, &bare_covered, &candidates, &report);
-    try GateCoverageStep.wrongCaseLines(arena, &bare_covered, &candidates, &report);
+    try GateCoverageStep.nearMissLines(arena, &bare_covered, &candidates, &report);
     try std.testing.expectEqualStrings(
         \\  Legacy.ZIG: not covered by any analysis gate
+        \\  src/main.zig.bak: not covered by any analysis gate
         \\
     , report.items);
 }
@@ -2523,7 +2552,7 @@ test "appendProjectZigFiles walks the tree minus tooling directories, links incl
     );
 }
 
-test "appendProjectZigFiles collects a wrong-case .zig file as a candidate" {
+test "appendProjectZigFiles collects a near-miss .zig name as a candidate" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -2534,14 +2563,17 @@ test "appendProjectZigFiles collects a wrong-case .zig file as a candidate" {
 
     // The escape this closes: "Legacy.ZIG" is a Zig source by name whose
     // wrong-case suffix classifies it as .other, so no covering gate sees
-    // it — the coverage walk must still hand it to the report. Controls on
-    // both sides: notes.md is a plain other and stays out, and a *directory*
-    // named NotSources.ZIG is entered like any directory, never appended,
-    // so only files can trigger the failure.
+    // it — the coverage walk must still hand it to the report. The suffixed
+    // backup spelling ("root.zig~") is the same class with ".zig" no longer
+    // at the end of the name: a suffix-only check let it through. Controls
+    // on both sides: notes.md is a plain other and stays out, and a
+    // *directory* named NotSources.ZIG is entered like any directory, never
+    // appended, so only files can trigger the failure.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     (try tmp.dir.createDirPathOpen(io, "NotSources.ZIG", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/ok.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "Legacy.ZIG", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "root.zig~", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "notes.md", .data = "" });
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -2549,12 +2581,13 @@ test "appendProjectZigFiles collects a wrong-case .zig file as a candidate" {
     try appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path);
     std.mem.sort([]const u8, found.items, {}, lessThanStrings);
 
-    try std.testing.expectEqual(@as(usize, 2), found.items.len);
+    try std.testing.expectEqual(@as(usize, 3), found.items.len);
     try std.testing.expect(failed_path == null);
     try std.testing.expectEqualStrings("Legacy.ZIG", found.items[0]);
+    try std.testing.expectEqualStrings("root.zig~", found.items[1]);
     try std.testing.expectEqualStrings(
         "src" ++ std.fs.path.sep_str ++ "ok.zig",
-        found.items[1],
+        found.items[2],
     );
 }
 
@@ -3144,7 +3177,8 @@ test "gate-coverage step fails naming a wrong-case .zig file no gate sees" {
     // report is the generic uncovered line — renaming to the lowercase
     // spelling is what ends the failure, not a checked_paths entry, since
     // listing it would cover the name while zig fmt's directory walk still
-    // skipped the file.
+    // skipped the file. One planted file per run: the report prints in walk
+    // order, which no filesystem guarantees between siblings.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
@@ -3159,6 +3193,36 @@ test "gate-coverage step fails naming a wrong-case .zig file no gate sees" {
         testMakeOptions(arena),
         "1 Zig source(s) no analysis gate covers:\n" ++
             "  Legacy.ZIG: not covered by any analysis gate\n",
+    );
+}
+
+test "gate-coverage step fails naming a backup-spelling .zig file no gate sees" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The escape a suffix-only check admitted end to end: an editor backup
+    // keeps ".zig" mid-name ("root.zig~"; same for "x.zig.bak",
+    // "x.zig.rej"), classifies as .other like the wrong-case suffix, and no
+    // covering gate sees it. Deleting the backup is what ends the failure.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "root.zig~", .data = "" });
+
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = GateCoverageStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "1 Zig source(s) no analysis gate covers:\n" ++
+            "  root.zig~: not covered by any analysis gate\n",
     );
 }
 
