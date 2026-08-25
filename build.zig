@@ -1995,6 +1995,16 @@ const GateCoverageStep = struct {
             });
     }
 
+    /// True when the covered set already names `path` byte-for-byte: the
+    /// membership question both report halves ask of every candidate, kept
+    /// in one copy so their match rules cannot drift apart.
+    fn coveredContains(covered: []const []const u8, path: []const u8) bool {
+        for (covered) |checked| {
+            if (std.mem.eql(u8, checked, path)) return true;
+        }
+        return false;
+    }
+
     /// The wrong-case half of the coverage report, I/O-free so tests drive
     /// it directly beside uncoveredPaths: appends one report line per
     /// candidate whose basename carries a `.zig` suffix in any letter case
@@ -2010,15 +2020,12 @@ const GateCoverageStep = struct {
         candidates: []const []const u8,
         report: *std.ArrayListUnmanaged(u8),
     ) !void {
-        outer: for (candidates) |path| {
+        for (candidates) |path| {
             const basename = std.fs.path.basename(path);
             if (!zigSuffixAnyCase(basename)) continue;
             if (std.mem.endsWith(u8, basename, ".zig")) continue;
-            for (covered) |checked| {
-                if (!std.mem.eql(u8, checked, path)) continue;
-                try report.print(arena, "  {s}: not covered by any analysis gate\n", .{path});
-                continue :outer;
-            }
+            if (!coveredContains(covered, path)) continue;
+            try report.print(arena, "  {s}: not covered by any analysis gate\n", .{path});
         }
     }
 
@@ -2034,10 +2041,8 @@ const GateCoverageStep = struct {
         candidates: []const []const u8,
         report: *std.ArrayListUnmanaged(u8),
     ) !void {
-        outer: for (candidates) |path| {
-            for (covered) |checked| {
-                if (std.mem.eql(u8, checked, path)) continue :outer;
-            }
+        for (candidates) |path| {
+            if (coveredContains(covered, path)) continue;
             try report.print(arena, "  {s}: not covered by any analysis gate\n", .{path});
         }
     }
@@ -2052,6 +2057,9 @@ const GateCoverageStep = struct {
 /// zig-out deeper down stays inside the gated tree, its sources still
 /// reportable — the gate exists so nothing escapes silently.
 fn excludedFromGates(basename: []const u8, depth: usize) bool {
+    // The dot test indexes basename[0]; a walker entry always carries a
+    // real name, and an empty one here would be a caller bug, not input.
+    std.debug.assert(basename.len > 0);
     if (basename[0] == '.') return true;
     return depth == 1 and std.mem.eql(u8, basename, "zig-out");
 }
