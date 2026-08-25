@@ -191,10 +191,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   a plain toolchain satisfies a floor carrying build metadata.
 - A third boundary pin in the lint-gate tests: the column-cap test now feeds
   a line of exactly the cap in code points while over it in bytes (100 wide
-  characters, 200 bytes). The decoded side of the cap admitted an off-by-one
-  ('<' for '<=') that flagged such a line — conforming wide-character source —
-  and no existing case caught it, because a sub-cap byte count skips the
-  decode entirely, so the ASCII exact-limit pin exercises a different branch.
+  characters, 200 bytes). The decoded side of the cap was one comparison away
+  from an off-by-one ('<' for '<=') that would have flagged such a line —
+  conforming wide-character source — and no existing case caught it, because a
+  sub-cap byte count skips the decode entirely, so the ASCII exact-limit pin
+  exercises a different branch.
 - Two more lint-gate test repairs: the import-cycle classification test now
   also pins that modules reachable only through an unreachable importer are
   reported beside it (the walk seeds from test roots only), and
