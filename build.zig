@@ -871,13 +871,12 @@ const test_roots = [_][]const u8{ "src/root.zig", "src/main.zig", "build.zig" };
 /// an import in a declaration that is never analyzed (an unused
 /// container-level const) collects nothing — so the gate walks real
 /// @import calls across every walked module (collectImports), resolving each
-/// canonical form normalizeImportPath defines for recorded imports. Only a
-/// literal
-/// `@import("path")` call counts: a mention inside a comment or any string
-/// literal registers nothing. A third half (caseMismatchLines) reports an
-/// import that differs from the walked module it resolves to only by letter
-/// case — it compiles on a case-insensitive filesystem and fails on a
-/// case-sensitive one, and hides behind any other chain reaching the module.
+/// to the canonical form normalizeImportPath defines for recorded imports.
+/// Only a literal `@import("path")` call counts: a mention inside a comment
+/// or any string literal registers nothing. A third half (caseMismatchLines)
+/// reports an import that differs from the walked module it resolves to only
+/// by letter case — it compiles on a case-insensitive filesystem and fails on
+/// a case-sensitive one, and hides behind any other chain reaching the module.
 const TestRegistrationStep = struct {
     step: std.Build.Step,
 
@@ -3521,8 +3520,8 @@ test "gate-coverage step names the checked path when its enumeration fails" {
     // make() routes that through failEnumeration naming the gate path — the
     // wording loadCheckedSources' tests pin for the other two gates, from
     // the one shared reporter. The message can only come from this branch:
-    // a project-walk failure prints "cannot walk", a violation the tally
-    // header, so a pass here proves the routing ran.
+    // a project-walk failure prints "cannot walk", and a coverage violation
+    // prints under the tally header, so a pass here proves the routing ran.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     // build.zig is deliberately absent: checked_paths lists it, so the
