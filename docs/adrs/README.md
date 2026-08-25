@@ -11,7 +11,7 @@ RFC can be withdrawn without ever producing an ADR.
 Open a new ADR from the template, numbered after the last in the inventory:
 
 ```bash
-cp docs/adrs/TEMPLATE.md docs/adrs/0004-<slug>.md
+cp docs/adrs/TEMPLATE.md "docs/adrs/0004-<slug>.md"
 ```
 
 The title is the **choice**, not the question. Add it to the inventory

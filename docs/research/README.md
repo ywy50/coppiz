@@ -10,7 +10,7 @@ out of it in an [ADR](../adrs/).
 Open a new note from the template, numbered after the last in the inventory:
 
 ```bash
-cp docs/research/TEMPLATE.md docs/research/0002-<slug>.md
+cp docs/research/TEMPLATE.md "docs/research/0002-<slug>.md"
 ```
 
 Every claim traces to an evidence-log row with the date it was read. Internet

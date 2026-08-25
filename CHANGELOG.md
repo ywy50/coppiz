@@ -22,6 +22,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The four record-store quick-start commands (the adrs, rfcs, prds and
+  research inventories' READMEs) quote their `cp` destination around the
+  placeholder (`"docs/adrs/0004-<slug>.md"`). Unquoted, a POSIX shell read
+  `<slug>` as input and output redirections: where no file named `slug`
+  existed the documented copy failed outright ("slug: No such file or
+  directory"), and where one did it ran as a copy to `0004-` while creating
+  a stray empty `.md` — never the numbered copy the instructions describe.
 - Four end-to-end pins in the lint-gate tests, each run against a gate
   step's make() function over a temporary tree: the test-registration
   report's two single-section shapes (reachability findings alone carry no

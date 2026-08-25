@@ -11,7 +11,7 @@ RFC leads to one.
 Open a new RFC from the template, numbered after the last in the inventory:
 
 ```bash
-cp docs/rfcs/TEMPLATE.md docs/rfcs/0003-<slug>.md
+cp docs/rfcs/TEMPLATE.md "docs/rfcs/0003-<slug>.md"
 ```
 
 Then add it to the inventory below. An RFC needs at least two candidates, the

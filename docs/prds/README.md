@@ -11,7 +11,7 @@ PRDs: [`../adrs/`](../adrs/). Unknowns every PRD points into:
 Open a new PRD from the template, numbered after the last in the inventory:
 
 ```bash
-cp docs/prds/TEMPLATE.md docs/prds/0007-<slug>.md
+cp docs/prds/TEMPLATE.md "docs/prds/0007-<slug>.md"
 ```
 
 A Draft counts as planned only when its Design names dependencies and
