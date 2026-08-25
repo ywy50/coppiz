@@ -110,10 +110,11 @@ test "meetsZigFloor accepts the floor itself and newer, rejects older" {
 /// one owning all of the checking.
 fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Compile) void {
     // Zig 0.16 collects `test` blocks from a test module's root file and
-    // from every src/ module its analyzed imports reach, so every src/ file
+    // from every module its analyzed imports reach, so every gated Zig file
     // must be reachable from a test-module root — src/root.zig's comptime
-    // reference block or src/main.zig, directly or through another module —
-    // or its tests silently never run.
+    // reference block, src/main.zig, or build.zig itself (a root in its own
+    // right through the build_tests module below), directly or through
+    // another module — or its tests silently never run.
     const lib_tests = b.addTest(.{ .root_module = lib_mod });
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
     // The build file carries lint-gate logic with its own tests; compiling
@@ -144,8 +145,8 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
     );
 
     // The file list comes from `checked_paths` through the same dispatcher
-    // as the column cap and coverage gates, so all three file-covering
-    // surfaces can never drift apart about what is analyzed.
+    // as the column cap, coverage and registration gates, so every
+    // file-covering surface can never drift apart about what is analyzed.
     const fmt_check = b.addSystemCommand(fmtArgs(
         b.allocator,
         b.graph.io,
@@ -716,16 +717,24 @@ test "column cap falls back to byte count on invalid UTF-8" {
     try std.testing.expectEqualStrings("  f.zig:1\n", report.items);
 }
 
-/// The src/ files whose `test` blocks Zig collects (the test-module roots).
-/// One list serves both uses in the gate below: the seeds of the
-/// reachability walk, and the files exempt from requiring reachability.
-const test_roots = [_][]const u8{ "src/root.zig", "src/main.zig" };
+/// The files whose `test` blocks Zig collects (the test-module roots). One
+/// list serves both uses in the gate below: the seeds of the reachability
+/// walk, and the files exempt from requiring reachability. build.zig
+/// belongs beside the two src/ roots: addChecks compiles it as its own
+/// plain-module test binary (build_tests), so its test blocks run like
+/// theirs — and a build script importing a src/ module owes that module the
+/// same refAllDecls pairing any other root owes.
+const test_roots = [_][]const u8{ "src/root.zig", "src/main.zig", "build.zig" };
 
-/// Fails the build when no chain of real @imports reaches a src/ module
-/// from a test-module root (src/root.zig or src/main.zig): only such a
-/// chain makes Zig 0.16 collect the module's `test` blocks, so an
-/// unreachable module's tests silently never run while `zig build test`
-/// stays green. The step also fails when a test root imports a src/ module
+/// Fails the build when no chain of real @imports reaches a gated Zig
+/// module from a test-module root (src/root.zig, src/main.zig or
+/// build.zig): only such a chain makes Zig 0.16 collect the module's `test`
+/// blocks, so an unreachable module's tests silently never run while
+/// `zig build test` stays green. The walk spans every gated Zig file, not
+/// only src/: a source directory added to checked_paths joins the
+/// registration obligation together with the formatter and column-cap
+/// coverage it gains, never one without the other. The step also fails when
+/// a test root imports a src/ module
 /// but never wraps that import in refAllDecls: registration alone collects
 /// tests and analyzes nothing, an unreferenced `pub` declaration is
 /// compiled into nothing, so the module's public surface would reach no
@@ -735,7 +744,7 @@ const test_roots = [_][]const u8{ "src/root.zig", "src/main.zig" };
 /// container-level const) collects nothing — so the gate walks real
 /// @import calls across every walked module (collectImports), resolving each
 /// candidate's import string relative to the importing file's directory
-/// (importBetween), not just against the two roots. Only a literal
+/// (importBetween), not just against the roots. Only a literal
 /// `@import("path")` call counts: a mention inside a comment or any string
 /// literal registers nothing.
 const TestRegistrationStep = struct {
@@ -759,15 +768,26 @@ const TestRegistrationStep = struct {
         const arena = arena_state.allocator();
 
         var report: std.ArrayListUnmanaged(u8) = .empty;
-        // Every walked module's text: the reachability walk reads imports
-        // out of intermediate modules too, not just out of the two roots.
-        // The roots sit in src/ themselves, so one walk finds them and no
-        // file is read twice. Enumeration goes through loadCheckedSources,
-        // so both steps share the dispatcher and its failure reporting.
-        const sources = try loadCheckedSources(step, b.build_root.handle, io, arena, &.{"src"});
-        try classifyModules(arena, sources, std.fs.path.sep, &report);
+        // Every gated module's text, straight from checked_paths: the walk
+        // owns the whole allowlist, so a source directory added there later
+        // joins this gate's obligation together with the formatter and
+        // column-cap coverage it gains — never coverage while its tests
+        // stay silently uncollected. Enumeration goes through
+        // loadCheckedSources, so every file-covering surface shares the
+        // dispatcher and its failure reporting. build.zig.zon rides the
+        // allowlist whole for the column cap but is not a Zig module; the
+        // .zig filter drops it (a wrong-case suffix cannot appear — the
+        // coverage gate rejects one before it could settle here). build.zig
+        // stays and counts as a test root: addChecks compiles it as its own
+        // test module.
+        const loaded = try loadCheckedSources(step, b.build_root.handle, io, arena, &checked_paths);
+        var sources: std.ArrayListUnmanaged(Source) = .empty;
+        for (loaded) |source| {
+            if (std.mem.endsWith(u8, source.path, ".zig")) try sources.append(arena, source);
+        }
+        try classifyModules(arena, sources.items, std.fs.path.sep, &report);
         var analysis_report: std.ArrayListUnmanaged(u8) = .empty;
-        try declarationAnalysisGaps(arena, sources, std.fs.path.sep, &analysis_report);
+        try declarationAnalysisGaps(arena, sources.items, std.fs.path.sep, &analysis_report);
         // Both cores append one report line per finding (pinned by the
         // exact-string tests below), so each tally is a newline count — no
         // second output to keep in lockstep with the appends.
@@ -1000,7 +1020,7 @@ const TestRegistrationStep = struct {
     /// public declarations analyze" test) is what gets declarations
     /// semantically checked, and dropping the second half used to be
     /// invisible to every gate while `zig build test` stayed green. Only the
-    /// two test roots are constrained: that is where the documented
+    /// test roots are constrained: that is where the documented
     /// convention puts both halves, while an intermediate module's imports
     /// are ordinary use. An import resolving to no walked module (`std`,
     /// `build_options`, the `spine` package) needs no wrapper. One report
@@ -1230,6 +1250,12 @@ test "test roots match whatever separator the walker produced" {
         std.fs.path.sep,
     );
     try std.testing.expect(try TestRegistrationStep.isTestRoot(arena, native, std.fs.path.sep));
+
+    // build.zig is compiled as its own plain-module test binary, so it is a
+    // test root whatever separator the walk produced — including the
+    // separator-free form a top-level listing always has.
+    try std.testing.expect(try TestRegistrationStep.isTestRoot(arena, "build.zig", '/'));
+    try std.testing.expect(try TestRegistrationStep.isTestRoot(arena, "build.zig", '\\'));
 }
 
 test "test-registration gate reports exactly the modules no chain reaches from a test root" {
@@ -2589,6 +2615,8 @@ test "test-registration step reports unreachable modules then analysis gaps" {
     // a.zig is imported bare by root.zig, reachable but never wrapped in
     // refAllDecls (the declaration-analysis section). Exactly one finding
     // per section keeps the report independent of the walker's order.
+    // build.zig and build.zig.zon are stubbed because make() enumerates the
+    // whole allowlist.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(
         io,
@@ -2597,6 +2625,8 @@ test "test-registration step reports unreachable modules then analysis gaps" {
     try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/a.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/ghost.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
 
     // The two sections join as separate paragraphs under their counted
     // headers — the assembly no other test pins; a dropped separator or a
@@ -2631,10 +2661,14 @@ test "test-registration step reports unreachable modules alone, with no trailing
     // analysis half must contribute neither header nor separator. The
     // two-section pin above cannot see a join that appends its blank line
     // unconditionally — both single-section shapes are pinned separately.
+    // build.zig and build.zig.zon are stubbed because make() enumerates the
+    // whole allowlist.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/ghost.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
 
     const sep_str = std.fs.path.sep_str;
     var graph: std.Build.Graph = undefined;
@@ -2646,6 +2680,75 @@ test "test-registration step reports unreachable modules alone, with no trailing
         "1 module(s) whose tests never run:\n" ++
             "  src" ++ sep_str ++ "ghost.zig: not reachable from a test root\n",
     );
+}
+
+test "test-registration step owes build.zig's src imports the same refAllDecls pairing" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // build.zig rides checked_paths into the registration walk: it is
+    // compiled as its own test module, so it is a test root, and a root
+    // that imports a src/ module bare owes it the refAllDecls line like
+    // any other root. The import targets helper.zig, not one of the other
+    // roots: one root importing another is no registration by design, so
+    // that shape could not fail. While the walk enumerated src/ alone,
+    // this bare import passed every gate while nothing analyzed helper's
+    // decls.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/helper.zig", .data = "" });
+    try tmp.dir.writeFile(
+        io,
+        .{ .sub_path = "build.zig", .data = "_ = @import(\"src/helper.zig\");\n" },
+    );
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+
+    const sep_str = std.fs.path.sep_str;
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = TestRegistrationStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "1 module(s) whose public declarations are never analyzed:\n" ++
+            "  src" ++ sep_str ++ "helper.zig: imported by build.zig " ++
+            "without forced declaration analysis\n",
+    );
+}
+
+test "test-registration step does not mistake build.zig.zon for an unregistered module" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The false-positive direction of the widened enumeration: the .zon
+    // file rides checked_paths whole (the column cap caps it), so the walk
+    // now hands it to the classifier beside the modules — dropping the .zig
+    // filter reports it as unreachable and fails every conforming tree.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = TestRegistrationStep.create(b);
+    try gate.step.makeFn(&gate.step, testMakeOptions(arena));
+
+    // Success records nothing on the step: a stray message appended beside
+    // a pass would read as a failure to whoever reads the run's output.
+    try std.testing.expectEqual(@as(usize, 0), gate.step.result_error_msgs.items.len);
 }
 
 test "test-registration step reports analysis gaps alone, with no leading section" {
@@ -2662,6 +2765,8 @@ test "test-registration step reports analysis gaps alone, with no leading sectio
     // a.zig stays reachable (the bare import itself is the chain) while
     // being reported (nothing wraps it in this root), which is exactly the
     // split between the two sections this shape isolates.
+    // build.zig and build.zig.zon are stubbed because make() enumerates the
+    // whole allowlist.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(
         io,
@@ -2669,6 +2774,8 @@ test "test-registration step reports analysis gaps alone, with no leading sectio
     );
     try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/a.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
 
     const sep_str = std.fs.path.sep_str;
     var graph: std.Build.Graph = undefined;

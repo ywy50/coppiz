@@ -7,6 +7,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- The test-registration gate walks every gated Zig file instead of only
+  `src/`: a source directory added to `checked_paths` used to gain
+  formatter and column-cap coverage while its modules' tests stayed
+  silently uncollected (Zig refuses an `@import` out of a module's root,
+  so no test root under `src/` could ever reach them). Such a module now
+  fails the gate by name until it has a real test root. `build.zig` joins
+  `src/root.zig` and `src/main.zig` in `test_roots` — it already compiles
+  as its own plain-module test binary — and owes the same `refAllDecls`
+  pairing for any bare import it holds; `build.zig.zon` rides the same
+  enumeration but is filtered back out as the non-Zig file it is.
+
 - Wrong-case `.zig` sources are no longer invisible to every analysis gate:
   a file like `Legacy.ZIG` classified as other in both lint-gate walks and
   in `zig fmt`'s own directory walk (verified on 0.16.0: `zig fmt --check`
