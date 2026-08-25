@@ -148,9 +148,9 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
     // as the column cap, coverage and registration gates, so every
     // file-covering surface can never drift apart about what is analyzed.
     const fmt_check = b.addSystemCommand(fmtArgs(
-        b.allocator,
-        b.graph.io,
         b.build_root.handle,
+        b.graph.io,
+        b.allocator,
         b.graph.zig_exe,
         &checked_paths,
     ));
@@ -301,6 +301,25 @@ fn classifyWalkedEntry(
     return .{ .zig_source = try std.fs.path.join(arena, &.{ prefix, entry.path }) };
 }
 
+/// Enters `entry` — classified .directory by classifyWalkedEntry — into the
+/// selective walk, with the entry's kind forced to .directory on the copy.
+/// Entering is explicit with a selective walker, and enter() refuses any
+/// kind but .directory, while a probed directory's walked-in raw kind is a
+/// link or .unknown — so the forced copy is the only way its subtree stays
+/// covered on a kind-less mount (XFS ftype=0, some NFS/FUSE); skipping it
+/// drops the subtree from every gate silently, and rejecting it fails every
+/// conforming tree there. One copy serves both file walks so the hack and
+/// its rationale cannot drift apart between them.
+fn enterForcedDirectory(
+    walker: *std.Io.Dir.SelectiveWalker,
+    io: std.Io,
+    entry: std.Io.Dir.Walker.Entry,
+) !void {
+    var descend = entry;
+    descend.kind = .directory;
+    try walker.enter(io, descend);
+}
+
 /// Appends every .zig file under the directory `dir_path`, as a path from
 /// the build root ("src/foo.zig"), in walker order. The walk is selective
 /// so directories are entered explicitly: a d_type-less mount (XFS with
@@ -327,15 +346,7 @@ fn appendZigFilesUnder(
         switch (try classifyWalkedEntry(root_dir, io, arena, dir_path, entry)) {
             .zig_source => |path| try paths.append(arena, path),
             .linked_directory => return error.LinkedDirectoryNotWalked,
-            // Entering is explicit with a selective walker, and enter()
-            // refuses any kind but .directory — a probed directory's raw
-            // kind is not one — so the copy goes in with the kind forced:
-            // the only way its subtree stays covered on a kind-less mount.
-            .directory => {
-                var descend = entry;
-                descend.kind = .directory;
-                try walker.enter(io, descend);
-            },
+            .directory => try enterForcedDirectory(&walker, io, entry),
             .other => {},
         }
     }
@@ -368,9 +379,9 @@ const Source = struct {
 /// Allocation uses the builder's allocator, like every other configure-time
 /// structure; the slice lives as long as the build.
 fn fmtArgs(
-    allocator: std.mem.Allocator,
-    io: std.Io,
     root_dir: std.Io.Dir,
+    io: std.Io,
+    allocator: std.mem.Allocator,
     zig_exe: []const u8,
     gate_paths: []const []const u8,
 ) []const []const u8 {
@@ -473,6 +484,8 @@ test "symLinkOrSkip creates the link, and skips only where links cannot be made"
 /// name. The mode is restored on the skip path so tmpDir cleanup sees an
 /// ordinary file; the consuming test restores it on the proceed path.
 fn setUnreadableOrSkip(dir: std.Io.Dir, io: std.Io, sub_path: []const u8) !void {
+    // Mode 0o000 — every bit cleared; legal because Permissions is
+    // non-exhaustive (`_`), and unreadable wherever a mode can deny a read.
     const unreadable: std.Io.File.Permissions = @enumFromInt(0);
     try dir.setFilePermissions(io, sub_path, unreadable, .{});
     if (dir.openFile(io, sub_path, .{})) |file| {
@@ -519,7 +532,7 @@ test "fmtArgs hands zig fmt every covered file, links included" {
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
     const gate_paths = [_][]const u8{"src"};
 
-    const argv = fmtArgs(arena, io, tmp.dir, "zig", &gate_paths);
+    const argv = fmtArgs(tmp.dir, io, arena, "zig", &gate_paths);
 
     // The fixed prefix, then the walked files in walker order — membership
     // compared per path, since the walker's order is filesystem-dependent
@@ -562,7 +575,7 @@ test "fmtArgs falls back to the raw gate paths when expansion fails" {
     // configure-time panic, no silently empty formatter run.
     const gate_paths = [_][]const u8{ "gone", "build.zig" };
 
-    const argv = fmtArgs(arena, io, tmp.dir, "zig", &gate_paths);
+    const argv = fmtArgs(tmp.dir, io, arena, "zig", &gate_paths);
 
     // The unchanged list means unchanged end to end: the fixed prefix in its
     // pinned order — a reordered flag would still hand zig fmt the same set
@@ -2418,7 +2431,7 @@ fn appendProjectZigFiles(
 ) !void {
     var dir = try root_dir.openDir(io, ".", .{ .iterate = true });
     defer dir.close(io);
-    var walker = try std.Io.Dir.walkSelectively(dir, arena);
+    var walker = try dir.walkSelectively(arena);
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
         if (excludedFromGates(entry.basename, entry.depth())) continue;
@@ -2430,17 +2443,7 @@ fn appendProjectZigFiles(
             return err;
         };
         switch (classified) {
-            // Entering is opt-in with a selective walker whose enter()
-            // refuses any kind but .directory — a probed directory's raw
-            // kind is not one — so the copy goes in with the kind forced;
-            // skipping it instead would drop a d_type-less mount's whole
-            // subtree from the report, and rejecting it would fail every
-            // conforming tree there.
-            .directory => {
-                var descend = entry;
-                descend.kind = .directory;
-                try walker.enter(io, descend);
-            },
+            .directory => try enterForcedDirectory(&walker, io, entry),
             .linked_directory => {
                 failed_path.* = try arena.dupe(u8, entry.path);
                 return error.LinkedDirectoryNotWalked;
