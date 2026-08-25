@@ -196,8 +196,9 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// subtree silently unchecked.
 /// `gate_paths` is a parameter rather than a read of `checked_paths` so a
 /// test can drive the dispatch against a temporary tree, the same way `separator`
-/// is a parameter below; production hands in `&checked_paths` for the
-/// column-cap and coverage walks and `&.{"src"}` for the registration walk.
+/// is a parameter below; every production caller — the formatter expansion,
+/// the column cap, the test-registration walk and the coverage-completeness
+/// gate — hands in `&checked_paths`.
 ///
 /// On failure `failed_path` names the gate path that could not be stat'd or
 /// walked, so the caller can report it — a bare error name would leave the
