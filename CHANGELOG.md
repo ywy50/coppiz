@@ -53,6 +53,22 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Conforming trees no longer fail every gate on filesystems whose directory
+  iteration answers no kind (XFS with `ftype=0`, some NFS and FUSE mounts).
+  The `statFile` probe taught the walks to resolve such entries, but a
+  probed *directory* was rejected exactly like a linked one — and since
+  neither std walker descends on its own into an entry not reported as a
+  directory (`Walker` auto-enters only `.directory` kinds;
+  `SelectiveWalker.enter` refuses any other), on such a mount every real
+  subdirectory under `src/` failed both file-covering gates
+  ("cannot enumerate 'src': LinkedDirectoryNotWalked") and the coverage
+  gate ("cannot walk 'src': …"), so `zig build test` could not pass at all.
+  The classifier now separates the two cases: a link resolving to a
+  directory stays the loud rejection, while an unclassifiable entry the
+  probe reveals as a directory is entered with the probed kind forced
+  (`unknown_directory`) — the subtree behind it is analyzed like any
+  other's, which is what the probe existed for.
+
 - The two load-bearing `statFile` probes in build.zig spell
   `.follow_symlinks = true` explicitly instead of inheriting it as the
   default: symlink-following is the documented contract both gate walks

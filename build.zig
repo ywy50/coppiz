@@ -246,9 +246,19 @@ const WalkedEntry = union(enum) {
     /// A directory walked into as a real directory (the walker descended or
     /// may be told to).
     directory,
-    /// A link or unclassifiable entry resolving to a directory: neither
-    /// walker descends into it, so its subtree would escape every gate
-    /// silently — reject loudly instead.
+    /// A directory only the probe reveals: the filesystem answered no kind
+    /// (`DT_UNKNOWN` reaches Zig as `.unknown`) and statFile resolved a
+    /// directory behind it. Neither std walker descends on its own — the
+    /// plain one auto-enters only entries reported as directories, and the
+    /// selective one refuses enter() for any other kind — so a caller must
+    /// enter it with the probed kind forced, or its subtree escapes every
+    /// gate silently (and, rejected instead, fails every conforming tree on
+    /// such a mount).
+    unknown_directory,
+    /// A link resolving to a directory: neither walker may descend into it
+    /// (following it would need cycle protection no current tree
+    /// justifies), so its subtree would escape every gate silently —
+    /// reject loudly instead.
     linked_directory,
     /// Anything else: not a Zig source.
     other,
@@ -284,7 +294,15 @@ fn classifyWalkedEntry(
         kind = (try root_dir.statFile(io, probe_path, .{ .follow_symlinks = true })).kind;
     }
     if (kind == .directory) {
-        return if (entry.kind == .directory) .directory else .linked_directory;
+        return switch (entry.kind) {
+            .directory => .directory,
+            // A link is the one entry whose raw kind is known yet names a
+            // directory it must not be descended into; an unclassified
+            // entry has no kind to compare, so the probed answer goes up
+            // for the caller to enter with.
+            .sym_link => .linked_directory,
+            else => .unknown_directory,
+        };
     }
     if (kind != .file) return .other;
     if (!std.mem.endsWith(u8, entry.basename, ".zig")) return .other;
@@ -292,10 +310,13 @@ fn classifyWalkedEntry(
 }
 
 /// Appends every .zig file under the directory `dir_path`, as a path from
-/// the build root ("src/foo.zig"), in walker order. A linked directory is
-/// never descended into (Walker only enters entries reported as
-/// directories), so classifyWalkedEntry rejects one loudly instead of
-/// silently dropping its subtree from every gate.
+/// the build root ("src/foo.zig"), in walker order. The walk is selective
+/// so directories are entered explicitly: a d_type-less mount (XFS with
+/// ftype=0, some NFS/FUSE — classifyWalkedEntry's `.unknown` note) reports
+/// every entry kind-less, the plain walker auto-enters only entries
+/// reported as directories, and there every real directory's subtree fell
+/// out of both covering gates while they stayed green. A linked directory
+/// is still rejected loudly instead of half-checked.
 fn appendZigFilesUnder(
     root_dir: std.Io.Dir,
     io: std.Io,
@@ -305,7 +326,7 @@ fn appendZigFilesUnder(
 ) !void {
     var dir = try root_dir.openDir(io, dir_path, .{ .iterate = true });
     defer dir.close(io);
-    var walker = try dir.walk(arena);
+    var walker = try dir.walkSelectively(arena);
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
         // entry.path is relative to the walked directory, while root_dir
@@ -314,8 +335,16 @@ fn appendZigFilesUnder(
         switch (try classifyWalkedEntry(root_dir, io, arena, dir_path, entry)) {
             .zig_source => |path| try paths.append(arena, path),
             .linked_directory => return error.LinkedDirectoryNotWalked,
-            // The plain walker descends real directories itself.
-            .directory, .other => {},
+            // The plain walker auto-entered real directories itself; a
+            // probed one carries a kind enter() refuses, so it is entered
+            // through a copy with the probed kind forced — the only way
+            // its subtree stays covered on a kind-less mount.
+            .directory, .unknown_directory => {
+                var descend = entry;
+                descend.kind = .directory;
+                try walker.enter(io, descend);
+            },
+            .other => {},
         }
     }
 }
@@ -2116,17 +2145,32 @@ test "classifyWalkedEntry resolves an unclassifiable entry through its real kind
     });
     try std.testing.expect(unknown_other == .other);
 
-    // An unclassifiable directory entry: the probe reveals a directory, but
-    // the raw kind is not .directory, so neither walker may descend into it
-    // — the linked-directory rejection, the loud outcome for a subtree that
-    // would otherwise escape every gate silently.
+    // An unclassifiable directory entry: the probe reveals a directory, so
+    // the classifier hands up .unknown_directory — the callers enter it
+    // with the probed kind forced, the only way a d_type-less mount's
+    // subtree stays covered (and, rejected instead, every conforming tree
+    // on such a mount failed).
     const unknown_dir = try classifyWalkedEntry(tmp.dir, io, arena, "src", .{
         .dir = tmp.dir,
         .basename = "sub",
         .path = "sub",
         .kind = .unknown,
     });
-    try std.testing.expect(unknown_dir == .linked_directory);
+    try std.testing.expect(unknown_dir == .unknown_directory);
+
+    // A *link* resolving to a directory stays the rejection case: its raw
+    // kind is known and not a directory, so no walker may descend into it —
+    // the loud outcome for a subtree following would need cycle protection
+    // to visit. The link exists so the probe resolves; the skip rule is
+    // symLinkOrSkip's.
+    try symLinkOrSkip(tmp.dir, io, "sub", "src/link");
+    const linked_dir = try classifyWalkedEntry(tmp.dir, io, arena, "src", .{
+        .dir = tmp.dir,
+        .basename = "link",
+        .path = "link",
+        .kind = .sym_link,
+    });
+    try std.testing.expect(linked_dir == .linked_directory);
 }
 
 test "appendZigFilesUnder rejects a linked directory whose walk cannot descend" {
@@ -2335,10 +2379,11 @@ test "zigNearMissName catches every spelling a gate's filters skip" {
 /// thousands of entries that would otherwise be visited on every lint run.
 /// Entry classification goes through classifyWalkedEntry, the same policy
 /// appendZigFilesUnder applies for the covering gates — a linked .zig file
-/// is collected like a real one (SelectiveWalker enters only entries
-/// reported as directories, so classifyWalkedEntry rejects a linked
-/// directory loudly and its subtree would otherwise escape this gate
-/// silently). One class of entry lands here beyond the classifier's own:
+/// is collected like a real one (entering is explicit with a selective
+/// walker, so classifyWalkedEntry rejects a linked directory loudly while a
+/// directory only the probe reveals is entered with its kind forced, its
+/// subtree reportable like any other on a d_type-less mount). One class of
+/// entry lands here beyond the classifier's own:
 /// a file whose name names a Zig source in a spelling every gate skips —
 /// a wrong-case ".zig" suffix ("Legacy.ZIG") or a backup/reject file
 /// keeping ".zig" mid-name ("root.zig~", "a.zig.bak"; zigNearMissName's
@@ -2375,9 +2420,16 @@ fn appendProjectZigFiles(
             return err;
         };
         switch (classified) {
-            // Entering is opt-in with a selective walker; skipping a
-            // pruned or non-directory entry just keeps reading siblings.
-            .directory => try walker.enter(io, entry),
+            // Entering is opt-in with a selective walker; a probed
+            // directory carries a kind enter() refuses, so the copy goes in
+            // with the probed kind forced — skipping it instead would drop
+            // a d_type-less mount's whole subtree from the report, and
+            // rejecting it would fail every conforming tree there.
+            .directory, .unknown_directory => {
+                var descend = entry;
+                descend.kind = .directory;
+                try walker.enter(io, descend);
+            },
             .linked_directory => {
                 failed_path.* = try arena.dupe(u8, entry.path);
                 return error.LinkedDirectoryNotWalked;
