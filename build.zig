@@ -1903,13 +1903,17 @@ test "case-mismatch gate names a wrong-case import hiding behind a correct chain
     // wrong-case breaks the case-sensitive build just the same. "std" is the
     // control that stays out: it matches no walked module exactly or folded,
     // like any package import. ghost.zig keeps the assertion from passing
-    // vacuously on an empty walk.
+    // vacuously on an empty walk. Helper.zig appears twice: the report stays
+    // one line per distinct import string per importing file — the tally the
+    // counted header derives — the same dedup pin the declaration-analysis
+    // half carries for its repeated bare import.
     const sources = [_]Source{
         .{
             .path = "src\\root.zig",
             .text = "test {\n" ++
                 "    std.testing.refAllDecls(@import(\"helper.zig\"));\n" ++
                 "}\n" ++
+                "_ = @import(\"Helper.zig\");\n" ++
                 "_ = @import(\"Helper.zig\");\n" ++
                 "_ = @import(\"Main.zig\");\n" ++
                 "_ = @import(\"std\");\n",
@@ -3509,6 +3513,60 @@ test "test-registration step reports all three sections in one failure" {
             "1 module(s) whose public declarations are never analyzed:\n" ++
             "  src" ++ sep_str ++ "a.zig: imported by src" ++ sep_str ++
             "root.zig without forced declaration analysis\n" ++
+            "\n" ++
+            "1 import(s) that resolve only on a case-insensitive filesystem:\n" ++
+            "  src" ++ sep_str ++ "helper.zig: imported by src" ++ sep_str ++
+            "root.zig as \"Helper.zig\"; only \"helper.zig\" resolves on every filesystem\n",
+    );
+}
+
+test "test-registration step joins the outer sections around a silent middle half" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The subset of section combinations no other pin runs: reachability and
+    // case-mismatch fire while declaration-analysis stays silent, and the
+    // blank-line join must still separate the outer two. appendSection keys
+    // the separator on the message accumulated so far; a join keyed on
+    // whether the *previous* section found something passed every existing
+    // shape ({1}, {2}, {3}, {1,2} and all three above) while dropping this
+    // report's separator — exactly one blank line lost, behind a green suite.
+    // ghost.zig is imported by nobody (the reachability finding); helper.zig
+    // is wrapped, so no bare import exists for the analysis half to report,
+    // and "Helper.zig" beside the wrapper is the case finding.
+    // build.zig and build.zig.zon are stubbed because make() enumerates the
+    // whole allowlist.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(
+        io,
+        .{
+            .sub_path = "src/root.zig",
+            .data = "test {\n" ++
+                "    std.testing.refAllDecls(@import(\"helper.zig\"));\n" ++
+                "}\n" ++
+                "_ = @import(\"Helper.zig\");\n",
+        },
+    );
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/helper.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/ghost.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+
+    const sep_str = std.fs.path.sep_str;
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = TestRegistrationStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "1 module(s) whose tests never run:\n" ++
+            "  src" ++ sep_str ++ "ghost.zig: not reachable from a test root\n" ++
             "\n" ++
             "1 import(s) that resolve only on a case-insensitive filesystem:\n" ++
             "  src" ++ sep_str ++ "helper.zig: imported by src" ++ sep_str ++

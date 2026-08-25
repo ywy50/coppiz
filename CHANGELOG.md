@@ -53,6 +53,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Two more lint-gate test repairs, each confirmed to bite by temporarily
+  breaking the branch it guards: the case-mismatch report's
+  once-per-distinct-import-string dedup is now pinned (the fixture repeats a
+  wrong-case spelling from one importer — dropping the dedup doubled the
+  tally behind a green suite, the same hole the declaration-analysis half
+  had already closed for its repeated bare import), and the test-registration
+  step's section assembly gains its missing subset — reachability and
+  case-mismatch findings with a silent declaration-analysis half — where a
+  blank-line join keyed on whether the previous section found something
+  passed every existing shape while mangling this report.
+
 - A linked directory listed in `checked_paths` no longer fails the
   gate-coverage walk that the covering gates themselves bless. `checkedFiles`
   follows a listed path that symlinks a directory so its subtree reaches every
