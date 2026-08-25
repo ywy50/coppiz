@@ -1874,9 +1874,13 @@ test "case-mismatch gate names a wrong-case import hiding behind a correct chain
     // helper.zig through the exact-case wrapped import, so the module is
     // registered and analyzed — and the wrong-case spelling beside it matched
     // nothing byte-exact in either earlier half, exempting itself via the
-    // orelse-continue path. "std" is the control that stays out: it matches
-    // no walked module exactly or folded, like any package import. ghost.zig
-    // keeps the assertion from passing vacuously on an empty walk.
+    // orelse-continue path. Main.zig is the second finding's target: main.zig
+    // is itself a test root, and the case half keeps roots among its fold
+    // targets (exclude_test_roots=false) — a root importing another root
+    // wrong-case breaks the case-sensitive build just the same. "std" is the
+    // control that stays out: it matches no walked module exactly or folded,
+    // like any package import. ghost.zig keeps the assertion from passing
+    // vacuously on an empty walk.
     const sources = [_]Source{
         .{
             .path = "src\\root.zig",
@@ -1884,6 +1888,7 @@ test "case-mismatch gate names a wrong-case import hiding behind a correct chain
                 "    std.testing.refAllDecls(@import(\"helper.zig\"));\n" ++
                 "}\n" ++
                 "_ = @import(\"Helper.zig\");\n" ++
+                "_ = @import(\"Main.zig\");\n" ++
                 "_ = @import(\"std\");\n",
         },
         .{ .path = "src\\main.zig", .text = "" },
@@ -1896,7 +1901,9 @@ test "case-mismatch gate names a wrong-case import hiding behind a correct chain
 
     try std.testing.expectEqualStrings(
         "  src\\helper.zig: imported by src\\root.zig as \"Helper.zig\"; " ++
-            "only \"helper.zig\" resolves on every filesystem\n",
+            "only \"helper.zig\" resolves on every filesystem\n" ++
+            "  src\\main.zig: imported by src\\root.zig as \"Main.zig\"; " ++
+            "only \"main.zig\" resolves on every filesystem\n",
         report.items,
     );
 }
