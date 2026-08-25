@@ -322,7 +322,9 @@ creates them is the source of truth):
   acknowledged-`slotted` write lost.
 - [ ] (G5) A store or frame with `version + 1` is refused with
   `unsupported_version`, not misread.
-- [ ] (G6) `ledger.max_entry_bytes`, `cluster.max_ledgers`, and the
+- [ ] (G6) `ledger.max_entry_bytes`
+  ([OQ 36](../open-questions.md); default unset there, like the other two's
+  values at [OQ 55](../open-questions.md)), `cluster.max_ledgers`, and the
   `sync.unslotted_max_bytes` queue bound are enforced and each has a test
   that trips it.
 - [ ] (G7) A member cannot produce a valid entry attributed to another member

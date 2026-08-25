@@ -53,6 +53,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- PRD 0001's acceptance criterion G6 now cites [OQ
+  36](docs/open-questions.md) for `ledger.max_entry_bytes`, whose default is
+  unset there: the criterion demands the bound be enforced with a trip test,
+  but its open question was reachable only from the register and the roadmap,
+  while the criterion's other two bounds both cited OQ 55 from the same PRD.
+
 - Conforming trees no longer fail every gate on filesystems whose directory
   iteration answers no kind (XFS with `ftype=0`, some NFS and FUSE mounts).
   The `statFile` probe taught the walks to resolve such entries, but a
