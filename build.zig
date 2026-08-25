@@ -803,6 +803,13 @@ const TestRegistrationStep = struct {
     /// tree climbs out). Both paths come from one walk of "src/", so
     /// neither carries a drive or leading separator; `separator` is a parameter
     /// so any platform can be simulated in a test.
+    ///
+    /// The Posix flavors are called directly, not the dispatching
+    /// `std.fs.path.relative`, so the computation stays in the '/' world on
+    /// every host: a native-flavor call would emit '\' separators on Windows
+    /// and never match the recorded import strings. The empty cwd makes the
+    /// resolution purely build-root-relative — no process-cwd leak into a
+    /// gate run from a subdirectory.
     fn importBetween(
         arena: std.mem.Allocator,
         from_path: []const u8,
@@ -811,23 +818,15 @@ const TestRegistrationStep = struct {
     ) ![]const u8 {
         const from = try importSeparators(arena, from_path, separator);
         const to = try importSeparators(arena, to_path, separator);
-        // Longest common prefix ending on a '/' boundary: stopping at the
-        // first differing byte instead would treat "src/aa/" and "src/ab/"
-        // as one directory because they share "src/a".
-        var scanned: usize = 0;
-        var boundary: usize = 0;
-        const limit = @min(from.len, to.len);
-        while (scanned < limit and from[scanned] == to[scanned]) : (scanned += 1) {
-            if (from[scanned] == '/') boundary = scanned + 1;
-        }
-        var import_string: std.ArrayListUnmanaged(u8) = .empty;
-        // Each directory left under the importer climbs one "..".
-        for (from[boundary..]) |c| {
-            if (c != '/') continue;
-            try import_string.appendSlice(arena, "../");
-        }
-        try import_string.appendSlice(arena, to[boundary..]);
-        return normalizeImportPath(arena, try import_string.toOwnedSlice(arena));
+        // The import climbs out of the importing file's directory, so the
+        // filename comes off before the relative walk: "src/root.zig"
+        // reaches its neighbor as "sub/x.zig", not "../sub/x.zig".
+        const from_dir = std.fs.path.dirnamePosix(from) orelse "";
+        if (from_dir.len == 0) return to;
+        // relativePosix resolves both sides (collapsing "." and ".."), walks
+        // the common component prefix, and keeps leading ".." runs — the same
+        // canonical form normalizeImportPath defines for recorded imports.
+        return std.fs.path.relativePosix(arena, "", from_dir, to);
     }
 
     /// Collapses an @import string to the one form Zig resolves it to: empty
