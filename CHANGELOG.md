@@ -53,6 +53,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A walk failure inside a listed directory now names the walked entry that
+  stopped it instead of the whole gate path: a rejected linked directory
+  inside `src/` used to report "cannot enumerate 'src':
+  LinkedDirectoryNotWalked", leaving the operator to find which link under
+  `src/` owned the error by hand. `appendZigFilesUnder` carries the failing
+  entry out to `checkedFiles` the same way the coverage walk already named
+  its own ("cannot walk 'tools/vendor': …"), so both tree walks attribute
+  an entry-specific failure at the same granularity; a failure belonging to
+  no single entry still falls back to the gate path.
+
 - The glossary defines **brief**: seven records cite "the brief (2026-08-21)"
   and only docs/README's prose named what that is (the operator's founding
   notes, [qnd-notes.md](qnd-notes.md)) — a reader starting from a PRD or RFC
@@ -585,6 +595,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   (`@embedFile`) is not registration.
 
 ### Changed
+
+- The two lint-gate helpers taking a same-typed path pair — `symLinkOrSkip`
+  (target/link) and `importBetween` (importer/target) — wrap each pair in a
+  named struct so the two paths cannot be swapped at a call site, the
+  convention `Source` already states for its own path/text pair; creating a
+  link backwards or computing an import string between reversed endpoints
+  both succeed silently otherwise. No gate outcome changes.
 
 - The test-registration lint step enumerates `src/` through the same
   dispatcher as the 100-column cap (`checkedFiles`) instead of carrying its

@@ -200,12 +200,15 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// the column cap, the test-registration walk and the coverage-completeness
 /// gate — hands in `&checked_paths`.
 ///
-/// On failure `failed_path` names the gate path that could not be stat'd or
-/// walked, so the caller can report it — a bare error name would leave the
-/// operator to re-derive the checked-path list by hand (the same rule the
-/// read failures in loadCheckedSources follow). An error belonging to no
-/// single gate path — allocation alone, here — leaves it unset, and the
-/// caller falls back to a generic subject.
+/// On failure `failed_path` names what stopped the enumeration: the gate
+/// path that could not be stat'd, or — inside a walked directory — the
+/// walked entry appendZigFilesUnder names when one entry owns the failure,
+/// so the operator is not sent back to a whole directory (the same rule
+/// appendProjectZigFiles follows for its walk; a bare error name would
+/// leave them to find it by hand, the way the read failures in
+/// loadCheckedSources name their file). An error belonging to no single
+/// path — allocation alone, here — leaves it unset, and the caller falls
+/// back to a generic subject.
 fn checkedFiles(
     root_dir: std.Io.Dir,
     io: std.Io,
@@ -225,8 +228,9 @@ fn checkedFiles(
             return err;
         };
         if (stat.kind == .directory) {
-            appendZigFilesUnder(root_dir, io, arena, path, &paths) catch |err| {
-                failed_path.* = path;
+            var failed_entry: ?[]const u8 = null;
+            appendZigFilesUnder(root_dir, io, arena, path, &paths, &failed_entry) catch |err| {
+                failed_path.* = failed_entry orelse path;
                 return err;
             };
         } else {
@@ -328,12 +332,23 @@ fn enterForcedDirectory(
 /// reported as directories, and there every real directory's subtree fell
 /// out of both covering gates while they stayed green. A linked directory
 /// is still rejected loudly instead of half-checked.
+///
+/// On failure `failed_entry` names the walked entry that could not be
+/// handled — the link or unclassifiable entry whose resolution failed, or
+/// the linked directory the walk rejects — joined under `dir_path`, the
+/// build-root-relative form both gates report, so the caller can name it
+/// instead of leaving the operator to find it inside `dir_path` by hand
+/// (the same rule appendProjectZigFiles follows for its walk; next()
+/// invalidates its slices, so each name is copied out before returning). A
+/// failure belonging to no single entry — allocation alone — leaves it
+/// unset, and checkedFiles falls back to naming the gate path.
 fn appendZigFilesUnder(
     root_dir: std.Io.Dir,
     io: std.Io,
     arena: std.mem.Allocator,
     dir_path: []const u8,
     paths: *std.ArrayListUnmanaged([]const u8),
+    failed_entry: *?[]const u8,
 ) !void {
     var dir = try root_dir.openDir(io, dir_path, .{ .iterate = true });
     defer dir.close(io);
@@ -343,9 +358,16 @@ fn appendZigFilesUnder(
         // entry.path is relative to the walked directory, while root_dir
         // stands at the build root: classification probes and collects
         // through dir_path joined onto it, the form both gates report.
-        switch (try classifyWalkedEntry(root_dir, io, arena, dir_path, entry)) {
+        const classified = classifyWalkedEntry(root_dir, io, arena, dir_path, entry) catch |err| {
+            failed_entry.* = try std.fs.path.join(arena, &.{ dir_path, entry.path });
+            return err;
+        };
+        switch (classified) {
             .zig_source => |path| try paths.append(arena, path),
-            .linked_directory => return error.LinkedDirectoryNotWalked,
+            .linked_directory => {
+                failed_entry.* = try std.fs.path.join(arena, &.{ dir_path, entry.path });
+                return error.LinkedDirectoryNotWalked;
+            },
             .directory => try enterForcedDirectory(&walker, io, entry),
             .other => {},
         }
@@ -396,7 +418,13 @@ fn fmtArgs(
     return argv.toOwnedSlice(allocator) catch @panic("OOM");
 }
 
-/// Creates `sym_link_path` pointing at `target_path` inside `dir`, skipping
+/// The link target and the path to create the link at, as one named pair so
+/// they cannot be swapped at a call site: creating the link backwards still
+/// succeeds everywhere links work and just points it the wrong way. The same
+/// rule Source applies to its path/text pair.
+const SymLinkPair = struct { target: []const u8, link: []const u8 };
+
+/// Creates the link in `pair` pointing at its target inside `dir`, skipping
 /// the calling test when the host cannot make symlinks at all. Creating one
 /// is a privilege on Windows (unprivileged users are refused unless Developer
 /// Mode is enabled) and some mounted filesystems refuse them outright, so the
@@ -421,11 +449,10 @@ fn fmtArgs(
 fn symLinkOrSkip(
     dir: std.Io.Dir,
     io: std.Io,
-    target_path: []const u8,
-    sym_link_path: []const u8,
+    pair: SymLinkPair,
     flags: std.Io.Dir.SymLinkFlags,
 ) !void {
-    if (dir.symLink(io, target_path, sym_link_path, flags)) |_| return else |err| {
+    if (dir.symLink(io, pair.target, pair.link, flags)) |_| return else |err| {
         const probe = ".sym-link-capability-probe";
         if (dir.symLink(io, "capability-probe-target", probe, .{})) |_| {
             dir.deleteFile(io, probe) catch {};
@@ -446,7 +473,7 @@ test "symLinkOrSkip creates the link, and skips only where links cannot be made"
     // verified by reading the link itself (readLink), which does not follow
     // it, where a stat would resolve straight past to the target's kind.
     try tmp.dir.writeFile(io, .{ .sub_path = "real.zig", .data = "" });
-    try symLinkOrSkip(tmp.dir, io, "real.zig", "link.zig", .{});
+    try symLinkOrSkip(tmp.dir, io, .{ .target = "real.zig", .link = "link.zig" }, .{});
     var link_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const read = try tmp.dir.readLink(io, "link.zig", &link_buf);
     try std.testing.expectEqualStrings("real.zig", link_buf[0..read]);
@@ -456,7 +483,12 @@ test "symLinkOrSkip creates the link, and skips only where links cannot be made"
     // fixture run on a link-capable Windows host instead of dying in setup.
     // readLink reads the link itself either way, so the pin holds everywhere.
     (try tmp.dir.createDirPathOpen(io, "real-dir", .{})).close(io);
-    try symLinkOrSkip(tmp.dir, io, "real-dir", "link-dir", .{ .is_directory = true });
+    try symLinkOrSkip(
+        tmp.dir,
+        io,
+        .{ .target = "real-dir", .link = "link-dir" },
+        .{ .is_directory = true },
+    );
     const read_dir = try tmp.dir.readLink(io, "link-dir", &link_buf);
     try std.testing.expectEqualStrings("real-dir", link_buf[0..read_dir]);
 
@@ -466,7 +498,7 @@ test "symLinkOrSkip creates the link, and skips only where links cannot be made"
     // mistaken for an environment without symlinks and silently skipped.
     try std.testing.expectError(
         error.FileNotFound,
-        symLinkOrSkip(tmp.dir, io, "real.zig", "nowhere/link.zig", .{}),
+        symLinkOrSkip(tmp.dir, io, .{ .target = "real.zig", .link = "nowhere/link.zig" }, .{}),
     );
 
     // The skip direction needs an environment that refuses every symlink
@@ -526,7 +558,7 @@ test "fmtArgs hands zig fmt every covered file, links included" {
     // zig fmt checks through to the target when given the path explicitly.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/real.zig", .data = "" });
-    try symLinkOrSkip(tmp.dir, io, "real.zig", "src/link.zig", .{});
+    try symLinkOrSkip(tmp.dir, io, .{ .target = "real.zig", .link = "src/link.zig" }, .{});
     try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
@@ -969,7 +1001,11 @@ const TestRegistrationStep = struct {
             const from_imports = try collectImports(arena, from.text);
             for (sources, 0..) |candidate, i| {
                 if (reached[i]) continue;
-                const wanted = try importBetween(arena, from.path, candidate.path, separator);
+                const wanted = try importBetween(
+                    arena,
+                    .{ .from = from.path, .to = candidate.path },
+                    separator,
+                );
                 if (importsContain(from_imports, wanted)) {
                     reached[i] = true;
                     try queue.append(arena, i);
@@ -1002,8 +1038,14 @@ const TestRegistrationStep = struct {
         return false;
     }
 
-    /// The @import string that reaches the file `to_path` from the file
-    /// `from_path`: relative to the importing file's directory and
+    /// The importer and the imported file, as one named pair so they cannot
+    /// be swapped at a call site — the import string between two files reads
+    /// backwards if they trade places. The same rule Source applies to its
+    /// path/text pair.
+    const ImportPair = struct { from: []const u8, to: []const u8 };
+
+    /// The @import string that reaches `pair.to` from `pair.from`:
+    /// relative to the importing file's directory and
     /// '/'-separated, the only form an import string may hold — "sub/x.zig"
     /// from a root-level importer, "y.zig" beside the importer,
     /// "../other/y.zig" across branches (a submodule importing a sibling
@@ -1019,12 +1061,11 @@ const TestRegistrationStep = struct {
     /// gate run from a subdirectory.
     fn importBetween(
         arena: std.mem.Allocator,
-        from_path: []const u8,
-        to_path: []const u8,
+        pair: ImportPair,
         separator: u8,
     ) ![]const u8 {
-        const from = try importSeparators(arena, from_path, separator);
-        const to = try importSeparators(arena, to_path, separator);
+        const from = try importSeparators(arena, pair.from, separator);
+        const to = try importSeparators(arena, pair.to, separator);
         // Resolution is anchored at the importing file's directory, so the
         // filename comes off before the relative walk: "src/root.zig"
         // reaches its neighbor as "sub/x.zig", not "../sub/x.zig". A
@@ -1060,7 +1101,11 @@ const TestRegistrationStep = struct {
         for (sources) |candidate| {
             if (std.mem.eql(u8, candidate.path, importer_path)) continue;
             if (exclude_test_roots and try isTestRoot(arena, candidate.path, separator)) continue;
-            const wanted = try importBetween(arena, importer_path, candidate.path, separator);
+            const wanted = try importBetween(
+                arena,
+                .{ .from = importer_path, .to = candidate.path },
+                separator,
+            );
             if (!named.contains(wanted)) try named.put(arena, wanted, candidate.path);
         }
         return named;
@@ -1390,7 +1435,11 @@ test "importBetween resolves the import string from the importing file's directo
     // A root-level importer reaches a submodule by its path from src/.
     try std.testing.expectEqualStrings(
         "sub/x.zig",
-        try TestRegistrationStep.importBetween(arena, "src/root.zig", "src/sub/x.zig", '/'),
+        try TestRegistrationStep.importBetween(
+            arena,
+            .{ .from = "src/root.zig", .to = "src/sub/x.zig" },
+            '/',
+        ),
     );
 
     // A top-level importer has no directory to strip: the target's
@@ -1398,18 +1447,30 @@ test "importBetween resolves the import string from the importing file's directo
     // build.zig-imports-src end-to-end test exercises otherwise.
     try std.testing.expectEqualStrings(
         "src/helper.zig",
-        try TestRegistrationStep.importBetween(arena, "build.zig", "src/helper.zig", '/'),
+        try TestRegistrationStep.importBetween(
+            arena,
+            .{ .from = "build.zig", .to = "src/helper.zig" },
+            '/',
+        ),
     );
 
     // Modules in one subdirectory are siblings: a bare filename.
     try std.testing.expectEqualStrings(
         "y.zig",
-        try TestRegistrationStep.importBetween(arena, "src/sub/x.zig", "src/sub/y.zig", '/'),
+        try TestRegistrationStep.importBetween(
+            arena,
+            .{ .from = "src/sub/x.zig", .to = "src/sub/y.zig" },
+            '/',
+        ),
     );
     // Across branches the import climbs out with "..".
     try std.testing.expectEqualStrings(
         "../other/y.zig",
-        try TestRegistrationStep.importBetween(arena, "src/sub/x.zig", "src/other/y.zig", '/'),
+        try TestRegistrationStep.importBetween(
+            arena,
+            .{ .from = "src/sub/x.zig", .to = "src/other/y.zig" },
+            '/',
+        ),
     );
     // One ".." per directory left under the importer: c.zig sits in
     // src/a/b/, two levels below src/. Backslashes here double as another
@@ -1418,8 +1479,7 @@ test "importBetween resolves the import string from the importing file's directo
         "../../top.zig",
         try TestRegistrationStep.importBetween(
             arena,
-            "src\\a\\b\\c.zig",
-            "src\\top.zig",
+            .{ .from = "src\\a\\b\\c.zig", .to = "src\\top.zig" },
             '\\',
         ),
     );
@@ -1427,7 +1487,11 @@ test "importBetween resolves the import string from the importing file's directo
     // share "src/a" byte-wise but are different directories.
     try std.testing.expectEqualStrings(
         "../ab/g.zig",
-        try TestRegistrationStep.importBetween(arena, "src/aa/f.zig", "src/ab/g.zig", '/'),
+        try TestRegistrationStep.importBetween(
+            arena,
+            .{ .from = "src/aa/f.zig", .to = "src/ab/g.zig" },
+            '/',
+        ),
     );
 
     // The Windows case, simulated on every host through the separator argument:
@@ -1438,8 +1502,7 @@ test "importBetween resolves the import string from the importing file's directo
         "y.zig",
         try TestRegistrationStep.importBetween(
             arena,
-            "src\\sub\\x.zig",
-            "src\\sub\\y.zig",
+            .{ .from = "src\\sub\\x.zig", .to = "src\\sub\\y.zig" },
             '\\',
         ),
     );
@@ -1989,7 +2052,12 @@ test "checkedFiles resolves a listed path that symlinks a directory" {
     (try tmp.dir.createDirPathOpen(io, "vendor/nested", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "vendor/nested/deep.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "vendor/notes.md", .data = "" });
-    try symLinkOrSkip(tmp.dir, io, "vendor", "linked-lib", .{ .is_directory = true });
+    try symLinkOrSkip(
+        tmp.dir,
+        io,
+        .{ .target = "vendor", .link = "linked-lib" },
+        .{ .is_directory = true },
+    );
 
     const gate_paths = [_][]const u8{"linked-lib"};
     var failed_path: ?[]const u8 = null;
@@ -2025,7 +2093,7 @@ test "checkedFiles fails loudly when a checked path stops existing" {
     try std.testing.expectEqualStrings("gone", failed_path.?);
 }
 
-test "checkedFiles names the gate path when a directory walk fails" {
+test "checkedFiles names the walked entry when a directory walk fails" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -2036,12 +2104,20 @@ test "checkedFiles names the gate path when a directory walk fails" {
 
     // The walk half of the failed-path contract: a link to a directory
     // inside a listed path rejects the walk, and the error surfaces with
-    // failed_path naming the *gate path* — "src", not the link — the value
-    // make()'s report prints. The stat branch above pins its own half; this
-    // pins that the dispatcher's walk catch sets it too.
+    // failed_path naming the *entry* — "src/vendor", not just the gate
+    // path — the value make()'s report prints, so the operator is not sent
+    // back to all of "src" to find which link stopped it (the granularity
+    // appendProjectZigFiles reports at for its own walk). The stat branch
+    // above pins its half; this pins that the dispatcher's walk catch
+    // prefers the entry when one owns the failure.
     (try tmp.dir.createDirPathOpen(io, "src/sub", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/sub/deep.zig", .data = "" });
-    try symLinkOrSkip(tmp.dir, io, "sub", "src/vendor", .{ .is_directory = true });
+    try symLinkOrSkip(
+        tmp.dir,
+        io,
+        .{ .target = "sub", .link = "src/vendor" },
+        .{ .is_directory = true },
+    );
 
     const gate_paths = [_][]const u8{"src"};
     var failed_path: ?[]const u8 = null;
@@ -2049,7 +2125,10 @@ test "checkedFiles names the gate path when a directory walk fails" {
         error.LinkedDirectoryNotWalked,
         checkedFiles(tmp.dir, io, arena, &gate_paths, &failed_path),
     );
-    try std.testing.expectEqualStrings("src", failed_path.?);
+    try std.testing.expectEqualStrings(
+        "src" ++ std.fs.path.sep_str ++ "vendor",
+        failed_path.?,
+    );
 }
 
 test "appendZigFilesUnder collects every .zig file below the directory, and only files" {
@@ -2072,13 +2151,15 @@ test "appendZigFilesUnder collects every .zig file below the directory, and only
     try tmp.dir.writeFile(io, .{ .sub_path = "src/a/b/deep.zig", .data = "" });
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
-    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found);
+    var failed_entry: ?[]const u8 = null;
+    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_entry);
     std.mem.sort([]const u8, found.items, {}, lessThanStrings);
 
     // Each result is dir_path joined with the walker-relative path, the
     // shape both gates report and read back through root_dir — joined with
     // the platform separator on every host.
     try std.testing.expectEqual(@as(usize, 3), found.items.len);
+    try std.testing.expect(failed_entry == null);
     const sep_str = std.fs.path.sep_str;
     try std.testing.expectEqualStrings(
         "src" ++ sep_str ++ "a" ++ sep_str ++ "b" ++ sep_str ++ "deep.zig",
@@ -2106,10 +2187,11 @@ test "appendZigFilesUnder analyzes a symlinked .zig file like a real one" {
     // both gates while they stay green.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/real.zig", .data = "" });
-    try symLinkOrSkip(tmp.dir, io, "real.zig", "src/link.zig", .{});
+    try symLinkOrSkip(tmp.dir, io, .{ .target = "real.zig", .link = "src/link.zig" }, .{});
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
-    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found);
+    var failed_entry: ?[]const u8 = null;
+    try appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_entry);
     std.mem.sort([]const u8, found.items, {}, lessThanStrings);
 
     try std.testing.expectEqual(@as(usize, 2), found.items.len);
@@ -2194,7 +2276,12 @@ test "classifyWalkedEntry resolves an unclassifiable entry through its real kind
     // the loud outcome for a subtree following would need cycle protection
     // to visit. The link exists so the probe resolves; the skip rule is
     // symLinkOrSkip's.
-    try symLinkOrSkip(tmp.dir, io, "sub", "src/link", .{ .is_directory = true });
+    try symLinkOrSkip(
+        tmp.dir,
+        io,
+        .{ .target = "sub", .link = "src/link" },
+        .{ .is_directory = true },
+    );
     const linked_dir = try classifyWalkedEntry(tmp.dir, io, arena, "src", .{
         .dir = tmp.dir,
         .basename = "link",
@@ -2220,12 +2307,27 @@ test "appendZigFilesUnder rejects a linked directory whose walk cannot descend" 
     // checking nothing.
     (try tmp.dir.createDirPathOpen(io, "src/sub", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/sub/deep.zig", .data = "" });
-    try symLinkOrSkip(tmp.dir, io, "sub", "src/vendor", .{ .is_directory = true });
+    try symLinkOrSkip(
+        tmp.dir,
+        io,
+        .{ .target = "sub", .link = "src/vendor" },
+        .{ .is_directory = true },
+    );
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
+    var failed_entry: ?[]const u8 = null;
     try std.testing.expectError(
         error.LinkedDirectoryNotWalked,
-        appendZigFilesUnder(tmp.dir, io, arena, "src", &found),
+        appendZigFilesUnder(tmp.dir, io, arena, "src", &found, &failed_entry),
+    );
+
+    // The rejection names the walked entry — the link itself, joined under
+    // the walked directory in the build-root-relative form both gates
+    // report — the same granularity checkedFiles hands make()'s report and
+    // appendProjectZigFiles applies to its own walk.
+    try std.testing.expectEqualStrings(
+        "src" ++ std.fs.path.sep_str ++ "vendor",
+        failed_entry.?,
     );
 }
 
@@ -2270,9 +2372,9 @@ const GateCoverageStep = struct {
         var candidates: std.ArrayListUnmanaged([]const u8) = .empty;
         // The walk can fail on one specific entry (a linked directory it
         // must reject, a link that no longer resolves): failed_entry names
-        // it, the way checkedFiles names the gate path it stopped on — a
-        // bare error name would leave the operator to find the entry by
-        // hand among everything the walk visited.
+        // it, the way checkedFiles now names the entry its own walk stopped
+        // on — a bare error name would leave the operator to find the entry
+        // by hand among everything the walk visited.
         var failed_entry: ?[]const u8 = null;
         appendProjectZigFiles(
             b.build_root.handle,
@@ -2426,7 +2528,7 @@ test "zigNearMissName catches every spelling a gate's filters skip" {
 /// On failure `failed_path` names the walked entry that could not be handled —
 /// the link or unclassifiable entry whose resolution failed or the directory
 /// behind one — so the caller can report it instead of a bare error name (the same rule
-/// checkedFiles follows for its gate paths). A failure belonging to no
+/// appendZigFilesUnder follows for the covering gates' walk). A failure belonging to no
 /// single entry — allocation alone, here, or the walker failing to descend
 /// between entries — leaves it unset, and the caller falls back to a
 /// generic subject.
@@ -2600,7 +2702,7 @@ test "appendProjectZigFiles walks the tree minus tooling directories, links incl
     try tmp.dir.writeFile(io, .{ .sub_path = "notes.md", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = ".hidden/cache.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "zig-out/bin/made.zig", .data = "" });
-    try symLinkOrSkip(tmp.dir, io, "top.zig", "src/link.zig", .{});
+    try symLinkOrSkip(tmp.dir, io, .{ .target = "top.zig", .link = "src/link.zig" }, .{});
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     var failed_path: ?[]const u8 = null;
@@ -2678,7 +2780,12 @@ test "appendProjectZigFiles rejects a linked directory like the gate-path walk" 
     try tmp.dir.writeFile(io, .{ .sub_path = "tools/sub/deep.zig", .data = "" });
     // The link's target resolves relative to the link's own directory, the
     // same shape the gate-path walk's twin test uses.
-    try symLinkOrSkip(tmp.dir, io, "sub", "tools/vendor", .{ .is_directory = true });
+    try symLinkOrSkip(
+        tmp.dir,
+        io,
+        .{ .target = "sub", .link = "tools/vendor" },
+        .{ .is_directory = true },
+    );
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     var failed_path: ?[]const u8 = null;
@@ -2713,7 +2820,7 @@ test "appendProjectZigFiles names a link that no longer resolves" {
     // the operator to find which of every walked entry was dangling.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/real.zig", .data = "" });
-    try symLinkOrSkip(tmp.dir, io, "nowhere.zig", "src/dangling.zig", .{});
+    try symLinkOrSkip(tmp.dir, io, .{ .target = "nowhere.zig", .link = "src/dangling.zig" }, .{});
 
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     var failed_path: ?[]const u8 = null;
@@ -3388,7 +3495,7 @@ test "gate-coverage step names the walked entry when the project walk fails" {
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
-    try symLinkOrSkip(tmp.dir, io, "nowhere.zig", "dangling.zig", .{});
+    try symLinkOrSkip(tmp.dir, io, .{ .target = "nowhere.zig", .link = "dangling.zig" }, .{});
 
     var graph: std.Build.Graph = undefined;
     const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
