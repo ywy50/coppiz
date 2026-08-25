@@ -46,6 +46,17 @@ test "all public declarations analyze" {
     std.testing.refAllDecls(@This());
 }
 
+test "version round-trips the zon text the build hands over" {
+    // RELEASES.md makes build.zig.zon the single source of truth, so what
+    // the library exposes (and main prints) must be that text parsed back
+    // out unchanged. major == 0 alone cannot see the wiring break: if
+    // build.zig fed any other parseable value here, every test stayed green
+    // while `spine` reported a version no release carries.
+    var buffer: [64]u8 = undefined;
+    const formatted = try std.fmt.bufPrint(&buffer, "{f}", .{version});
+    try std.testing.expectEqualStrings(build_options.version_text, formatted);
+}
+
 test "version is pre-1.0" {
     // Pre-1.0 pin: a major bump must not happen silently.
     try std.testing.expectEqual(@as(u32, 0), version.major);
