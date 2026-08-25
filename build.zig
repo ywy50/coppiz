@@ -638,15 +638,15 @@ fn failEnumeration(
 }
 
 /// Allocates one custom analysis step whose make() lives on `T`: the body
-/// all three steps' constructors share, differing only in type, display
-/// name and make function. One copy serves all three so their wiring cannot
-/// drift apart, the same rule failEnumeration and loadCheckedSources follow
-/// for their shared plumbing.
+/// all three steps' constructors share, differing only in type and display
+/// name — every step struct names its maker `make`, so the function comes
+/// off `T` and no caller passes it separately. One copy serves all three so
+/// their wiring cannot drift apart, the same rule failEnumeration and
+/// loadCheckedSources follow for their shared plumbing.
 fn newCustomStep(
     b: *std.Build,
     comptime T: type,
     name: []const u8,
-    comptime make: std.Build.Step.MakeFn,
 ) *T {
     const self = b.allocator.create(T) catch @panic("OOM");
     self.* = .{
@@ -654,7 +654,7 @@ fn newCustomStep(
             .id = .custom,
             .name = name,
             .owner = b,
-            .makeFn = make,
+            .makeFn = T.make,
         }),
     };
     return self;
@@ -701,7 +701,6 @@ const LineLengthStep = struct {
             // Computed from columns_max so the displayed name cannot drift
             // from the cap it describes.
             std.fmt.comptimePrint("{d}-column cap", .{columns_max}),
-            make,
         );
     }
 
@@ -883,12 +882,7 @@ const TestRegistrationStep = struct {
     step: std.Build.Step,
 
     fn create(b: *std.Build) *TestRegistrationStep {
-        return newCustomStep(
-            b,
-            TestRegistrationStep,
-            "test registration and declaration analysis",
-            make,
-        );
+        return newCustomStep(b, TestRegistrationStep, "test registration and declaration analysis");
     }
 
     fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
@@ -2328,7 +2322,7 @@ const GateCoverageStep = struct {
     step: std.Build.Step,
 
     fn create(b: *std.Build) *GateCoverageStep {
-        return newCustomStep(b, GateCoverageStep, "gate coverage completeness", make);
+        return newCustomStep(b, GateCoverageStep, "gate coverage completeness");
     }
 
     fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
