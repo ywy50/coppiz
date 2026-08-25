@@ -489,6 +489,18 @@ test "column cap measures code points, not bytes" {
     try LineLengthStep.checkLineLengths(arena, "\u{00e9}" ** 60, "f.zig", &report);
     try std.testing.expectEqual(@as(usize, 0), report.items.len);
 
+    // The boundary itself on the decoded side: exactly the cap in code
+    // points while over it in bytes. A comparison that drops to '<' here
+    // flags this line — the ASCII exact-limit case cannot catch it, because
+    // a sub-cap byte line never reaches the decode at all.
+    try LineLengthStep.checkLineLengths(
+        arena,
+        "\u{00e9}" ** LineLengthStep.columns_max,
+        "f.zig",
+        &report,
+    );
+    try std.testing.expectEqual(@as(usize, 0), report.items.len);
+
     // The invalid side of the same boundary: 101 code points is over the cap
     // whatever the encoding, so wide characters are not skipped wholesale.
     const wide_over = "\u{00e9}" ** (LineLengthStep.columns_max + 1);
