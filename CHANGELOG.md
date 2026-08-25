@@ -87,9 +87,9 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   gate ("cannot walk 'src': …"), so `zig build test` could not pass at all.
   The classifier now separates the two cases: a link resolving to a
   directory stays the loud rejection, while an unclassifiable entry the
-  probe reveals as a directory is entered with the probed kind forced
-  (`unknown_directory`) — the subtree behind it is analyzed like any
-  other's, which is what the probe existed for.
+  probe reveals as a directory classifies as the plain `.directory`
+  variant and is entered with the probed kind forced — the subtree behind
+  it is analyzed like any other's, which is what the probe existed for.
 
 - The two load-bearing `statFile` probes in build.zig spell
   `.follow_symlinks = true` explicitly instead of inheriting it as the
@@ -98,11 +98,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the probe behind a link reveals the target's kind), and a default flipped
   upstream would otherwise have changed that behavior silently. `symLink`'s
   empty flags stay defaulted; nothing load-bearing lives there.
-- `zigSuffixAnyCase`'s doc comment no longer claims the exact-lowercase
-  suffix "never reaches a caller": one of its two callers,
-  `GateCoverageStep.wrongCaseLines`, receives every walked candidate and
-  skips the exact case with its own `endsWith` guard. The comment now states
-  what each caller narrows and how.
+- `zigNearMissName`'s doc comment no longer claims the exact-lowercase
+  suffix "never reaches a caller": its two callers narrow it per role —
+  `appendProjectZigFiles`' `.other` branch has already claimed
+  exact-lowercase names as `.zig_source`, and
+  `GateCoverageStep.violationLines`' near-miss arm applies it only to
+  names the covered set already holds.
 
 - Nine lint-gate tests hard-required symlink creation in their fixtures
   (`try tmp.dir.symLink(...)`), so on a host that cannot make symlinks —
@@ -122,12 +123,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 - The gate-coverage report survives listing a wrong-case `.zig` path in
   `checked_paths`. The coverage walk collects such a file as a candidate,
   but `checkedFiles` takes a listed plain entry whole, so the listing joined
-  the covered set and the equality match in `uncoveredPaths` silenced the
+  the covered set and the equality match in `violationLines` silenced the
   report — the exact escape the wrong-case collection exists to close,
   reproduced end-to-end with a planted `Legacy.ZIG` named in `checked_paths`
   (the gate passed; without the listing it failed naming the file). make()
   now appends a report line for every wrong-case candidate the covered set
-  absorbed, via the same I/O-free core pattern as `uncoveredPaths`; a
+  absorbed, through the I/O-free core `violationLines`; a
   wrong-case candidate outside the covered set keeps its single line, so no
   tally doubles.
 
