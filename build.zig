@@ -871,7 +871,9 @@ const test_roots = [_][]const u8{ "src/root.zig", "src/main.zig", "build.zig" };
 /// an import in a declaration that is never analyzed (an unused
 /// container-level const) collects nothing — so the gate walks real
 /// @import calls across every walked module (collectImports), resolving each
-/// to the canonical form normalizeImportPath defines for recorded imports.
+/// to the canonical form std.fs.path.resolvePosix defines for recorded
+/// imports — the resolver importBetween reaches through relativePosix, so
+/// both sides of every comparison meet in one form.
 /// Only a literal `@import("path")` call counts: a mention inside a comment
 /// or any string literal registers nothing. A third half (caseMismatchLines)
 /// reports an import that differs from the walked module it resolves to only
@@ -923,28 +925,22 @@ const TestRegistrationStep = struct {
         // Each core appends one report line per finding (pinned by the
         // exact-string tests below), so each tally is a newline count — no
         // second output to keep in lockstep with the appends.
-        const count = std.mem.count(u8, report.items, "\n");
-        const analysis_count = std.mem.count(u8, analysis_report.items, "\n");
-        const case_count = std.mem.count(u8, case_report.items, "\n");
         var message: std.ArrayListUnmanaged(u8) = .empty;
         try appendSection(
             arena,
             &message,
-            count,
             "module(s) whose tests never run",
             report.items,
         );
         try appendSection(
             arena,
             &message,
-            analysis_count,
             "module(s) whose public declarations are never analyzed",
             analysis_report.items,
         );
         try appendSection(
             arena,
             &message,
-            case_count,
             "import(s) that resolve only on a case-insensitive filesystem",
             case_report.items,
         );
@@ -954,15 +950,18 @@ const TestRegistrationStep = struct {
 
     /// Appends one counted section of make()'s assembled failure message:
     /// "{count} {header}:" followed by the section's report lines, separated
-    /// from any earlier section by a blank line. One copy serves all three
-    /// sections so their join and skip-when-empty rules cannot drift apart.
+    /// from any earlier section by a blank line. The count is the body's
+    /// newline tally — derived here, beside the body it describes, so a
+    /// caller cannot hand in the two out of lockstep. One copy serves all
+    /// three sections so their join and skip-when-empty rules cannot drift
+    /// apart.
     fn appendSection(
         arena: std.mem.Allocator,
         message: *std.ArrayListUnmanaged(u8),
-        count: usize,
         header: []const u8,
         body: []const u8,
     ) !void {
+        const count = std.mem.count(u8, body, "\n");
         if (count == 0) return;
         if (message.items.len > 0) try message.append(arena, '\n');
         try message.print(arena, "{d} {s}:\n{s}", .{ count, header, body });
@@ -1074,7 +1073,7 @@ const TestRegistrationStep = struct {
         if (from_dir.len == 0) return to;
         // relativePosix resolves both sides (collapsing "." and ".."), walks
         // the common component prefix, and keeps leading ".." runs — the same
-        // canonical form normalizeImportPath defines for recorded imports.
+        // canonical form resolvePosix gives collectImports' recorded imports.
         return std.fs.path.relativePosix(arena, "", from_dir, to);
     }
 
@@ -1110,35 +1109,6 @@ const TestRegistrationStep = struct {
         return named;
     }
 
-    /// Collapses an @import string to the one form Zig resolves it to: empty
-    /// components ("a//b"), "." components ("./a.zig", "a/./b.zig") and
-    /// "name/.." pairs ("sub/../x.zig") disappear — each spelling reaches
-    /// the same file and collects its tests, so the gates must not tell them
-    /// apart (an exact-byte match failed a tree whose tests ran). Leading
-    /// ".." runs survive: they climb out of the importer's directory, which
-    /// has no further parent to pop into. Applied where import strings enter
-    /// the gates — collectImports' recorded paths and importBetween's
-    /// computed ones — so every comparison below sees canonical text.
-    fn normalizeImportPath(arena: std.mem.Allocator, raw: []const u8) ![]const u8 {
-        var parts: std.ArrayListUnmanaged([]const u8) = .empty;
-        var it = std.mem.splitScalar(u8, raw, '/');
-        while (it.next()) |part| {
-            if (part.len == 0 or std.mem.eql(u8, part, ".")) continue;
-            if (std.mem.eql(u8, part, "..")) {
-                const poppable = parts.items.len > 0 and
-                    !std.mem.eql(u8, parts.items[parts.items.len - 1], "..");
-                if (poppable) {
-                    _ = parts.pop();
-                } else {
-                    try parts.append(arena, part);
-                }
-                continue;
-            }
-            try parts.append(arena, part);
-        }
-        return std.mem.join(arena, "/", parts.items);
-    }
-
     /// Rewrites filesystem separators to import separators ('/'), the only
     /// form that can appear inside an @import string. A no-op where the
     /// separator is already '/'; `separator` is a parameter so any platform can be
@@ -1159,8 +1129,10 @@ const TestRegistrationStep = struct {
     }
 
     /// One real `@import("path")` call found in a token stream: `path` is the
-    /// literal between the quotes, normalized (normalizeImportPath), and
-    /// `wrapped` whether the call sits directly inside a
+    /// literal between the quotes, resolved to its canonical form
+    /// (std.fs.path.resolvePosix — the resolver importBetween reaches through
+    /// relativePosix, so recorded and computed import strings always meet in
+    /// one form) and `wrapped` whether the call sits directly inside a
     /// `std.testing.refAllDecls`/`refAllDeclsRecursive` argument
     /// list — the form that forces the target's public declarations through
     /// the analyzer, not merely collects its tests. Comments and every kind
@@ -1195,9 +1167,9 @@ const TestRegistrationStep = struct {
                     (std.mem.eql(u8, prev_slices[0], "refAllDecls") or
                         std.mem.eql(u8, prev_slices[0], "refAllDeclsRecursive"));
                 try refs.append(arena, .{
-                    .path = try normalizeImportPath(
+                    .path = try std.fs.path.resolvePosix(
                         arena,
-                        terminated[token.loc.start + 1 .. token.loc.end - 1],
+                        &.{terminated[token.loc.start + 1 .. token.loc.end - 1]},
                     ),
                     .wrapped = wrapped,
                 });
@@ -1325,7 +1297,7 @@ const TestRegistrationStep = struct {
     }
 };
 
-test "normalizeImportPath collapses the legal spellings Zig resolves to one target" {
+test "collectImports records import strings in resolvePosix's canonical form" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -1334,6 +1306,9 @@ test "normalizeImportPath collapses the legal spellings Zig resolves to one targ
     // (verified on 0.16.0: @import("./sub/x.zig") collects the target's
     // tests), so an exact-byte comparison reported a reachable module as
     // unreachable — and hid bare imports behind wrappers spelled with "./".
+    // Canonicalization is std.fs.path.resolvePosix over the lone string, the
+    // resolver importBetween reaches through relativePosix, so recorded and
+    // computed import strings always meet in one form.
     const cases = [_][2][]const u8{
         .{ "sub/x.zig", "sub/x.zig" },
         .{ "./sub/x.zig", "sub/x.zig" },
@@ -1349,13 +1324,16 @@ test "normalizeImportPath collapses the legal spellings Zig resolves to one targ
         .{ "a/../../b.zig", "../b.zig" },
         // Package and builtin names pass through untouched.
         .{ "std", "std" },
-        .{ "", "" },
+        // An empty spelling resolves to ".": it matches no walked module,
+        // like any package name.
+        .{ "", "." },
     };
     for (cases) |case| {
-        try std.testing.expectEqualStrings(
-            case[1],
-            try TestRegistrationStep.normalizeImportPath(arena, case[0]),
-        );
+        const text =
+            try std.fmt.allocPrint(arena, "_ = @import(\"{s}\");\n", .{case[0]});
+        const refs = try TestRegistrationStep.collectImports(arena, text);
+        try std.testing.expectEqual(@as(usize, 1), refs.len);
+        try std.testing.expectEqualStrings(case[1], refs[0].path);
     }
 }
 
