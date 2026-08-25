@@ -1719,6 +1719,16 @@ fn excludedFromGates(basename: []const u8, depth: usize) bool {
     return depth == 1 and std.mem.eql(u8, basename, "zig-out");
 }
 
+/// True when `basename` carries a ".zig" suffix spelled in any letter case
+/// ("x.ZIG", "y.ZiG"). The exact-suffix case never reaches a caller: the
+/// shared classifier has already claimed it as .zig_source. This is the
+/// wrong-case remainder — a file every gate's filter skips — that the
+/// coverage walk collects so the gate can fail naming it instead of letting
+/// it merge with zero analysis.
+fn zigSuffixAnyCase(basename: []const u8) bool {
+    return basename.len >= 4 and std.ascii.eqlIgnoreCase(basename[basename.len - 4 ..], ".zig");
+}
+
 /// Appends every project-owned .zig file — everything under the build root
 /// except what excludedFromGates prunes — as a path relative to the walked
 /// root. That is the form `checked_paths` produces too, so the comparison
@@ -1730,7 +1740,11 @@ fn excludedFromGates(basename: []const u8, depth: usize) bool {
 /// is collected like a real one (SelectiveWalker enters only entries
 /// reported as directories, so classifyWalkedEntry rejects a linked
 /// directory loudly and its subtree would otherwise escape this gate
-/// silently).
+/// silently). One class of entry lands here beyond the classifier's own:
+/// a file with a wrong-case ".zig" suffix ("Legacy.ZIG") classifies as
+/// .other everywhere, yet it is exactly the source no gate sees, so the
+/// .other branch collects it as a candidate the covering set cannot match —
+/// the report names it, and the lowercase spelling ends the failure.
 ///
 /// On failure `failed_path` names the walked entry that could not be handled —
 /// the link or unclassifiable entry whose resolution failed or the directory
@@ -1770,7 +1784,22 @@ fn appendProjectZigFiles(
             // The "" prefix joins to the entry's walked path itself: the
             // fresh copy outlives the walker slice it was derived from.
             .zig_source => |path| try paths.append(arena, path),
-            .other => {},
+            .other => if (zigSuffixAnyCase(entry.basename)) {
+                // A source file whose extension is not spelled ".zig"
+                // ("Legacy.ZIG", "x.ZiG") classifies as other: the covering
+                // gates' suffix filter and zig fmt's own directory walk are
+                // both exact-match (verified on 0.16.0: `zig fmt --check`
+                // over a directory leaves Bad.ZIG untouched), so the file
+                // would reach no formatter, no column cap, no registration
+                // walk and no test binary — and stay invisible here too,
+                // candidates carrying only what classifyWalkedEntry calls
+                // .zig_source. Collect it anyway: the covering set can never
+                // hold it, so the gate names it until the file carries the
+                // lowercase spelling every gate applies. next() invalidates
+                // its slices, so the walked path is copied out like a
+                // classified source's.
+                try paths.append(arena, try arena.dupe(u8, entry.path));
+            },
         }
     }
 }
@@ -1873,6 +1902,38 @@ test "appendProjectZigFiles walks the tree minus tooling directories, links incl
     try std.testing.expectEqualStrings("stray.zig", found.items[2]);
     try std.testing.expectEqualStrings("tools/inner.zig", found.items[3]);
     try std.testing.expectEqualStrings("tools/zig-out/made.zig", found.items[4]);
+}
+
+test "appendProjectZigFiles collects a wrong-case .zig file as a candidate" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The escape this closes: "Legacy.ZIG" is a Zig source by name whose
+    // wrong-case suffix classifies it as .other, so no covering gate sees
+    // it — the coverage walk must still hand it to the report. Controls on
+    // both sides: notes.md is a plain other and stays out, and a *directory*
+    // named NotSources.ZIG is entered like any directory, never appended,
+    // so only files can trigger the failure.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "NotSources.ZIG", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/ok.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "Legacy.ZIG", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "notes.md", .data = "" });
+
+    var found: std.ArrayListUnmanaged([]const u8) = .empty;
+    var failed_path: ?[]const u8 = null;
+    try appendProjectZigFiles(tmp.dir, io, arena, &found, &failed_path);
+    std.mem.sort([]const u8, found.items, {}, lessThanStrings);
+
+    try std.testing.expectEqual(@as(usize, 2), found.items.len);
+    try std.testing.expect(failed_path == null);
+    try std.testing.expectEqualStrings("Legacy.ZIG", found.items[0]);
+    try std.testing.expectEqualStrings("src/ok.zig", found.items[1]);
 }
 
 test "appendProjectZigFiles rejects a linked directory like the gate-path walk" {
@@ -2273,6 +2334,40 @@ test "gate-coverage step fails naming a project file outside the checked paths" 
         testMakeOptions(arena),
         "1 Zig source(s) no analysis gate covers:\n" ++
             "  stray.zig: not covered by any analysis gate\n",
+    );
+}
+
+test "gate-coverage step fails naming a wrong-case .zig file no gate sees" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The end-to-end shape of the wrong-case escape: every checked path
+    // enumerates and "Legacy.ZIG" classifies as .other, so without the
+    // .other collection rule the step would pass while the file sat outside
+    // the formatter, column cap, registration walk and test binary. The
+    // report is the generic uncovered line — renaming to the lowercase
+    // spelling is what ends the failure, not a checked_paths entry, since
+    // listing it would cover the name while zig fmt's directory walk still
+    // skipped the file.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "Legacy.ZIG", .data = "" });
+
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = GateCoverageStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "1 Zig source(s) no analysis gate covers:\n" ++
+            "  Legacy.ZIG: not covered by any analysis gate\n",
     );
 }
 

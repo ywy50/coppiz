@@ -7,6 +7,21 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- Wrong-case `.zig` sources are no longer invisible to every analysis gate:
+  a file like `Legacy.ZIG` classified as other in both lint-gate walks and
+  in `zig fmt`'s own directory walk (verified on 0.16.0: `zig fmt --check`
+  over a directory leaves such a file untouched), so it reached no
+  formatter, column cap, registration walk or test binary while `zig build
+  lint` stayed green — demonstrated end-to-end with a planted `src/Evil.ZIG`.
+  The gate-coverage walk now collects files whose name carries a `.zig`
+  suffix in any letter case as candidates the covering set can never match,
+  so the gate fails naming the file until it carries the lowercase spelling
+  every gate applies. Listing the wrong-case path in `checked_paths` does
+  not silence the report: that would cover the name while `zig fmt` still
+  skipped the file.
+
+### Fixed
+
 - Four end-to-end pins in the lint-gate tests, each run against a gate
   step's make() function over a temporary tree: the test-registration
   report's two single-section shapes (reachability findings alone carry no
