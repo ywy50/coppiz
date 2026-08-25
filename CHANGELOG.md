@@ -139,6 +139,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   a gate regression that started rejecting legitimate trees would have
   passed them all. Each pin was confirmed to bite by temporarily breaking
   the branch it guards.
+- A sixth lint-gate end-to-end pin: the test-registration step's failure
+  report with all three sections firing at once — reachability,
+  declaration analysis and case-mismatch together, one finding each so the
+  shape stays independent of the walker's order. Every prior make() test
+  fed a tree where at most two sections fired, so nothing pinned the
+  section order or the blank-line join between consecutive sections;
+  reordering the assembled halves mangled the operator-facing report
+  behind a green suite (confirmed: the new test fails under a swapped
+  order and passes under the documented one).
 - A fifth lint gate, coverage completeness: the analysis gates cover an
   explicit allowlist (`checked_paths` in build.zig) that fails loudly when a
   listed path stops existing but stayed silent about its complement — a

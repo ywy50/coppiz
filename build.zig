@@ -3130,6 +3130,76 @@ test "test-registration step reports analysis gaps alone, with no leading sectio
     );
 }
 
+test "test-registration step reports all three sections in one failure" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The worst-case assembly every smaller pin stops short of: all three
+    // halves fire at once — orphan.zig is imported by nobody (reachability),
+    // a.zig is reachable but never wrapped (declaration analysis), and
+    // helper.zig is registered through its exact-case wrapper while
+    // "Helper.zig" beside it resolves only where the filesystem ignores
+    // case. Exactly one finding per section keeps the shape independent of
+    // the walker's order, and the whole-message pin fixes the section order
+    // and the blank-line join between consecutive sections — the properties
+    // no combination of the single- and two-section tests encodes. main's
+    // wrapped ghost import keeps ghost out of every section, so the
+    // fixture cannot pass with one half silenced.
+    // build.zig and build.zig.zon are stubbed because make() enumerates the
+    // whole allowlist.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(
+        io,
+        .{
+            .sub_path = "src/root.zig",
+            .data = "_ = @import(\"a.zig\");\n" ++
+                "test {\n" ++
+                "    std.testing.refAllDecls(@import(\"helper.zig\"));\n" ++
+                "}\n" ++
+                "_ = @import(\"Helper.zig\");\n",
+        },
+    );
+    try tmp.dir.writeFile(
+        io,
+        .{
+            .sub_path = "src/main.zig",
+            .data = "test {\n" ++
+                "    std.testing.refAllDecls(@import(\"ghost.zig\"));\n" ++
+                "}\n",
+        },
+    );
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/a.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/helper.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/ghost.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/orphan.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+
+    const sep_str = std.fs.path.sep_str;
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = TestRegistrationStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "1 module(s) whose tests never run:\n" ++
+            "  src" ++ sep_str ++ "orphan.zig: not reachable from a test root\n" ++
+            "\n" ++
+            "1 module(s) whose public declarations are never analyzed:\n" ++
+            "  src" ++ sep_str ++ "a.zig: imported by src" ++ sep_str ++
+            "root.zig without forced declaration analysis\n" ++
+            "\n" ++
+            "1 import(s) that resolve only on a case-insensitive filesystem:\n" ++
+            "  src" ++ sep_str ++ "helper.zig: imported by src" ++ sep_str ++
+            "root.zig as \"Helper.zig\"; only \"helper.zig\" resolves on every filesystem\n",
+    );
+}
+
 test "gate-coverage step fails naming a project file outside the checked paths" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
