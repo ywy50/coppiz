@@ -143,12 +143,16 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
         "Check formatting, line length, test registration, declaration analysis and gate coverage",
     );
 
-    // The checked paths come from `checked_paths`, shared with the column
-    // cap and coverage gates, so the file-covering gates can never drift
-    // apart about what is analyzed.
-    const fmt_args = [_][]const u8{ b.graph.zig_exe, "fmt", "--check", "--ast-check" } ++
-        checked_paths;
-    const fmt_check = b.addSystemCommand(&fmt_args);
+    // The file list comes from `checked_paths` through the same dispatcher
+    // as the column cap and coverage gates, so all three file-covering
+    // surfaces can never drift apart about what is analyzed.
+    const fmt_check = b.addSystemCommand(fmtArgs(
+        b.allocator,
+        b.graph.io,
+        b.build_root.handle,
+        b.graph.zig_exe,
+        &checked_paths,
+    ));
     fmt_check.setName("zig fmt --check --ast-check");
     // The paths above are relative to the build root; pin the child there so
     // `zig build` invoked from a subdirectory (the runner walks up to find
@@ -164,9 +168,10 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
 
 /// The paths every analysis gate covers, relative to the build root: all
 /// Zig sources under `src/` plus the two build files at the top level.
-/// One list serves both file-covering gates — `zig fmt --check --ast-check`
-/// and the 100-column cap below — so they can never disagree about what is
-/// analyzed: a new source directory or file is added once and both gates
+/// One list serves every file-covering surface — `zig fmt --check
+/// --ast-check` (via fmtArgs' expansion), the 100-column cap below and the
+/// coverage-completeness walk — so they can never disagree about what is
+/// analyzed: a new source directory or file is added once and all of them
 /// pick it up. A path here that stops existing fails both gates loudly
 /// rather than silently checking nothing.
 const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
@@ -175,8 +180,8 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// directory contributes its .zig descendants; any other entry is taken
 /// whole (build.zig.zon has no .zig suffix but must still be capped). One
 /// dispatcher serves every step that enumerates files — the 100-column cap,
-/// the test-registration walk and the coverage-completeness walk (`zig fmt`
-/// takes the same list but reads the files itself) — so their coverage rules
+/// the test-registration walk, the coverage-completeness walk and fmtArgs'
+/// `zig fmt` expansion — so their coverage rules
 /// cannot drift apart.
 ///
 /// All paths go through `root_dir` — the build root — not the process cwd:
@@ -311,6 +316,109 @@ const Source = struct {
     path: []const u8,
     text: []const u8,
 };
+
+/// Builds the `zig fmt --check --ast-check` argument list: `zig_exe`
+/// followed by every file `gate_paths` expands to through checkedFiles, so
+/// the formatter covers exactly what the column-cap and test-registration
+/// walks collect. Handing zig fmt the raw gate paths instead left a
+/// symlinked `.zig` source outside the formatter while the other two
+/// file-covering gates analyzed it: zig fmt's own directory walk does not
+/// follow symlinks (verified on 0.16.0: with `src/link.zig` pointing at an
+/// unformatted real source, `zig fmt --check src` passed while
+/// `zig fmt --check src/link.zig` failed), and the walk is also what let a
+/// wrong-case `.ZIG` name escape — the expansion keeps both exclusions the
+/// dispatcher already decides rather than re-deriving them.
+///
+/// Expansion runs at configure time because a run step's argv is fixed
+/// there; when it fails (a checked path missing), the raw gate paths go out
+/// unchanged instead of failing the build script, and the failure stays
+/// loud anyway: zig fmt errors on the missing path at make time, and the
+/// make-time gates enumerate independently through loadCheckedSources.
+/// Allocation uses the builder's allocator, like every other configure-time
+/// structure; the slice lives as long as the build.
+fn fmtArgs(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    root_dir: std.Io.Dir,
+    zig_exe: []const u8,
+    gate_paths: []const []const u8,
+) []const []const u8 {
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    argv.appendSlice(allocator, &.{ zig_exe, "fmt", "--check", "--ast-check" }) catch @panic("OOM");
+    var failed_path: ?[]const u8 = null;
+    if (checkedFiles(root_dir, io, allocator, gate_paths, &failed_path)) |paths| {
+        argv.appendSlice(allocator, paths) catch @panic("OOM");
+    } else |_| {
+        argv.appendSlice(allocator, gate_paths) catch @panic("OOM");
+    }
+    return argv.toOwnedSlice(allocator) catch @panic("OOM");
+}
+
+test "fmtArgs hands zig fmt every covered file, links included" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The false-pass this closes: link.zig points at an unformatted real
+    // source, the shape zig fmt's directory walk skipped while the other
+    // gates collected it. The expanded argv must name the link itself, which
+    // zig fmt checks through to the target when given the path explicitly.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/real.zig", .data = "" });
+    try tmp.dir.symLink(io, "real.zig", "src/link.zig", .{});
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+    const gate_paths = [_][]const u8{"src"};
+
+    const argv = fmtArgs(arena, io, tmp.dir, "zig", &gate_paths);
+
+    // The fixed prefix, then the walked files in walker order — membership
+    // compared per path, since the walker's order is filesystem-dependent
+    // (the same rule the appendZigFilesUnder tests apply).
+    try std.testing.expectEqual(@as(usize, 7), argv.len);
+    try std.testing.expectEqualStrings("zig", argv[0]);
+    try std.testing.expectEqualStrings("fmt", argv[1]);
+    try std.testing.expectEqualStrings("--check", argv[2]);
+    try std.testing.expectEqualStrings("--ast-check", argv[3]);
+    const files = argv[4..];
+    const want = [_][]const u8{ "src/link.zig", "src/main.zig", "src/real.zig" };
+    try std.testing.expectEqual(files.len, want.len);
+    for (want) |path| {
+        var found = false;
+        for (files) |arg| {
+            if (std.mem.eql(u8, arg, path)) found = true;
+        }
+        try std.testing.expect(found);
+    }
+}
+
+test "fmtArgs falls back to the raw gate paths when expansion fails" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // A missing checked path cannot be expanded, so the unchanged list goes
+    // out and zig fmt's own failure on that path keeps the gate loud — no
+    // configure-time panic, no silently empty formatter run.
+    const gate_paths = [_][]const u8{ "gone", "build.zig" };
+
+    const argv = fmtArgs(arena, io, tmp.dir, "zig", &gate_paths);
+
+    try std.testing.expectEqual(@as(usize, 6), argv.len);
+    try std.testing.expectEqualStrings("zig", argv[0]);
+    try std.testing.expectEqualStrings("--ast-check", argv[3]);
+    try std.testing.expectEqualStrings("gone", argv[4]);
+    try std.testing.expectEqualStrings("build.zig", argv[5]);
+}
 
 /// Reports a checkedFiles enumeration failure through `step`, naming the
 /// gate path that stopped it when there is one and falling back to a

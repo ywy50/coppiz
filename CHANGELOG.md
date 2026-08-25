@@ -22,6 +22,19 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The `zig fmt --check --ast-check` gate now runs over the expanded file
+  list the shared dispatcher produces instead of the raw checked paths, so
+  a symlinked `.zig` source under a checked path is format-checked like a
+  real one. zig fmt's own directory walk does not follow symlinks (verified
+  on 0.16.0: with `src/link.zig` pointing at an unformatted real source and
+  imported from `src/root.zig`, `zig build test` stayed green while
+  `zig fmt --check src/link.zig` failed), so of the two file-covering gates
+  only the column cap saw such a file — exactly the drift the shared
+  `checked_paths` list exists to prevent. The expansion reuses
+  `checkedFiles`, keeping zig fmt's coverage identical to the other gates':
+  wrong-case `.ZIG` names stay excluded, and a missing checked path falls
+  back to the raw paths, which zig fmt then fails on loudly at make time.
+
 - The four record-store quick-start commands (the adrs, rfcs, prds and
   research inventories' READMEs) quote their `cp` destination around the
   placeholder (`"docs/adrs/0004-<slug>.md"`). Unquoted, a POSIX shell read
