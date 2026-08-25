@@ -412,7 +412,7 @@ const LineLengthStep = struct {
             arena,
             &checked_paths,
         );
-        for (sources) |source| try checkLineLengths(arena, source.text, source.path, &report);
+        for (sources) |source| try checkLineLengths(arena, source, &report);
         // One report line per violation (pinned by the exact-string tests
         // below), so the tally is the newline count — no second output to
         // keep in lockstep with the appends.
@@ -424,15 +424,16 @@ const LineLengthStep = struct {
     }
 
     /// The cap itself, I/O-free so tests can drive it directly. Appends one
-    /// report line per offending line.
+    /// report line per offending line. Takes the whole `Source` rather than
+    /// separate text and path arguments so the pair cannot be swapped at a
+    /// call site — they are same-typed strings reported together.
     fn checkLineLengths(
         arena: std.mem.Allocator,
-        bytes: []const u8,
-        path: []const u8,
+        source: Source,
         report: *std.ArrayListUnmanaged(u8),
     ) !void {
         var line_no: usize = 0;
-        var lines = std.mem.splitScalar(u8, bytes, '\n');
+        var lines = std.mem.splitScalar(u8, source.text, '\n');
         while (lines.next()) |line| {
             line_no += 1;
             // Code points can only outnumber bytes, so a line at or under
@@ -440,7 +441,7 @@ const LineLengthStep = struct {
             // UTF-8 decode — the common case in a conforming tree.
             if (line.len <= columns_max) continue;
             if ((std.unicode.utf8CountCodepoints(line) catch line.len) <= columns_max) continue;
-            try report.print(arena, "  {s}:{d}\n", .{ path, line_no });
+            try report.print(arena, "  {s}:{d}\n", .{ source.path, line_no });
         }
     }
 };
@@ -452,7 +453,11 @@ test "column cap admits a line at exactly the limit" {
     var report: std.ArrayListUnmanaged(u8) = .empty;
 
     const exact = "a" ** LineLengthStep.columns_max;
-    try LineLengthStep.checkLineLengths(arena, exact ++ "\nsecond\n", "f.zig", &report);
+    try LineLengthStep.checkLineLengths(
+        arena,
+        .{ .path = "f.zig", .text = exact ++ "\nsecond\n" },
+        &report,
+    );
 
     try std.testing.expectEqual(@as(usize, 0), report.items.len);
 }
@@ -471,8 +476,7 @@ test "column cap flags the first line past the limit, with path and line number"
     // refactor most easily drops the tail.
     try LineLengthStep.checkLineLengths(
         arena,
-        "ok\n" ++ over ++ "\nalso ok\n" ++ over,
-        "f.zig",
+        .{ .path = "f.zig", .text = "ok\n" ++ over ++ "\nalso ok\n" ++ over },
         &report,
     );
 
@@ -486,7 +490,11 @@ test "column cap measures code points, not bytes" {
     var report: std.ArrayListUnmanaged(u8) = .empty;
 
     // 60 two-byte code points: 120 bytes, but only 60 columns.
-    try LineLengthStep.checkLineLengths(arena, "\u{00e9}" ** 60, "f.zig", &report);
+    try LineLengthStep.checkLineLengths(
+        arena,
+        .{ .path = "f.zig", .text = "\u{00e9}" ** 60 },
+        &report,
+    );
     try std.testing.expectEqual(@as(usize, 0), report.items.len);
 
     // The boundary itself on the decoded side: exactly the cap in code
@@ -495,8 +503,7 @@ test "column cap measures code points, not bytes" {
     // a sub-cap byte line never reaches the decode at all.
     try LineLengthStep.checkLineLengths(
         arena,
-        "\u{00e9}" ** LineLengthStep.columns_max,
-        "f.zig",
+        .{ .path = "f.zig", .text = "\u{00e9}" ** LineLengthStep.columns_max },
         &report,
     );
     try std.testing.expectEqual(@as(usize, 0), report.items.len);
@@ -504,7 +511,11 @@ test "column cap measures code points, not bytes" {
     // The invalid side of the same boundary: 101 code points is over the cap
     // whatever the encoding, so wide characters are not skipped wholesale.
     const wide_over = "\u{00e9}" ** (LineLengthStep.columns_max + 1);
-    try LineLengthStep.checkLineLengths(arena, wide_over, "f.zig", &report);
+    try LineLengthStep.checkLineLengths(
+        arena,
+        .{ .path = "f.zig", .text = wide_over },
+        &report,
+    );
     try std.testing.expectEqualStrings("  f.zig:1\n", report.items);
 }
 
@@ -515,7 +526,11 @@ test "column cap falls back to byte count on invalid UTF-8" {
     var report: std.ArrayListUnmanaged(u8) = .empty;
 
     const bad = "\xff" ** (LineLengthStep.columns_max + 1);
-    try LineLengthStep.checkLineLengths(arena, bad, "f.zig", &report);
+    try LineLengthStep.checkLineLengths(
+        arena,
+        .{ .path = "f.zig", .text = bad },
+        &report,
+    );
 
     // Same path:line report as the valid-UTF-8 over-limit case.
     try std.testing.expectEqualStrings("  f.zig:1\n", report.items);
