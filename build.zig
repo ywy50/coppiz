@@ -1165,7 +1165,7 @@ const TestRegistrationStep = struct {
     /// roots-only convention, and an ordinary module's wrong-case import
     /// hides behind another module's correct one just the same. The
     /// wrong-case *filename* counterpart lives in GateCoverageStep
-    /// (nearMissLines); this covers the import strings. One report line per
+    /// (violationLines); this covers the import strings. One report line per
     /// distinct import string per importing file, whatever the number of
     /// occurrences. `separator` is a parameter so any platform can be
     /// simulated in a test.
@@ -2193,14 +2193,7 @@ const GateCoverageStep = struct {
         };
 
         var report: std.ArrayListUnmanaged(u8) = .empty;
-        try GateCoverageStep.uncoveredPaths(arena, covered, candidates.items, &report);
-        // uncoveredPaths matches by equality, and checkedFiles takes a listed
-        // file whole, so a near-miss Zig spelling listed in checked_paths
-        // joins the covered set and would silence itself there. The gate's
-        // contract is that a file no gate's filter matches is named whatever
-        // the allowlist holds, so exactly those absorbed candidates get
-        // their line back.
-        try GateCoverageStep.nearMissLines(arena, covered, candidates.items, &report);
+        try GateCoverageStep.violationLines(arena, covered, candidates.items, &report);
 
         // One report line per violation (pinned by the exact-string tests
         // below), so the tally is the newline count — no second output to
@@ -2213,8 +2206,7 @@ const GateCoverageStep = struct {
     }
 
     /// True when the covered set already names `path` byte-for-byte: the
-    /// membership question both report halves ask of every candidate, kept
-    /// in one copy so their match rules cannot drift apart.
+    /// membership question violationLines asks of every candidate.
     fn coveredContains(covered: []const []const u8, path: []const u8) bool {
         for (covered) |checked| {
             if (std.mem.eql(u8, checked, path)) return true;
@@ -2222,45 +2214,32 @@ const GateCoverageStep = struct {
         return false;
     }
 
-    /// The near-miss half of the coverage report, I/O-free so tests drive
-    /// it directly beside uncoveredPaths: appends one report line per
-    /// candidate whose basename names a Zig source in a spelling no gate's
-    /// filter matches (zigNearMissName: ".zig" in any letter case, not as
-    /// the exact lowercase suffix — wrong-case names and suffixed backups
-    /// or reject files alike) and that `covered` holds anyway.
-    /// Candidates the covered list does not hold were already reported by
-    /// uncoveredPaths; naming them here too would double the tally. The
-    /// point is that listing a wrong-case path in `checked_paths` cannot buy
-    /// silence: the exact-case filters every covering surface applies are
-    /// what make such a file invisible, and only renaming ends that.
-    fn nearMissLines(
-        arena: std.mem.Allocator,
-        covered: []const []const u8,
-        candidates: []const []const u8,
-        report: *std.ArrayListUnmanaged(u8),
-    ) !void {
-        for (candidates) |path| {
-            if (!zigNearMissName(std.fs.path.basename(path))) continue;
-            if (!coveredContains(covered, path)) continue;
-            try report.print(arena, "  {s}: not covered by any analysis gate\n", .{path});
-        }
-    }
-
     /// The gate's decision core, I/O-free so tests drive it directly, the
     /// way classifyModules serves the registration walk: appends one report
-    /// line per candidate equal to no entry of `covered`, in the order
-    /// handed in (the walk order, like the other gates' reports).
+    /// line per candidate no gate covers, in the order handed in (the walk
+    /// order, like the other gates' reports). A candidate is uncovered when
+    /// `covered` — the checkedFiles expansion of `checked_paths` — holds no
+    /// byte-equal entry for it, or when its basename names a Zig source in a
+    /// spelling no gate's filter matches (zigNearMissName: ".zig" in any
+    /// letter case, not as the exact lowercase suffix) while the covered set
+    /// holds it anyway: checkedFiles takes a listed file whole, so a
+    /// near-miss spelling listed in checked_paths joins the covered set and
+    /// an equality match alone would silence itself there. The point is that
+    /// listing such a path cannot buy silence: only renaming ends that.
     /// O(covered x candidates) comparisons — the tree holds a handful of
     /// files today and the point is to fail loudly while it is small.
-    fn uncoveredPaths(
+    fn violationLines(
         arena: std.mem.Allocator,
         covered: []const []const u8,
         candidates: []const []const u8,
         report: *std.ArrayListUnmanaged(u8),
     ) !void {
         for (candidates) |path| {
-            if (coveredContains(covered, path)) continue;
-            try report.print(arena, "  {s}: not covered by any analysis gate\n", .{path});
+            if (!coveredContains(covered, path) or
+                zigNearMissName(std.fs.path.basename(path)))
+            {
+                try report.print(arena, "  {s}: not covered by any analysis gate\n", .{path});
+            }
         }
     }
 };
@@ -2294,8 +2273,8 @@ fn excludedFromGates(basename: []const u8, depth: usize) bool {
 /// mid-name by its own convention ("build.zig.zon", listed whole in
 /// checked_paths) while carrying no source obligation. Callers narrow
 /// further per role: appendProjectZigFiles' .other branch has already
-/// claimed exact-lowercase names as .zig_source, and nearMissLines
-/// guards the exact case with its own endsWith.
+/// claimed exact-lowercase names as .zig_source, and violationLines'
+/// near-miss arm applies it only to names the covered set already holds.
 fn zigNearMissName(basename: []const u8) bool {
     if (std.mem.endsWith(u8, basename, ".zig")) return false;
     if (std.mem.endsWith(u8, basename, ".zon")) return false;
@@ -2420,7 +2399,7 @@ test "gate coverage reports exactly the candidates outside the checked paths" {
     const candidates = [_][]const u8{ "stray.zig", "build.zig", "tools/late.zig" };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
-    try GateCoverageStep.uncoveredPaths(arena, &covered, &candidates, &report);
+    try GateCoverageStep.violationLines(arena, &covered, &candidates, &report);
 
     try std.testing.expectEqualStrings(
         \\  stray.zig: not covered by any analysis gate
@@ -2440,7 +2419,7 @@ test "gate coverage stays silent when every candidate is covered" {
     const candidates = [_][]const u8{ "src/root.zig", "src/main.zig" };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
-    try GateCoverageStep.uncoveredPaths(arena, &covered, &candidates, &report);
+    try GateCoverageStep.violationLines(arena, &covered, &candidates, &report);
 
     try std.testing.expectEqual(@as(usize, 0), report.items.len);
 }
@@ -2450,10 +2429,10 @@ test "gate coverage names a near-miss source even when checked_paths lists it" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // The listed shape uncoveredPaths alone cannot judge: "Legacy.ZIG" sat in
-    // checked_paths, checkedFiles took it whole, and the equality match
+    // The listed shape the equality match alone cannot judge: "Legacy.ZIG" sat in
+    // checked_paths, checkedFiles took it whole, and a covered-only match
     // accepted the very escape this gate closes — a silent report while the
-    // file stayed outside every exact-case filter. nearMissLines returns
+    // file stayed outside every exact-case filter. violationLines returns
     // the line whatever the allowlist holds — for the suffixed backup
     // spelling ("main.zig.bak") exactly as for the wrong-case suffix, since
     // both are spellings no gate's filter matches; ok.zig shows an ordinary
@@ -2462,8 +2441,7 @@ test "gate coverage names a near-miss source even when checked_paths lists it" {
     const candidates = [_][]const u8{ "src/ok.zig", "Legacy.ZIG", "src/main.zig.bak" };
 
     var report: std.ArrayListUnmanaged(u8) = .empty;
-    try GateCoverageStep.uncoveredPaths(arena, &covered, &candidates, &report);
-    try GateCoverageStep.nearMissLines(arena, &covered, &candidates, &report);
+    try GateCoverageStep.violationLines(arena, &covered, &candidates, &report);
 
     try std.testing.expectEqualStrings(
         \\  Legacy.ZIG: not covered by any analysis gate
@@ -2471,13 +2449,12 @@ test "gate coverage names a near-miss source even when checked_paths lists it" {
         \\
     , report.items);
 
-    // The unlisted shape keeps its single line per file: a near-miss
-    // candidate the covered list never held was already reported by
-    // uncoveredPaths, so the second half adds nothing — no doubled tally.
+    // The unlisted shape keeps its single line per file: the OR of the two
+    // conditions fires once per candidate, so a near-miss candidate outside
+    // the covered list is not named twice — no doubled tally.
     const bare_covered = [_][]const u8{"src/ok.zig"};
     report = .empty;
-    try GateCoverageStep.uncoveredPaths(arena, &bare_covered, &candidates, &report);
-    try GateCoverageStep.nearMissLines(arena, &bare_covered, &candidates, &report);
+    try GateCoverageStep.violationLines(arena, &bare_covered, &candidates, &report);
     try std.testing.expectEqualStrings(
         \\  Legacy.ZIG: not covered by any analysis gate
         \\  src/main.zig.bak: not covered by any analysis gate
@@ -3213,7 +3190,7 @@ test "gate-coverage step fails naming a project file outside the checked paths" 
     // exists (so the covered side enumerates), and one top-level .zig file
     // lies outside the allowlist — the complement this step exists to fail
     // loudly about. Its end-to-end header and tally are pinned here because
-    // uncoveredPaths' tests stop at the bare report lines.
+    // violationLines' tests stop at the bare report lines.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
