@@ -1714,7 +1714,6 @@ const GateCoverageStep = struct {
 /// zig-out deeper down stays inside the gated tree, its sources still
 /// reportable — the gate exists so nothing escapes silently.
 fn excludedFromGates(basename: []const u8, depth: usize) bool {
-    if (basename.len == 0) return false;
     if (basename[0] == '.') return true;
     return depth == 1 and std.mem.eql(u8, basename, "zig-out");
 }
