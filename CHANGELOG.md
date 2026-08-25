@@ -22,6 +22,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Ten lint-gate tests built their expected walked paths with `/` literals
+  while the paths they compare against come from `std.fs.path.join` and the
+  walker, which use the platform separator (`src\root.zig`, not
+  `src/root.zig`, on Windows — the same mismatch class the byte-equal
+  `test_roots` comparison hit before it learned to normalize). Nineteen
+  assertions therefore failed against correct gate output on any host whose
+  separator is not `/`. The expectations now concatenate
+  `std.fs.path.sep_str`, so they pin the same report text as the platform
+  actually produces; import-string tests keep their literal `/`, the one
+  form an @import may spell.
+
 - The `zig fmt --check --ast-check` gate now runs over the expanded file
   list the shared dispatcher produces instead of the raw checked paths, so
   a symlinked `.zig` source under a checked path is format-checked like a

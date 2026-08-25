@@ -386,7 +386,14 @@ test "fmtArgs hands zig fmt every covered file, links included" {
     try std.testing.expectEqualStrings("--check", argv[2]);
     try std.testing.expectEqualStrings("--ast-check", argv[3]);
     const files = argv[4..];
-    const want = [_][]const u8{ "src/link.zig", "src/main.zig", "src/real.zig" };
+    // Joined with the platform separator, the form classifyWalkedEntry hands
+    // out on every host.
+    const sep_str = std.fs.path.sep_str;
+    const want = [_][]const u8{
+        "src" ++ sep_str ++ "link.zig",
+        "src" ++ sep_str ++ "main.zig",
+        "src" ++ sep_str ++ "real.zig",
+    };
     try std.testing.expectEqual(files.len, want.len);
     for (want) |path| {
         var found = false;
@@ -1575,9 +1582,13 @@ test "checkedFiles expands directory entries and takes plain entries whole" {
     std.mem.sort([]const u8, checked, {}, lessThanStrings);
 
     try std.testing.expectEqual(@as(usize, 3), checked.len);
+    const sep_str = std.fs.path.sep_str;
     try std.testing.expectEqualStrings("build.zig.zon", checked[0]);
-    try std.testing.expectEqualStrings("lib/deep/inner.zig", checked[1]);
-    try std.testing.expectEqualStrings("lib/top.zig", checked[2]);
+    try std.testing.expectEqualStrings(
+        "lib" ++ sep_str ++ "deep" ++ sep_str ++ "inner.zig",
+        checked[1],
+    );
+    try std.testing.expectEqualStrings("lib" ++ sep_str ++ "top.zig", checked[2]);
 }
 
 test "checkedFiles resolves a listed path that symlinks a directory" {
@@ -1607,7 +1618,10 @@ test "checkedFiles resolves a listed path that symlinks a directory" {
     // Paths stay as listed (through the link), the shape both gates report;
     // the non-.zig file is filtered like any walked entry.
     try std.testing.expectEqual(@as(usize, 1), checked.len);
-    try std.testing.expectEqualStrings("linked-lib/nested/deep.zig", checked[0]);
+    try std.testing.expectEqualStrings(
+        "linked-lib" ++ std.fs.path.sep_str ++ "nested" ++ std.fs.path.sep_str ++ "deep.zig",
+        checked[0],
+    );
 }
 
 test "checkedFiles fails loudly when a checked path stops existing" {
@@ -1682,11 +1696,19 @@ test "appendZigFilesUnder collects every .zig file below the directory, and only
     std.mem.sort([]const u8, found.items, {}, lessThanStrings);
 
     // Each result is dir_path joined with the walker-relative path, the
-    // shape both gates report and read back through root_dir.
+    // shape both gates report and read back through root_dir — joined with
+    // the platform separator on every host.
     try std.testing.expectEqual(@as(usize, 3), found.items.len);
-    try std.testing.expectEqualStrings("src/a/b/deep.zig", found.items[0]);
-    try std.testing.expectEqualStrings("src/a/inner.zig", found.items[1]);
-    try std.testing.expectEqualStrings("src/top.zig", found.items[2]);
+    const sep_str = std.fs.path.sep_str;
+    try std.testing.expectEqualStrings(
+        "src" ++ sep_str ++ "a" ++ sep_str ++ "b" ++ sep_str ++ "deep.zig",
+        found.items[0],
+    );
+    try std.testing.expectEqualStrings(
+        "src" ++ sep_str ++ "a" ++ sep_str ++ "inner.zig",
+        found.items[1],
+    );
+    try std.testing.expectEqualStrings("src" ++ sep_str ++ "top.zig", found.items[2]);
 }
 
 test "appendZigFilesUnder analyzes a symlinked .zig file like a real one" {
@@ -1711,8 +1733,14 @@ test "appendZigFilesUnder analyzes a symlinked .zig file like a real one" {
     std.mem.sort([]const u8, found.items, {}, lessThanStrings);
 
     try std.testing.expectEqual(@as(usize, 2), found.items.len);
-    try std.testing.expectEqualStrings("src/link.zig", found.items[0]);
-    try std.testing.expectEqualStrings("src/real.zig", found.items[1]);
+    try std.testing.expectEqualStrings(
+        "src" ++ std.fs.path.sep_str ++ "link.zig",
+        found.items[0],
+    );
+    try std.testing.expectEqualStrings(
+        "src" ++ std.fs.path.sep_str ++ "real.zig",
+        found.items[1],
+    );
 }
 
 test "classifyWalkedEntry resolves an unclassifiable entry through its real kind" {
@@ -1744,7 +1772,10 @@ test "classifyWalkedEntry resolves an unclassifiable entry through its real kind
         .path = "mystery.zig",
         .kind = .unknown,
     });
-    try std.testing.expectEqualStrings("src/mystery.zig", unknown_source.zig_source);
+    try std.testing.expectEqualStrings(
+        "src" ++ std.fs.path.sep_str ++ "mystery.zig",
+        unknown_source.zig_source,
+    );
 
     // The same probe with the empty prefix the coverage walk passes: the
     // join must yield the bare walked path, not "/toplevel.zig".
@@ -2100,11 +2131,15 @@ test "appendProjectZigFiles walks the tree minus tooling directories, links incl
     // exactly when nothing specific failed.
     try std.testing.expectEqual(@as(usize, 5), found.items.len);
     try std.testing.expect(failed_path == null);
-    try std.testing.expectEqualStrings("src/link.zig", found.items[0]);
-    try std.testing.expectEqualStrings("src/top.zig", found.items[1]);
+    const sep_str = std.fs.path.sep_str;
+    try std.testing.expectEqualStrings("src" ++ sep_str ++ "link.zig", found.items[0]);
+    try std.testing.expectEqualStrings("src" ++ sep_str ++ "top.zig", found.items[1]);
     try std.testing.expectEqualStrings("stray.zig", found.items[2]);
-    try std.testing.expectEqualStrings("tools/inner.zig", found.items[3]);
-    try std.testing.expectEqualStrings("tools/zig-out/made.zig", found.items[4]);
+    try std.testing.expectEqualStrings("tools" ++ sep_str ++ "inner.zig", found.items[3]);
+    try std.testing.expectEqualStrings(
+        "tools" ++ sep_str ++ "zig-out" ++ sep_str ++ "made.zig",
+        found.items[4],
+    );
 }
 
 test "appendProjectZigFiles collects a wrong-case .zig file as a candidate" {
@@ -2136,7 +2171,10 @@ test "appendProjectZigFiles collects a wrong-case .zig file as a candidate" {
     try std.testing.expectEqual(@as(usize, 2), found.items.len);
     try std.testing.expect(failed_path == null);
     try std.testing.expectEqualStrings("Legacy.ZIG", found.items[0]);
-    try std.testing.expectEqualStrings("src/ok.zig", found.items[1]);
+    try std.testing.expectEqualStrings(
+        "src" ++ std.fs.path.sep_str ++ "ok.zig",
+        found.items[1],
+    );
 }
 
 test "appendProjectZigFiles rejects a linked directory like the gate-path walk" {
@@ -2166,9 +2204,13 @@ test "appendProjectZigFiles rejects a linked directory like the gate-path walk" 
     );
 
     // The rejection names the walked entry — the link itself, in walked-path
-    // form — so make()'s report says which entry stopped the walk instead of
-    // a bare error name the operator would have to locate by hand.
-    try std.testing.expectEqualStrings("tools/vendor", failed_path.?);
+    // form (platform separators) — so make()'s report says which entry
+    // stopped the walk instead of a bare error name the operator would have
+    // to locate by hand.
+    try std.testing.expectEqualStrings(
+        "tools" ++ std.fs.path.sep_str ++ "vendor",
+        failed_path.?,
+    );
 }
 
 test "appendProjectZigFiles names a link that no longer resolves" {
@@ -2197,8 +2239,11 @@ test "appendProjectZigFiles names a link that no longer resolves" {
     );
 
     // The link, not its missing target: it is the tree entry that cannot be
-    // handled.
-    try std.testing.expectEqualStrings("src/dangling.zig", failed_path.?);
+    // handled (walked-path form, platform separators).
+    try std.testing.expectEqualStrings(
+        "src" ++ std.fs.path.sep_str ++ "dangling.zig",
+        failed_path.?,
+    );
 }
 
 /// A real std.Build whose build root is `root_dir`, so the gate steps'
