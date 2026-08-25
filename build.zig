@@ -918,7 +918,7 @@ const TestRegistrationStep = struct {
             for (sources, 0..) |candidate, i| {
                 if (reached[i]) continue;
                 const wanted = try importBetween(arena, from.path, candidate.path, separator);
-                if (importsPath(from_imports, wanted)) {
+                if (importsContain(from_imports, wanted)) {
                     reached[i] = true;
                     try queue.append(arena, i);
                 }
@@ -1024,10 +1024,10 @@ const TestRegistrationStep = struct {
         return std.mem.replaceOwned(u8, arena, path, &.{separator}, "/");
     }
 
-    /// True when `imports` — one module's collectImports result — names
+    /// True when `imports` — one module's collectImports result — contains
     /// `wanted_import`: the comparison classifyModules applies per candidate
     /// against the importer's once-collected imports.
-    fn importsPath(imports: []const ImportRef, wanted_import: []const u8) bool {
+    fn importsContain(imports: []const ImportRef, wanted_import: []const u8) bool {
         for (imports) |ref| {
             if (std.mem.eql(u8, ref.path, wanted_import)) return true;
         }
@@ -1524,7 +1524,7 @@ test "classifyModules classifies through an import cycle and reports modules bel
     , report.items);
 }
 
-test "importsPath counts only a real @import call" {
+test "importsContain counts only a real @import call" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -1538,7 +1538,7 @@ test "importsPath counts only a real @import call" {
             text: []const u8,
             wanted_import: []const u8,
         ) !bool {
-            return TestRegistrationStep.importsPath(
+            return TestRegistrationStep.importsContain(
                 try TestRegistrationStep.collectImports(a, text),
                 wanted_import,
             );
