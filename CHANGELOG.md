@@ -108,6 +108,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the probe behind a link reveals the target's kind), and a default flipped
   upstream would otherwise have changed that behavior silently. `symLink`'s
   empty flags stay defaulted; nothing load-bearing lives there.
+
 - `zigNearMissName`'s doc comment no longer claims the exact-lowercase
   suffix "never reaches a caller": its two callers narrow it per role —
   `appendProjectZigFiles`' `.other` branch has already claimed
@@ -173,6 +174,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   existed the documented copy failed outright ("slug: No such file or
   directory"), and where one did it ran as a copy to `0004-` while creating
   a stray empty `.md` — never the numbered copy the instructions describe.
+
 - Four end-to-end pins in the lint-gate tests, each run against a gate
   step's make() function over a temporary tree: the test-registration
   report's two single-section shapes (reachability findings alone carry no
@@ -188,6 +190,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   a gate regression that started rejecting legitimate trees would have
   passed them all. Each pin was confirmed to bite by temporarily breaking
   the branch it guards.
+
 - A sixth lint-gate end-to-end pin: the test-registration step's failure
   report with all three sections firing at once — reachability,
   declaration analysis and case-mismatch together, one finding each so the
@@ -197,6 +200,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   reordering the assembled halves mangled the operator-facing report
   behind a green suite (confirmed: the new test fails under a swapped
   order and passes under the documented one).
+
 - A fifth lint gate, coverage completeness: the analysis gates cover an
   explicit allowlist (`checked_paths` in build.zig) that fails loudly when a
   listed path stops existing but stayed silent about its complement — a
@@ -206,6 +210,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the root-level `zig-out` install prefix; a linked directory is rejected
   like the covering gates' walks) and fails naming each uncovered file, so
   coverage can only change by editing `checked_paths`.
+
 - Declaration-analysis enforcement in the test-registration lint gate: a
   `src/` module a test root imports but that root never wraps in a
   `std.testing.refAllDecls` (or `refAllDeclsRecursive`) call fails the build
@@ -217,11 +222,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   now gated). The gate constrains only the two test roots, where the
   documented convention puts both halves, and ignores imports resolving to
   no walked module (`std`, `build_options`, the `spine` package).
+
 - Two boundary pins in the lint-gate tests: the column-cap test now feeds its
   second over-limit line as the file's last line with no trailing '\n' (a
   file not ending in a newline must still have that final line checked),
   and the toolchain-floor test pins the metadata mirror on the floor side —
   a plain toolchain satisfies a floor carrying build metadata.
+
 - A third boundary pin in the lint-gate tests: the column-cap test now feeds
   a line of exactly the cap in code points while over it in bytes (100 wide
   characters, 200 bytes). The decoded side of the cap was one comparison away
@@ -229,11 +236,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   conforming wide-character source — and no existing case caught it, because a
   sub-cap byte count skips the decode entirely, so the ASCII exact-limit pin
   exercises a different branch.
+
 - Two more lint-gate test repairs: the import-cycle classification test now
   also pins that modules reachable only through an unreachable importer are
   reported beside it (the walk seeds from test roots only), and
   importBetween's climb-out is checked two directories deep — one "../" per
   level left under the importing file's directory.
+
 - Two coverage repairs in the lint-gate tests: the toolchain-floor test now
   pins the complementary prerelease boundary (a release toolchain satisfies
   a prerelease floor of the same release; build metadata orders equal), and
@@ -241,6 +250,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   cycle — two reachable modules importing each other are both classified as
   reached, the walk terminates, and the orphan outside the cycle is still
   the only module reported.
+
 - The declaration-analysis test with two active roots now pins that wrapping
   is scoped per root: a `refAllDecls` in one test root excuses only that
   root's own imports, so the other root's bare import of the same module is
@@ -250,6 +260,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the direction where merging the wrapper sets across roots would silently
   drop a report line; verified by temporarily hoisting the set out of the
   per-root loop and watching the new pin fail.
+
 - The three lint-gate tests that asserted an empty report no longer pass
   vacuously: each carries a control case the gate must still name, so a
   regression that silenced the walk or the declaration-analysis report
@@ -264,17 +275,20 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the same audit that corrected `src/root.zig`'s module doc and PRD 0001's
   Status missed this row, and `root.zig` carries the implemented,
   test-pinned package version, so "placeholders today" understated it.
+
 - Two accuracy repairs from a documentation audit: `src/root.zig`'s module
   doc no longer says nothing is implemented in the file — the package version
   declaration it sits above is implemented, compile-checked and pinned by a
   test — and PRD 0001's Status no longer calls `src/root.zig` a placeholder
   for the same reason.
+
 - RFC 0001's *Current state* no longer presents clanker's shared state as
   JSON/JSONL files in the present tense: its own evidence record (research
   0001) and [PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)
   carry clanker ADR 0033 (2026-08-20), which moved sessions to per-session
   SQLite with an append-only replicated `events` stream while the JSONL
   streams stayed unreplicated — verified in clanker's tree before editing.
+
 - Three accuracy repairs from a documentation audit: RELEASES.md and this
   changelog describe the version mechanism that actually landed — the
   library parses the raw `build.zig.zon` value and fails compilation on
@@ -283,6 +297,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   library" removed; and the glossary's `checkpoint` definition no longer
   says stale entries are always removed — they join the removal set only
   under `stale.cleanup = delete`, as PRD 0002 states.
+
 - PRD 0001's Storage section now names what keys a ledger's on-disk
   subdirectory: the ledger id in lowercase hex, not its name. The name was
   already a mutable setting while the id is the identity, so a name-keyed
@@ -293,12 +308,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   and one chain, Windows refuses reserved device names (`con`, `nul`) and
   trailing-dot/space names outright, and a name carrying `/` or `\`
   escapes the member directory. Hex digits spell none of that.
+
 - `checkedFiles`'s doc comment in build.zig names its callers again: it
   claimed to serve "every step that enumerates files" but listed only the
   two file-covering gates and the test-registration walk — the enumeration
   the coverage-completeness gate performs through the same dispatcher was
   missing, while `zig fmt`, named by "the two file-covering gates", reads
   its files without the dispatcher.
+
 - Two accuracy repairs from a documentation audit: `src/root.zig`'s
   registration guidance no longer says registering a module keeps its public
   declarations covered by the "all public declarations analyze" test — that
@@ -307,6 +324,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   hardcodes seniority semantics ("the later-joining branch is archived") for
   which branch a merge archives, when the mode's ranking decides (*Partition
   and merge*) — under `configured`, an earlier-joining branch can lose.
+
 - Both lint-gate walks (the covering gates' `appendZigFilesUnder` and the
   coverage gate's `appendProjectZigFiles`) now resolve an entry the
   filesystem could not classify instead of skipping it. On filesystems whose
@@ -339,6 +357,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the clarification and does not quote it — and the `lint` step's changelog
   entry no longer pins its description at "four checks", a count the fifth
   gate's arrival had already made stale.
+
 - The gate-coverage walk's failures now name the entry they stopped on
   (`cannot walk 'tools/vendor': LinkedDirectoryNotWalked`, not a bare
   `cannot walk the project tree: …`): a linked directory rejected by the
@@ -346,6 +365,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   name alone, leaving the operator to find which of every walked entry was
   at fault — the same repair `checkedFiles` already made for its gate-path
   enumeration failures.
+
 - Three accuracy repairs from a documentation audit: PRD 0001's control-entry
   table now names the `epoch` reason list PRD 0003 defines (`leader_lost`,
   `mode_change`, `merge`, `manual`) where it paraphrased three of the four
@@ -355,6 +375,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   ([PRD 0002](docs/prds/0002-ttl-and-staleness.md), the glossary); and PRD
   0002's Status drops an ambiguous "host tested" qualifier from its
   `src/ledger/expiry.zig` source-of-truth line.
+
 - Three accuracy repairs from a documentation audit: the README's
   append-only bullet now scopes full replication to a member's group (the
   same unscoped claim an earlier pass fixed in docs/README's architecture
@@ -367,15 +388,18 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the placeholder ends when the library API and node CLI land; and PRD
   0003's Status reads "the design the RFC recommends", restoring a dropped
   article.
+
 - The `lint` step's description names its gates again instead of stopping at
   "test registration": the string behind `zig build --help` still read
   "test registration" as the last gate after declaration-analysis enforcement
   joined it (the coverage-completeness entry under Added extends the same
   string).
+
 - The `test` step's description says what it runs again: the string behind
   `zig build --help` still read "Run unit tests" after the lint gates were
   wired into `zig build test`; it now reads "Run unit tests and the lint
   gates", matching AGENTS.md's description of the step.
+
 - Two accuracy repairs from a documentation audit: docs/README's
   architecture summary now scopes full replication to the group — the
   unscoped "every member holds every ledger in full" contradicted both
@@ -387,11 +411,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   chain reaches a module — it also fails a test-root import no refAllDecls
   call wraps, which that comment's next paragraph, `src/main.zig`'s, and
   build.zig already state.
+
 - The 100-column cap's enumeration failure now names the checked path it
   stopped on (`cannot enumerate 'src': FileNotFound`, not a bare
   `FileNotFound`): `checkedFiles` can fail on any of its three entries, and
   every other file-access failure in the gates already reported which file
   it was reading.
+
 - Symlink handling in the two file-covering lint gates: directory iteration
   reports a link as `.sym_link` — the walker never resolves it (verified on
   0.16.0: Linux's `getdents64` `d_type` reaches the filter untouched), so a
@@ -425,6 +451,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the 100-column cap, test registration — the latter lexing with
   `std.zig.Tokenizer`) could otherwise run under undeclared toolchain
   semantics.
+
 - Spec-consistency fourth pass: PRD 0001's duplicate acceptance-criterion id
   (two criteria labelled G3) is renumbered — the forgery negative test is now
   G7, and the roadmap's single-member gate cites G3–G7; PRD 0001's
@@ -433,6 +460,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   OQ 3's layer note now records accurately where `write.ack` is called a
   setting (PRDs 0001 and 0006) versus assumed (PRD 0003) or passed per call
   (PRD 0005).
+
 - Spec-consistency pass over the design records: PRD 0002's effective-TTL
   table and state diagram now match their own prose (`ttl.max_ms` clamps
   under `per_entry` too; author-staled entries remove only under
@@ -447,6 +475,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   PRD 0004's layer rule, not a chain setting) and the test-registration
   guidance in `src/root.zig`/`build.zig` (either test root counts), and made
   the PRD inventory row for 0003 match its title exactly.
+
 - Spec-consistency follow-up: the `sync.*` knobs named across PRDs 0001–0003
   (`sync.page_bytes`, `sync.lag_slots`, `sync.gap_timeout_ms`) are now cited
   to a registered unknown (OQ 56) instead of silently lacking a layer and a
@@ -455,6 +484,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   documents the admitter-ordering caveat (that is the RFC's own open
   question); docs/README's planned source layout lists `src/config/`,
   `src/cli/` and `src/api/`.
+
 - Spec-consistency third pass: ADR 0002's Decision names the `expired`
   transition (`live → expired → removed` under `ttl.action = delete`) that
   PRD 0002's diagram and the glossary already define; the `write.ack` layer
@@ -462,6 +492,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   is registered in OQ 3 instead of silently ambiguous; and the glossary
   defines `cursor`, `follow`, `snapshot` and `control ledger`, which PRDs
   0001/0004/0005/0006 used undefined.
+
 - Lint gates wired into `zig build test` (and a standalone `zig build lint`
   step): canonical formatting via `zig fmt --check --ast-check`, run with the
   toolchain executing the build, a hard 100-column cap over `src/`,
@@ -469,22 +500,27 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   when a `src/` module is not imported from a test root (its tests would
   otherwise silently never run). What CI gates once it exists stays open as
   OQ 45; until then the tests are the blocking entry point.
+
 - Repository founded: Zig 0.16 skeleton (`spine` library module and node
   binary, both placeholders), clanker's documentation taxonomy under `docs/`,
   draft PRDs 0001–0005, RFCs 0001–0002, ADRs 0001–0002, research note 0001,
   the open-questions register and the glossary.
+
 - OQ 49 resolved: groups use the same leadership modes and concurrency
   model as members; no uneven group count is required. PRD 0006 gains the
   two federation rules that follow (representative validated against the
   group's own chain; federation suspect timeout exceeds group election time).
+
 - PRD 0006 (scaling 1 → n → groups: recursive groups, ownership and
   sharding, parity) with the list of what the core must get right now;
   scale tiers in the roadmap; OQ 48–54; federation settings scope reserved
   in PRD 0004; chain-per-ledger and self-describing sealed segments in PRD
   0001.
+
 - ADR 0003 (batteries included, no external infrastructure at any size),
   after the brief was clarified to be general-purpose; PRD 0005 reframed
   with clanker as a worked example host rather than the target; OQ 46–47.
+
 - `.gitattributes` declaring LF for all text files, working trees included:
   `zig fmt --check` inside `zig build test` compares bytes and fails a
   CRLF checkout or commit, so the policy the build enforces is now pinned
@@ -533,11 +569,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 - Documentation audit: the codename is lowercase everywhere, sentence start
   included, as every other record writes it — four sentences in research 0001
   and OQ 41 capitalized it.
+
 - PRD 0001's segment index is keyed by position `(epoch, seq)`, not bare
   `seq`: the slot layout makes `seq` dense within an epoch and restarting at
   1, so any segment spanning an `epoch` boundary holds two `seq = 1…k` runs
   and a `seq`-keyed index is ambiguous — against the glossary's own
   definition of *position*.
+
 - Documentation-currency pass: PRD 0001 no longer says a `stale` mark names
   the `entry_hash` — [PRD 0002](docs/prds/0002-ttl-and-staleness.md) defines
   the payload as naming the target entry id `(author, author_seq)`, whose
@@ -545,6 +583,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   step 4 clears the unslotted queue on receivers too, not only the author
   (the glossary defines the queue as holding received entries, and the
   optimistic-accept paragraph depends on that).
+
 - Documentation-currency pass: PRD 0002's soft-expiry sentence no longer
   calls a TTL-reached entry "expired" under `mark_stale` — its own state
   diagram routes live → stale there, and *expired* is defined for
@@ -557,6 +596,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   not; the evidence log does, and now says so); the README counts clanker's
   survey as seventeen *candidates*, matching research 0001, whose option
   list includes libraries that are not stores.
+
 - Spec-currency pass: PRD 0003's `epoch` entry shape now says its
   `reason` list (`leader_lost | mode_change | merge | manual`) is tier-1's
   and that [PRD 0006](docs/prds/0006-scaling-to-groups-sharding-and-parity.md)
@@ -565,12 +605,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   `cluster.suspect_after_ms` 5 s) now carry their inline citation to
   [OQ 37](docs/open-questions.md), where they are registered as placeholders —
   every other placeholder default in the PRDs already named its open question.
+
 - Spec-currency pass: PRD 0004's acceptance criteria now cover the second
   half of its goal 4 — that a settings change takes effect at a defined slot
   (G4 also asserts effect from the slot after the `settings` entry, per its
   Design validation rule 4), closing the goals↔criteria gap the PRD template
   flags; and RFC 0002's option-A cons paragraph lost a stray three-space
   indent that broke its bullet's continuation alignment.
+
 - Documentation-currency pass: the slot-growth mechanism parked at [OQ
   24](docs/open-questions.md) was named three ways across records — *chain
   checkpoint* (PRD 0002), *archival chain checkpoint* (ADR 0002, the
@@ -581,6 +623,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   present tense — the matcher it means is the text-stripping one the
   tokenizer gate removed, so the present tense read as if the current gate
   were textual.
+
 - The test-registration lint gate now matches real `@import` calls on each
   root's token stream instead of text after comment-stripping. The textual
   matcher admitted one false-pass direction beyond the multiline-string one
@@ -651,6 +694,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   slot table and the segment record prefix, header and index silent — a codec
   written from those sections alone had nothing ruling out the writing host's
   native order. A Byte order note now covers entry, slot and segment layouts.
+
 - The lint gates no longer depend on the working directory `zig build` was
   invoked from: they read files and ran `zig fmt` relative to the process
   cwd, while the build runner walks up from a subdirectory to find
@@ -658,6 +702,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   under the project failed all three gates with FileNotFound. Every gate is
   now anchored to the build root (`fmt --check` via the run step's cwd, the
   other two via the build root's directory handle).
+
 - The test-registration lint gate now matches its own test-root list
   regardless of platform: `src/root.zig` and `src/main.zig` were compared
   byte-for-byte against paths joined with the platform separator, so on
@@ -666,6 +711,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the gate. The walked path's separators are normalized before the
   comparison; unit-tested via the host-target module compiled from
   `build.zig`.
+
 - The test-registration lint gate now matches import paths in `/` form
   regardless of platform: it compared filesystem paths from
   `std.fs.path.join` (backslash-separated on Windows) against
@@ -673,6 +719,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   Windows every module would have failed the gate once the first submodule
   existed. Separators are translated before matching; unit-tested via the
   host-target module compiled from `build.zig`.
+
 - Two cross-reference repairs in the design records: PRD 0002's
   per-entry-expiry-action non-goal cited OQ 6, which is the question of who
   may mark stale beyond the author — no registered question covers per-entry
@@ -680,17 +727,20 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   called epoch numbers unique per leader change in the sentence explaining
   how two branches end up with the same number, and now says each branch
   advances its own counter.
+
 - The two file-covering lint gates (`zig fmt --check --ast-check` and the
   100-column cap) now derive their checked-path set from one shared list in
   `build.zig`, where each previously wrote its own: adding a source file or
   directory meant editing both lists, and missing one left the new file
   outside a gate silently. Coverage over the current tree is unchanged.
+
 - The package version is parsed by the library, not the build script:
   `build.zig` hands over only the raw `build.zig.zon` declaration and
   `src/root.zig` parses it into `spine.version`, so the single-source-of-truth
   value is never carried twice in lockstep, and a value that is not valid
   Semantic Versioning fails compiling `src/root.zig` instead of surfacing only
   when the build script runs.
+
 - Test-registration lint gate no longer counts `@import("...")` mentions
   inside comments: roots are matched with line comments stripped, so a
   commented-out reference cannot mask a module whose tests never run. The
@@ -699,6 +749,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   line). The gate's matching logic now carries unit tests of its own, run
   by `zig build test` via a host-target test module compiled from
   `build.zig`.
+
 - The same gate also drops multiline-string lines before matching:
   `@import("...")` written as text inside a `\`-string literal counted as
   registration while importing nothing — the false-pass direction, unlike
