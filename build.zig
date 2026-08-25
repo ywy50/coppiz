@@ -986,6 +986,34 @@ const TestRegistrationStep = struct {
         return std.fs.path.relativePosix(arena, "", from_dir, to);
     }
 
+    /// The map both analysis halves resolve reported imports against: the
+    /// import string from `importer_path` to every other walked module,
+    /// mapped to that module's path, in walk order. One copy owns the
+    /// decisions both halves must agree on — the self-skip, the
+    /// first-candidate-wins tie-break (two candidates collide only if
+    /// `sources` lists a path twice, which a filesystem walk never does but
+    /// a hand-edited checked_paths could) and the derivation through
+    /// importBetween. `exclude_test_roots` marks candidates that cannot be
+    /// import targets for the asking half (one root importing another is no
+    /// registration); the case half keeps roots among its targets, since a
+    /// wrong-case import of another root reports just the same.
+    fn importTargetsByName(
+        arena: std.mem.Allocator,
+        sources: []const Source,
+        importer_path: []const u8,
+        separator: u8,
+        exclude_test_roots: bool,
+    ) !std.StringArrayHashMapUnmanaged([]const u8) {
+        var named: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+        for (sources) |candidate| {
+            if (std.mem.eql(u8, candidate.path, importer_path)) continue;
+            if (exclude_test_roots and try isTestRoot(arena, candidate.path, separator)) continue;
+            const wanted = try importBetween(arena, importer_path, candidate.path, separator);
+            if (!named.contains(wanted)) try named.put(arena, wanted, candidate.path);
+        }
+        return named;
+    }
+
     /// Collapses an @import string to the one form Zig resolves it to: empty
     /// components ("a//b"), "." components ("./a.zig", "a/./b.zig") and
     /// "name/.." pairs ("sub/../x.zig") disappear — each spelling reaches
@@ -1114,22 +1142,11 @@ const TestRegistrationStep = struct {
 
             // Resolve every other module's import string from this root up
             // front: the string depends on (root, candidate) alone, so
-            // deriving it per import would redo identical work. First
-            // candidate wins, and a candidate that is itself a test root is
-            // absent — one root importing the other is not a registration
-            // and asks for no wrapper.
-            var named: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-            for (sources) |candidate| {
-                if (std.mem.eql(u8, candidate.path, root_source.path)) continue;
-                if (try isTestRoot(arena, candidate.path, separator)) continue;
-                const wanted = try importBetween(
-                    arena,
-                    root_source.path,
-                    candidate.path,
-                    separator,
-                );
-                if (!named.contains(wanted)) try named.put(arena, wanted, candidate.path);
-            }
+            // deriving it per import would redo identical work. A candidate
+            // that is itself a test root is absent — one root importing the
+            // other is not a registration and asks for no wrapper.
+            const named =
+                try importTargetsByName(arena, sources, root_source.path, separator, true);
 
             const imports = try collectImports(arena, root_source.text);
             var wrapped_paths: std.StringArrayHashMapUnmanaged(void) = .empty;
@@ -1182,15 +1199,17 @@ const TestRegistrationStep = struct {
             // matching folded alone resolves only where the filesystem
             // ignores case. Package and builtin imports ("std",
             // "build_options", the spine package) match neither and stay
-            // out, as does anything pointing outside the walked tree.
-            var named: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+            // out, as does anything pointing outside the walked tree. Roots
+            // stay among the candidates: a wrong-case import of another root
+            // reports just the same. The folded map is derived from named's
+            // entries in their insertion order, so its first-wins rule
+            // follows the candidate order importTargetsByName fixed.
+            const named = try importTargetsByName(arena, sources, source.path, separator, false);
             var folded: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-            for (sources) |candidate| {
-                if (std.mem.eql(u8, candidate.path, source.path)) continue;
-                const wanted = try importBetween(arena, source.path, candidate.path, separator);
-                if (!named.contains(wanted)) try named.put(arena, wanted, candidate.path);
-                const key = try std.ascii.allocLowerString(arena, wanted);
-                if (!folded.contains(key)) try folded.put(arena, key, wanted);
+            var named_it = named.iterator();
+            while (named_it.next()) |entry| {
+                const key = try std.ascii.allocLowerString(arena, entry.key_ptr.*);
+                if (!folded.contains(key)) try folded.put(arena, key, entry.key_ptr.*);
             }
             var reported: std.StringArrayHashMapUnmanaged(void) = .empty;
             for (try collectImports(arena, source.text)) |ref| {
