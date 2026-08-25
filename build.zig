@@ -2864,6 +2864,15 @@ fn makeTestBuilder(
     );
 }
 
+/// The make function of the under-test step, never legitimately invoked:
+/// the step exists only so direct-call tests can hand a live *std.Build.Step
+/// to loadCheckedSources and failEnumeration for failure reporting. The
+/// trapping body turns an accidental invocation into a loud crash instead
+/// of undefined behavior through an `undefined` function pointer.
+fn uninvokedMake(_: *std.Build.Step, _: std.Build.Step.MakeOptions) anyerror!void {
+    unreachable;
+}
+
 /// The bare custom step loadCheckedSources' and failEnumeration's
 /// direct-call tests report through, owned by a fresh test Build over
 /// `root_dir`. One copy serves all three so their wiring cannot drift apart,
@@ -2879,7 +2888,7 @@ fn makeUnderTestStep(
         .id = .custom,
         .name = "under test",
         .owner = b,
-        .makeFn = undefined,
+        .makeFn = uninvokedMake,
     });
 }
 
