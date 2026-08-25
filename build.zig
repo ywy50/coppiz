@@ -2180,6 +2180,71 @@ test "test-registration step reports unreachable modules then analysis gaps" {
     );
 }
 
+test "test-registration step reports unreachable modules alone, with no trailing section" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Only the reachability section fires: nothing is imported bare, so the
+    // analysis half must contribute neither header nor separator. The
+    // two-section pin above cannot see a join that appends its blank line
+    // unconditionally — both single-section shapes are pinned separately.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/ghost.zig", .data = "" });
+
+    const sep_str = std.fs.path.sep_str;
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = TestRegistrationStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "1 module(s) whose tests never run:\n" ++
+            "  src" ++ sep_str ++ "ghost.zig: not reachable from a test root\n",
+    );
+}
+
+test "test-registration step reports analysis gaps alone, with no leading section" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The mirror direction: every module reachable, one bare import — so
+    // only the analysis section fires and the report starts at its header.
+    // a.zig stays reachable (the bare import itself is the chain) while
+    // being reported (nothing wraps it in this root), which is exactly the
+    // split between the two sections this shape isolates.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(
+        io,
+        .{ .sub_path = "src/root.zig", .data = "_ = @import(\"a.zig\");\n" },
+    );
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/a.zig", .data = "" });
+
+    const sep_str = std.fs.path.sep_str;
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = TestRegistrationStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "1 module(s) whose public declarations are never analyzed:\n" ++
+            "  src" ++ sep_str ++ "a.zig: imported by src" ++ sep_str ++
+            "root.zig without forced declaration analysis\n",
+    );
+}
+
 test "gate-coverage step fails naming a project file outside the checked paths" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -2209,4 +2274,90 @@ test "gate-coverage step fails naming a project file outside the checked paths" 
         "1 Zig source(s) no analysis gate covers:\n" ++
             "  stray.zig: not covered by any analysis gate\n",
     );
+}
+
+test "gate-coverage step names the walked entry when the project walk fails" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The covered side enumerates (every checked path exists), then the
+    // project walk hits a dangling link: make()'s catch must print the
+    // entry failed_path names, not fall back to the generic subject. The
+    // core tests pin that appendProjectZigFiles sets it; this pins the
+    // report half of the same contract, the way loadCheckedSources' own
+    // message tests pin failEnumeration's. The link sits outside the
+    // checked paths on purpose: inside them the covering walk would fail
+    // the step one branch earlier ("cannot enumerate"), which that gate's
+    // own tests already pin.
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.symLink(io, "nowhere.zig", "dangling.zig", .{});
+
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = GateCoverageStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "cannot walk 'dangling.zig': FileNotFound",
+    );
+}
+
+test "all three gate steps pass a conforming tree recording nothing" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The false-positive direction no other end-to-end test pins: every
+    // other make() test feeds a violating tree, so a gate regression that
+    // started rejecting legitimate trees — the worst failure mode for what
+    // OQ 45 treats as the merge gate — would pass them all. This is the
+    // tree-today layout, conforming: both roots present, the helper
+    // registered through its refAllDecls line, every file inside
+    // checked_paths, no long lines.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(
+        io,
+        .{
+            .sub_path = "src/root.zig",
+            .data = "test {\n" ++
+                "    std.testing.refAllDecls(@import(\"helper.zig\"));\n" ++
+                "}\n",
+        },
+    );
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/helper.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const options = testMakeOptions(arena);
+    const column_gate = LineLengthStep.create(b);
+    const registration_gate = TestRegistrationStep.create(b);
+    const coverage_gate = GateCoverageStep.create(b);
+
+    try column_gate.step.makeFn(&column_gate.step, options);
+    try registration_gate.step.makeFn(&registration_gate.step, options);
+    try coverage_gate.step.makeFn(&coverage_gate.step, options);
+
+    // Success records nothing on any step: a stray message appended beside
+    // a pass would read as a failure to whoever reads the run's output.
+    try std.testing.expectEqual(@as(usize, 0), column_gate.step.result_error_msgs.items.len);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        registration_gate.step.result_error_msgs.items.len,
+    );
+    try std.testing.expectEqual(@as(usize, 0), coverage_gate.step.result_error_msgs.items.len);
 }

@@ -7,6 +7,21 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- Four end-to-end pins in the lint-gate tests, each run against a gate
+  step's make() function over a temporary tree: the test-registration
+  report's two single-section shapes (reachability findings alone carry no
+  trailing section and declaration-analysis findings alone start at their
+  own header — a join that appended its separator unconditionally mangled
+  both while the two-section pin stayed green); the gate-coverage walk's
+  failure naming the walked entry (`cannot walk 'dangling.zig':
+  FileNotFound`, the report half of the failed_path contract
+  appendProjectZigFiles' core tests already pin; the link sits outside the
+  checked paths because inside them the covering walk fails the step one
+  branch earlier); and a conforming tree that all three gates must pass
+  recording nothing — until now every make() test fed a violating tree, so
+  a gate regression that started rejecting legitimate trees would have
+  passed them all. Each pin was confirmed to bite by temporarily breaking
+  the branch it guards.
 - A fifth lint gate, coverage completeness: the analysis gates cover an
   explicit allowlist (`checked_paths` in build.zig) that fails loudly when a
   listed path stops existing but stayed silent about its complement — a
