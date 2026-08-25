@@ -401,9 +401,9 @@ test "symLinkOrSkip creates the link, and skips only where links cannot be made"
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    // The working direction: the link lands and resolves to its target —
-    // read through it rather than stat, which follows links and would
-    // report the target's kind.
+    // The working direction: the created link carries its target verbatim —
+    // verified by reading the link itself (readLink), which does not follow
+    // it, where a stat would resolve straight past to the target's kind.
     try tmp.dir.writeFile(io, .{ .sub_path = "real.zig", .data = "" });
     try symLinkOrSkip(tmp.dir, io, "real.zig", "link.zig");
     var link_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -661,9 +661,9 @@ const LineLengthStep = struct {
         var lines = std.mem.splitScalar(u8, source.text, '\n');
         while (lines.next()) |line| {
             line_no += 1;
-            // Code points can only outnumber bytes, so a line at or under
-            // the cap in bytes cannot exceed it in columns and needs no
-            // UTF-8 decode — the common case in a conforming tree.
+            // Every code point costs at least one byte, so a line at or
+            // under the cap in bytes cannot exceed it in columns and needs
+            // no UTF-8 decode — the common case in a conforming tree.
             if (line.len <= columns_max) continue;
             if ((std.unicode.utf8CountCodepoints(line) catch line.len) <= columns_max) continue;
             try report.print(arena, "  {s}:{d}\n", .{ source.path, line_no });
@@ -973,9 +973,11 @@ const TestRegistrationStep = struct {
     ) ![]const u8 {
         const from = try importSeparators(arena, from_path, separator);
         const to = try importSeparators(arena, to_path, separator);
-        // The import climbs out of the importing file's directory, so the
+        // Resolution is anchored at the importing file's directory, so the
         // filename comes off before the relative walk: "src/root.zig"
-        // reaches its neighbor as "sub/x.zig", not "../sub/x.zig".
+        // reaches its neighbor as "sub/x.zig", not "../sub/x.zig". A
+        // root-level importer has no directory to strip, so its import
+        // string is already build-root-relative.
         const from_dir = std.fs.path.dirnamePosix(from) orelse "";
         if (from_dir.len == 0) return to;
         // relativePosix resolves both sides (collapsing "." and ".."), walks
