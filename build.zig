@@ -2224,6 +2224,25 @@ fn makeTestBuilder(
     );
 }
 
+/// The bare custom step loadCheckedSources' and failEnumeration's
+/// direct-call tests report through, owned by a fresh test Build over
+/// `root_dir`. One copy serves all three so their wiring cannot drift apart,
+/// the same rule newCustomStep follows for the gate steps.
+fn makeUnderTestStep(
+    arena: std.mem.Allocator,
+    io: std.Io,
+    root_dir: std.Io.Dir,
+    graph: *std.Build.Graph,
+) !std.Build.Step {
+    const b = try makeTestBuilder(arena, io, root_dir, graph);
+    return std.Build.Step.init(.{
+        .id = .custom,
+        .name = "under test",
+        .owner = b,
+        .makeFn = undefined,
+    });
+}
+
 /// The MakeOptions a direct make() call needs: no progress reporting, no
 /// watch mode, no per-test timeout — the step bodies read none of it.
 fn testMakeOptions(arena: std.mem.Allocator) std.Build.Step.MakeOptions {
@@ -2262,13 +2281,7 @@ test "loadCheckedSources reads each checked file whole, listed order preserved" 
     try tmp.dir.writeFile(io, .{ .sub_path = "notes.txt", .data = "hello" });
 
     var graph: std.Build.Graph = undefined;
-    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
-    var step = std.Build.Step.init(.{
-        .id = .custom,
-        .name = "under test",
-        .owner = b,
-        .makeFn = undefined,
-    });
+    var step = try makeUnderTestStep(arena, io, tmp.dir, &graph);
 
     const paths = [_][]const u8{ "a.zig", "notes.txt" };
     const sources = try loadCheckedSources(&step, tmp.dir, io, arena, &paths);
@@ -2293,13 +2306,7 @@ test "loadCheckedSources names the gate path when enumeration fails" {
     defer tmp.cleanup();
 
     var graph: std.Build.Graph = undefined;
-    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
-    var step = std.Build.Step.init(.{
-        .id = .custom,
-        .name = "under test",
-        .owner = b,
-        .makeFn = undefined,
-    });
+    var step = try makeUnderTestStep(arena, io, tmp.dir, &graph);
 
     // The shared front half of both analysis steps routes enumeration
     // failures through failEnumeration with the offending path attached —
@@ -2325,13 +2332,7 @@ test "failEnumeration falls back to a generic subject when no path owns the erro
     defer tmp.cleanup();
 
     var graph: std.Build.Graph = undefined;
-    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
-    var step = std.Build.Step.init(.{
-        .id = .custom,
-        .name = "under test",
-        .owner = b,
-        .makeFn = undefined,
-    });
+    var step = try makeUnderTestStep(arena, io, tmp.dir, &graph);
 
     // An error belonging to no single gate path (allocation alone) leaves
     // failed_path unset, and the report still says what was being enumerated.
