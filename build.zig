@@ -1587,6 +1587,69 @@ test "appendZigFilesUnder analyzes a symlinked .zig file like a real one" {
     try std.testing.expectEqualStrings("src/real.zig", found.items[1]);
 }
 
+test "classifyWalkedEntry resolves an unclassifiable entry through its real kind" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The raw kind no Linux getdents64 walk reports but real filesystems do
+    // (XFS ftype=0, some NFS/FUSE): iteration hands back .unknown, which
+    // filters on the raw kind drop wholesale. No walker-driven test can
+    // synthesize one, so the classifier is driven directly with synthetic
+    // entries whose targets really exist behind them.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "src/sub", .{})).close(io);
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/mystery.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/notes.md", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "toplevel.zig", .data = "" });
+
+    // An unclassifiable .zig file classifies as a source under the walked
+    // prefix — the probe follows to the real file, and the joined path is
+    // the form both gates report and read back.
+    const unknown_source = try classifyWalkedEntry(tmp.dir, io, arena, "src", .{
+        .dir = tmp.dir,
+        .basename = "mystery.zig",
+        .path = "mystery.zig",
+        .kind = .unknown,
+    });
+    try std.testing.expectEqualStrings("src/mystery.zig", unknown_source.zig_source);
+
+    // The same probe with the empty prefix the coverage walk passes: the
+    // join must yield the bare walked path, not "/toplevel.zig".
+    const unknown_top = try classifyWalkedEntry(tmp.dir, io, arena, "", .{
+        .dir = tmp.dir,
+        .basename = "toplevel.zig",
+        .path = "toplevel.zig",
+        .kind = .unknown,
+    });
+    try std.testing.expectEqualStrings("toplevel.zig", unknown_top.zig_source);
+
+    // An unclassifiable non-source stays out of every gate's file set.
+    const unknown_other = try classifyWalkedEntry(tmp.dir, io, arena, "src", .{
+        .dir = tmp.dir,
+        .basename = "notes.md",
+        .path = "notes.md",
+        .kind = .unknown,
+    });
+    try std.testing.expect(unknown_other == .other);
+
+    // An unclassifiable directory entry: the probe reveals a directory, but
+    // the raw kind is not .directory, so neither walker may descend into it
+    // — the linked-directory rejection, the loud outcome for a subtree that
+    // would otherwise escape every gate silently.
+    const unknown_dir = try classifyWalkedEntry(tmp.dir, io, arena, "src", .{
+        .dir = tmp.dir,
+        .basename = "sub",
+        .path = "sub",
+        .kind = .unknown,
+    });
+    try std.testing.expect(unknown_dir == .linked_directory);
+}
+
 test "appendZigFilesUnder rejects a linked directory whose walk cannot descend" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
