@@ -53,6 +53,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The glossary defines **brief**: seven records cite "the brief (2026-08-21)"
+  and only docs/README's prose named what that is (the operator's founding
+  notes, [qnd-notes.md](qnd-notes.md)) — a reader starting from a PRD or RFC
+  had no pointer to the file the quotes come from, against the
+  define-once rule the glossary itself states.
+
 - The lint-gate fixtures that link directories (`symLinkOrSkip` call sites
   for the linked-directory and dangling-link cases) created them with
   default `SymLinkFlags`, which std spells out is ignored everywhere but
