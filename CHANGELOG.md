@@ -53,6 +53,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The test-registration step's section assembly gains its last missing subset:
+  declaration-analysis and case-mismatch findings with a silent reachability
+  half (every module reachable — one through its `refAllDecls` wrapper, one
+  through the bare import that is itself its chain). A blank-line join keyed
+  on the *first* section having found something passed every shape where
+  reachability fired — the single-section pins, the {1,2} and all-three
+  assemblies and the outer-join pin — while dropping this report's separator.
+  Confirmed to bite by keying the separator on the reachability section and
+  watching only the new test fail.
+
 - The README's Quick start no longer describes `zig build test` as only
   "build and run the tests": it is the merge gate (OQ 45) and carries the
   analysis gates — formatting, the 100-column cap, test registration and

@@ -3574,6 +3574,62 @@ test "test-registration step joins the outer sections around a silent middle hal
     );
 }
 
+test "test-registration step joins the last two sections around a silent first half" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The subset of section combinations no other pin runs: declaration-
+    // analysis and case-mismatch fire while the reachability half stays
+    // silent — every module is reachable (helper through its wrapper, a.zig
+    // through the bare import that is itself its chain), so no orphan line
+    // exists. A join keyed on the *first* section having found something
+    // passed every shape where reachability fired — the singles, {1,2},
+    // {1,3} and all-three — while dropping this report's separator, the
+    // mirror of the previous-section key the outer-join pin closed. Exactly
+    // one finding per section keeps the shape independent of the walker's
+    // order.
+    // build.zig and build.zig.zon are stubbed because make() enumerates the
+    // whole allowlist.
+    (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    try tmp.dir.writeFile(
+        io,
+        .{
+            .sub_path = "src/root.zig",
+            .data = "_ = @import(\"a.zig\");\n" ++
+                "test {\n" ++
+                "    std.testing.refAllDecls(@import(\"helper.zig\"));\n" ++
+                "}\n" ++
+                "_ = @import(\"Helper.zig\");\n",
+        },
+    );
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/helper.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/a.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+
+    const sep_str = std.fs.path.sep_str;
+    var graph: std.Build.Graph = undefined;
+    const b = try makeTestBuilder(arena, io, tmp.dir, &graph);
+    const gate = TestRegistrationStep.create(b);
+    try expectStepFailure(
+        &gate.step,
+        testMakeOptions(arena),
+        "1 module(s) whose public declarations are never analyzed:\n" ++
+            "  src" ++ sep_str ++ "a.zig: imported by src" ++ sep_str ++
+            "root.zig without forced declaration analysis\n" ++
+            "\n" ++
+            "1 import(s) that resolve only on a case-insensitive filesystem:\n" ++
+            "  src" ++ sep_str ++ "helper.zig: imported by src" ++ sep_str ++
+            "root.zig as \"Helper.zig\"; only \"helper.zig\" resolves on every filesystem\n",
+    );
+}
+
 test "gate-coverage step fails naming a project file outside the checked paths" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
