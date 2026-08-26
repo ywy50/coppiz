@@ -53,6 +53,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- OQ 56's blocking pointer names the phase backfill actually lands in:
+  it cited "PRD 0001 phase 3 (backfill)", whose phase is segments, CRC
+  and torn-tail recovery — PRD 0001's own phase list puts backfill in
+  phase 5, landing with PRD 0003 because it needs a leader to exist.
+
 - The test-registration step's section assembly gains its last missing subset:
   declaration-analysis and case-mismatch findings with a silent reachability
   half (every module reachable — one through its `refAllDecls` wrapper, one

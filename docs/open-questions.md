@@ -228,8 +228,8 @@ Ordering inside each section is by what blocks implementation first.
     or a chain setting — disagreeing on `lag_slots` could elect different
     leaders, which suggests chain; a page size only risks its own tail,
     which suggests local — and what is the default? Sibling of OQ 55.
-    *Blocks:* PRD 0001 phase 3 (backfill), PRD 0003 phase 1 (member
-    states).
+    *Blocks:* PRD 0001 phase 5 (backfill lands with PRD 0003), PRD 0003
+    phase 1 (member states).
 
 61. **What bounds per-process memory?** [PRD 0001](prds/0001-ledger-core.md)
     goal 6 requires entry size, ledger count *and per-process memory* to be
