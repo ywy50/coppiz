@@ -634,11 +634,7 @@ test "fmtArgs hands zig fmt every covered file, links included" {
     };
     try std.testing.expectEqual(files.len, want.len);
     for (want) |path| {
-        var found = false;
-        for (files) |arg| {
-            if (std.mem.eql(u8, arg, path)) found = true;
-        }
-        try std.testing.expect(found);
+        try std.testing.expect(listContainsPath(files, path));
     }
 }
 
