@@ -33,9 +33,10 @@ one ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md),
   lint gate fails when no chain of real `@import`s reaches it. A `.zig`
   file outside `src/` (gate coverage forces any such file into
   `checked_paths`) can never be registered that way — Zig refuses an
-  `@import` out of a module's root — so it needs its own test root in
-  build.zig plus a `test_roots` entry; until then the registration gate
-  names it on every run. Zig also
+  `@import` out of a module's root — so either a wrapped import in
+  build.zig reaches it (build.zig is already a test root), or it gets
+  its own test root with a `test_roots` entry; until one of those
+  holds, the registration gate names it on every run. Zig also
   analyzes a declaration only once something references it, so each
   registered module gets a line in the root's "all public declarations
   analyze" test — an unreferenced `pub` declaration is otherwise compiled
