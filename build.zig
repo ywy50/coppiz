@@ -344,6 +344,17 @@ fn normalizeSeparators(arena: std.mem.Allocator, path: []const u8, separator: u8
     return std.mem.replaceOwned(u8, arena, path, &.{separator}, "/");
 }
 
+/// True when `list` holds an entry byte-equal to `path`: the membership
+/// question the test-root match, the listed-linked-directory check and the
+/// coverage comparison each ask of their path lists. One copy serves all of
+/// them so their equality rules cannot drift apart.
+fn listContainsPath(list: []const []const u8, path: []const u8) bool {
+    for (list) |entry| {
+        if (std.mem.eql(u8, entry, path)) return true;
+    }
+    return false;
+}
+
 /// Appends every .zig file under the directory `dir_path`, as a path from
 /// the build root ("src/foo.zig"), in walker order. The walk is selective
 /// so directories are entered explicitly: a d_type-less mount (XFS with
@@ -1002,11 +1013,12 @@ const TestRegistrationStep = struct {
     /// The gate's decision core, I/O-free so tests drive it directly, the
     /// way checkLineLengths serves the column cap: from the test roots, follow
     /// real imports across `sources` and append one report line per module
-    /// no chain reaches. Each module's text is tokenized once when it is
-    /// dequeued and its imports matched against every candidate after that —
-    /// re-collecting per candidate would make the tokenizer runs quadratic
-    /// where only the cheap string comparisons are. `separator` is a
-    /// parameter so any platform can be simulated in a test.
+    /// no chain reaches. Each dequeued module's text is tokenized once and
+    /// its recorded imports resolved against the same importTargetsByName map
+    /// the gate's other two halves read — the self-skip and the
+    /// first-candidate-wins tie-break live there, not here, so the halves
+    /// cannot drift apart about what reaches what.
+    /// `separator` is a parameter so any platform can be simulated in a test.
     fn classifyModules(
         arena: std.mem.Allocator,
         sources: []const Source,
@@ -1019,6 +1031,14 @@ const TestRegistrationStep = struct {
         // once, so an importer reached twice cannot enqueue its target twice.
         const reached = try arena.alloc(bool, sources.len);
         @memset(reached, false);
+        // Path -> position, resolving the targets importTargetsByName names
+        // back to the index whose reached flag the queue protocol owns.
+        // First wins on a duplicated path, matching importTargetsByName's
+        // documented tie-break.
+        var index_of: std.StringArrayHashMapUnmanaged(usize) = .empty;
+        for (sources, 0..) |source, i| {
+            if (!index_of.contains(source.path)) try index_of.put(arena, source.path, i);
+        }
         var queue: std.ArrayListUnmanaged(usize) = .empty;
         for (sources, 0..) |source, i| {
             if (!try isTestRoot(arena, source.path, separator)) continue;
@@ -1028,18 +1048,13 @@ const TestRegistrationStep = struct {
         var cursor: usize = 0;
         while (cursor < queue.items.len) : (cursor += 1) {
             const from = sources[queue.items[cursor]];
-            const from_imports = try collectImports(arena, from.text);
-            for (sources, 0..) |candidate, i| {
-                if (reached[i]) continue;
-                const wanted = try importBetween(
-                    arena,
-                    .{ .from = from.path, .to = candidate.path },
-                    separator,
-                );
-                if (importsContain(from_imports, wanted)) {
-                    reached[i] = true;
-                    try queue.append(arena, i);
-                }
+            const targets = try importTargetsByName(arena, sources, from.path, separator, false);
+            for (try collectImports(arena, from.text)) |ref| {
+                const target_path = targets.get(ref.path) orelse continue;
+                const target_index = index_of.get(target_path).?;
+                if (reached[target_index]) continue;
+                reached[target_index] = true;
+                try queue.append(arena, target_index);
             }
         }
         // Every test root was seeded as reached above, so anything still
@@ -1062,10 +1077,7 @@ const TestRegistrationStep = struct {
         separator: u8,
     ) !bool {
         const normalized = try normalizeSeparators(arena, path, separator);
-        for (test_roots) |root_path| {
-            if (std.mem.eql(u8, normalized, root_path)) return true;
-        }
-        return false;
+        return listContainsPath(&test_roots, normalized);
     }
 
     /// The importer and the imported file, as one named pair so they cannot
@@ -1139,16 +1151,6 @@ const TestRegistrationStep = struct {
             if (!named.contains(wanted)) try named.put(arena, wanted, candidate.path);
         }
         return named;
-    }
-
-    /// True when `imports` — one module's collectImports result — contains
-    /// `wanted_import`: the comparison classifyModules applies per candidate
-    /// against the importer's once-collected imports.
-    fn importsContain(imports: []const ImportRef, wanted_import: []const u8) bool {
-        for (imports) |ref| {
-            if (std.mem.eql(u8, ref.path, wanted_import)) return true;
-        }
-        return false;
     }
 
     /// One real `@import("path")` call found in a token stream: `path` is the
@@ -1666,24 +1668,25 @@ test "classifyModules classifies through an import cycle and reports modules bel
     , report.items);
 }
 
-test "importsContain counts only a real @import call" {
+test "collectImports counts only a real @import call" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // The question classifyModules asks per candidate, asked of a whole
-    // text: collect then match. The forms that register: plain, spaced
-    // across lines, sharing a line with a trailing comment.
+    // The reachability question classifyModules asks of a whole text,
+    // answered the way production resolves it: collect then look up. The
+    // forms that register: plain, spaced across lines, sharing a line with
+    // a trailing comment.
     const counts = struct {
         fn counts(
             a: std.mem.Allocator,
             text: []const u8,
             wanted_import: []const u8,
         ) !bool {
-            return TestRegistrationStep.importsContain(
-                try TestRegistrationStep.collectImports(a, text),
-                wanted_import,
-            );
+            for (try TestRegistrationStep.collectImports(a, text)) |ref| {
+                if (std.mem.eql(u8, ref.path, wanted_import)) return true;
+            }
+            return false;
         }
     }.counts;
     try std.testing.expect(try counts(arena, "_ = @import(\"sub/x.zig\");\n", "sub/x.zig"));
@@ -2420,15 +2423,6 @@ const GateCoverageStep = struct {
             });
     }
 
-    /// True when the covered set already names `path` byte-for-byte: the
-    /// membership question violationLines asks of every candidate.
-    fn coveredContains(covered: []const []const u8, path: []const u8) bool {
-        for (covered) |checked| {
-            if (std.mem.eql(u8, checked, path)) return true;
-        }
-        return false;
-    }
-
     /// The gate's decision core, I/O-free so tests drive it directly, the
     /// way classifyModules serves the registration walk: appends one report
     /// line per candidate no gate covers, in the order handed in (the walk
@@ -2450,7 +2444,7 @@ const GateCoverageStep = struct {
         report: *std.ArrayListUnmanaged(u8),
     ) !void {
         for (candidates) |path| {
-            if (!coveredContains(covered, path) or
+            if (!listContainsPath(covered, path) or
                 zigNearMissName(std.fs.path.basename(path)))
             {
                 try report.print(arena, "  {s}: not covered by any analysis gate\n", .{path});
@@ -2592,14 +2586,7 @@ fn appendProjectZigFiles(
             .directory => try enterForcedDirectory(&walker, io, entry),
             .linked_directory => {
                 const normalized = try normalizeSeparators(arena, entry.path, separator);
-                var listed = false;
-                for (gate_paths) |gate_path| {
-                    if (std.mem.eql(u8, normalized, gate_path)) {
-                        listed = true;
-                        break;
-                    }
-                }
-                if (!listed) {
+                if (!listContainsPath(gate_paths, normalized)) {
                     failed_path.* = try arena.dupe(u8, entry.path);
                     return error.LinkedDirectoryNotWalked;
                 }
