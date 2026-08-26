@@ -208,13 +208,15 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
 /// leave them to find it by hand, the way the read failures in
 /// loadCheckedSources name their file). An error belonging to no single
 /// path — allocation alone, here — leaves it unset, and the caller falls
-/// back to a generic subject.
+/// back to a generic subject. Callers that fall back without ever naming
+/// the failing path pass null (fmtArgs): the outlived contract is visible
+/// in the type instead of a local its reader cannot see consumed.
 fn checkedFiles(
     root_dir: std.Io.Dir,
     io: std.Io,
     arena: std.mem.Allocator,
     gate_paths: []const []const u8,
-    failed_path: *?[]const u8,
+    failed_path: ?*?[]const u8,
 ) ![][]const u8 {
     var paths: std.ArrayListUnmanaged([]const u8) = .empty;
     for (gate_paths) |path| {
@@ -224,7 +226,7 @@ fn checkedFiles(
         // symlinks a directory" pins it), so the flag is spelled here rather
         // than inherited.
         const stat = root_dir.statFile(io, path, .{ .follow_symlinks = true }) catch |err| {
-            failed_path.* = path;
+            if (failed_path) |out| out.* = path;
             return err;
         };
         if (stat.kind == .directory) {
@@ -238,7 +240,7 @@ fn checkedFiles(
                 &failed_entry,
                 false,
             ) catch |err| {
-                failed_path.* = failed_entry orelse path;
+                if (failed_path) |out| out.* = failed_entry orelse path;
                 return err;
             };
         } else {
@@ -448,23 +450,25 @@ const Source = struct {
 /// loud anyway: zig fmt errors on the missing path at make time, and the
 /// make-time gates enumerate independently through loadCheckedSources.
 /// Allocation uses the builder's allocator, like every other configure-time
-/// structure; the slice lives as long as the build.
+/// structure; the slice lives as long as the build, so no single append is
+/// ever freed — the role the gpa name carries. The failing path goes
+/// unnamed here (null to checkedFiles): whatever stopped the expansion, the
+/// fallback is the same raw list.
 fn fmtArgs(
     root_dir: std.Io.Dir,
     io: std.Io,
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     zig_exe: []const u8,
     gate_paths: []const []const u8,
 ) []const []const u8 {
     var argv: std.ArrayListUnmanaged([]const u8) = .empty;
-    argv.appendSlice(allocator, &.{ zig_exe, "fmt", "--check", "--ast-check" }) catch @panic("OOM");
-    var failed_path: ?[]const u8 = null;
-    if (checkedFiles(root_dir, io, allocator, gate_paths, &failed_path)) |paths| {
-        argv.appendSlice(allocator, paths) catch @panic("OOM");
+    argv.appendSlice(gpa, &.{ zig_exe, "fmt", "--check", "--ast-check" }) catch @panic("OOM");
+    if (checkedFiles(root_dir, io, gpa, gate_paths, null)) |paths| {
+        argv.appendSlice(gpa, paths) catch @panic("OOM");
     } else |_| {
-        argv.appendSlice(allocator, gate_paths) catch @panic("OOM");
+        argv.appendSlice(gpa, gate_paths) catch @panic("OOM");
     }
-    return argv.toOwnedSlice(allocator) catch @panic("OOM");
+    return argv.toOwnedSlice(gpa) catch @panic("OOM");
 }
 
 /// The link target and the path to create the link at, as one named pair so
