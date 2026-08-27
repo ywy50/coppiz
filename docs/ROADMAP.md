@@ -97,9 +97,11 @@ the phases.
    with `ck_state` over coppiz, one stream replicated between two instances,
    measured against its spike note's three journeys. A second, unrelated
    host example follows to keep the API general ([OQ 46](open-questions.md)).
-9. **First public release** — licence ([OQ 18](open-questions.md)), reopened
-   claims ([OQ 40]), CI ([OQ 45]), rolling-upgrade procedure ([OQ 26]),
-   backup runbook ([OQ 39]). The name is `coppiz`
+9. **First public release** — reopened claims ([OQ 40](open-questions.md),
+   resolved 2026-08-27), CI ([OQ 45]), rolling-upgrade procedure ([OQ 26]),
+   backup runbook ([OQ 39]). The licence is Apache-2.0
+   ([ADR 0006](adrs/0006-the-library-is-apache-2-0-licensed.md),
+   [OQ 18](open-questions.md) resolved); the name is `coppiz`
    ([ADR 0004](adrs/0004-the-product-is-named-coppiz.md)).
 
 ## Later

@@ -3,9 +3,11 @@
     .version = "0.0.0",
     .fingerprint = 0x1fe1bccbacff712d, // Changing this has security and trust implications.
     .minimum_zig_version = "0.16.0",
+    .license = "Apache-2.0",
     .dependencies = .{},
     .paths = .{
         "CHANGELOG.md",
+        "LICENSE",
         "README.md",
         "RELEASES.md",
         "build.zig",

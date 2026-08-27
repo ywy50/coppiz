@@ -44,7 +44,14 @@ Ordering inside each section is by what blocks implementation first.
     loopback-only with a warning. *Blocks:* PRD 0005 phase 4.
 40. **Public claims need reopening.** Everything in research 0001 is carried
     from clanker's reading dates; before the README or a release cites an
-    external fact, reopen it. *Blocks:* first public release.
+    external fact, reopen it.
+    **Resolved 2026-08-27** (operator): the external claims the public README
+    cites were reopened at their sources in this repo — etcd, rqlite,
+    dqlite, TigerBeetle, and the Zig-store-gap search — and are marked
+    "reopened" in [research 0001](research/0001-evidence-carried-from-clanker-rfc-0019.md)'s
+    evidence log with read dates of 2026-08-27. The remaining rows of that
+    note stay flagged as carried from clanker and are not cited by the
+    README. *Blocks:* first public release.
 
 ## B. Ordering, epochs and merge
 
@@ -348,8 +355,12 @@ Ordering inside each section is by what blocks implementation first.
     *Blocks:* none; was first public release.
 18. **Licence.** Not chosen. clanker's research tracked licences of every
     surveyed store (BUSL, CSL, Apache, MIT) as a selection criterion; coppiz
-    should be unambiguous from the first public commit. *Blocks:* first
-    public commit; also a `LICENSE` path in `build.zig.zon`.
+    should be unambiguous from the first public commit.
+    **Resolved 2026-08-27** (operator): Apache-2.0 — [ADR
+    0006](adrs/0006-the-library-is-apache-2-0-licensed.md); the `LICENSE`
+    file and the `license` field in `build.zig.zon` (with `LICENSE` in its
+    `.paths`) ship it. *Blocks:* first public commit; also a `LICENSE` path
+    in `build.zig.zon`.
 27. **Testing strategy: deterministic simulation.** TigerBeetle's VOPR-style
     simulator (a seeded, single-threaded run of many nodes with injected
     partitions, crashes, clock skew and message reorder) is the one testing

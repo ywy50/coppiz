@@ -27,3 +27,4 @@ forward to its replacement.
 | [0003](0003-batteries-included-no-external-infrastructure-at-any-size.md) | Accepted | Batteries included: replication, election and storage ship inside the library, and no external infrastructure is required at any size |
 | [0004](0004-the-product-is-named-coppiz.md) | Accepted | The product is named coppiz |
 | [0005](0005-join-order-is-slot-position.md) | Accepted | Join order is slot position: a `join` is a chain entry written by the admitter, and seniority is its slot, so it cannot be forged |
+| [0006](0006-the-library-is-apache-2-0-licensed.md) | Accepted | The library is Apache-2.0 licensed |

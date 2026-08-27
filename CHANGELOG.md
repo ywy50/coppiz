@@ -47,6 +47,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   partitioned joins with deterministic seniority (RFC 0002), leader crash,
   reorder, `configured` + `stall` (G4 core), and clock skew. It pins the
   merge discipline — on heal every node re-folds from the last common slot.
+- The Apache-2.0 licence ([ADR 0006](docs/adrs/0006-the-library-is-apache-2-0-licensed.md),
+  [OQ 18](docs/open-questions.md) resolved): the `LICENSE` file and the
+  `license` field in `build.zig.zon`, with `LICENSE` carried in the
+  package's `.paths`. The external claims the README cites were reopened at
+  their sources ([OQ 40](docs/open-questions.md) resolved), recorded in
+  [research 0001](docs/research/0001-evidence-carried-from-clanker-rfc-0019.md)'s
+  evidence log with this repo's read dates.
 
 ### Changed
 

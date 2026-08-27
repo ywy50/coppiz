@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 96" role="img" aria-labelledby="title desc">
+  <title id="title">coppiz curved fading journal logo</title>
+  <desc id="desc">A curved open journal followed by equal-sized payloads fading over a persistent chain beside the coppiz wordmark</desc>
+  <path d="M27 20H24C14 20 10 28 10 38V58C10 68 14 76 24 76H27" fill="none" stroke="#f7a41d" stroke-linecap="round" stroke-width="8"/>
+  <path d="M23 48H97" fill="none" stroke="#1c1c1c" stroke-linecap="round" stroke-width="4" opacity=".28"/>
+  <g fill="#f7a41d">
+    <rect x="30" y="41" width="14" height="14" rx="4" opacity=".18"/>
+    <rect x="52" y="41" width="14" height="14" rx="4" opacity=".52"/>
+    <rect x="74" y="41" width="14" height="14" rx="4"/>
+  </g>
+  <text x="117" y="66" fill="#1c1c1c" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="54" font-weight="700" letter-spacing="-1">coppiz</text>
+</svg>

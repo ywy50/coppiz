@@ -2,11 +2,14 @@
 
 ## Status
 
-Draft — compiled 2026-08-21 from clanker's records; **nothing here was
-re-verified at its original source for this note**. Every claim traces to a
-clanker source named under Scope and method, all read there on 2026-08-21;
-the evidence log gives the finer-grained source and date where one row covers
-it. Reopen a source before quoting it as current.
+Draft — compiled 2026-08-21 from clanker's records; most rows are **carried,
+not re-verified here**. Every claim traces to a clanker source named under
+Scope and method, all read there on 2026-08-21; the evidence log gives the
+finer-grained source and date where one row covers it. The rows the public
+README cites — etcd, rqlite, dqlite, TigerBeetle, and the Zig-store-gap
+search — were reopened at their sources in this repo on 2026-08-27 and are
+marked **reopened** in the evidence log ([OQ 40](../open-questions.md)); the
+rest remain carried — reopen a source before quoting it as current.
 
 Research is evidence, not a decision: it records what exists, how good it is,
 and how confident the finding is. The decision that follows belongs in an
@@ -126,11 +129,17 @@ clanker-specific and must not leak into the library's API.
 | Improve ledger prefix rewritten | clanker bug report 2026-08-17 | 2026-08-17 | high |
 | Spike journeys and 1 MiB page bound | clanker spike note | 2026-08-19 | high |
 | Survey scope: 17 candidates at Draft 4, plus R/S/T at Draft 5; option T *Packaging* names the standalone public project and "which leads is the new project's first design decision"; the stage-1 spike still unrun; `networkAllowed` port blind; improve-ledger rewrite named at open question 14 | clanker `docs/rfcs/0019-shared-state-store.md`, reopened at source (README and PRD 0001 cite the survey; [OQ 40](../open-questions.md)) | 2026-08-24 (this repo) | high |
+| etcd: majority quorum (n/2)+1, odd member counts recommended, the majority side survives a partition | [etcd FAQ](https://etcd.io/docs/v3.5/faq/) | 2026-08-27 (this repo, reopened) | high |
+| rqlite: Raft consensus, one leader, CP; writes forward to the leader; quorum required for progress | [rqlite FAQ](https://rqlite.io/docs/faq/) | 2026-08-27 (this repo, reopened) | high |
+| dqlite: embeddable C library, replication based on Raft | [canonical/dqlite README](https://github.com/canonical/dqlite) | 2026-08-27 (this repo, reopened) | high |
+| TigerBeetle: written in Zig, fixed accounts/transfers schema, deterministic simulation testing ("use VOPR as the final line of defense") | [tigerbeetle README](https://github.com/tigerbeetle/tigerbeetle), [docs/TIGER_STYLE.md](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md) | 2026-08-27 (this repo, reopened) | high |
+| No general-purpose Zig-native replicated store | GitHub search API, five query variants (replicated store, raft store, distributed database, append-only store, kv replication); nearest hits are 0-star experimental projects | 2026-08-27 (this repo, reopened) | medium (a search result; inherently open) |
 
 ## Open questions
 
-- Every row above should be reopened at source before coppiz cites it
-  publicly (README, release notes). Tracked as [OQ 40](../open-questions.md).
+- The README-facing external claims are reopened in this repo (2026-08-27,
+  marked in the evidence log; [OQ 40](../open-questions.md) resolved); the
+  remaining carried rows stay flagged and are not cited by the README.
 - Whether clanker's stage-1 spike runs before or after coppiz's core exists,
   and which code survives ([OQ 30](../open-questions.md)).
 
