@@ -158,7 +158,7 @@ client ─append─▶ local member ──forward──▶ leader ──(slot, e
   ([ADR 0003](docs/adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
 - **Embeddable first**: a Zig library any host links, with the standalone
   `coppiz` node built from the same tree for hosts that would rather talk to a
-  process; clanker is the first host
+  process
   ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md),
   [RFC 0001](docs/rfcs/0001-library-first-or-service-first.md)).
 
@@ -172,7 +172,7 @@ count, so two nodes can't elect; the gossip/CRDT stores converge but don't
 order. coppiz is for the gap between "write files and hope" and "run
 infrastructure" — slim at size 1, expandable by settings as members are
 added ([ADR 0003](docs/adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
-clanker is the first host; it is not the customer.
+It is general-purpose: not built for any one host.
 
 ## Build and test
 
@@ -222,5 +222,5 @@ replicated store, and recorded the decision to build one as a standalone
 public project for anyone with the same problem. What that survey
 established, and what coppiz inherits from it, is in
 [research 0001](docs/research/0001-evidence-carried-from-the-state-store-survey.md);
-how clanker itself would embed it is one worked example in
+one worked example of embedding the library is spelled out in
 [PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md).
