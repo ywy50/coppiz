@@ -6,9 +6,9 @@
 </p>
 
 <p align="center">
-  <em>A replicated, append-only store you embed like SQLite and grow from one
-  process to 100,000 instances — no quorum, no odd member count, nothing to
-  stand up beside it.</em>
+  <em>A replicated, append-only store in Zig you embed like SQLite — from one
+  process to a fleet, with no quorum, no sidecar, and optional TTL for
+  rolling-window state.</em>
 </p>
 
 <p align="center">
