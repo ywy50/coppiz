@@ -52,7 +52,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   `license` field in `build.zig.zon`, with `LICENSE` carried in the
   package's `.paths`. The external claims the README cites were reopened at
   their sources ([OQ 40](docs/open-questions.md) resolved), recorded in
-  [research 0001](docs/research/0001-evidence-carried-from-clanker-rfc-0019.md)'s
+  [research 0001](docs/research/0001-evidence-carried-from-the-state-store-survey.md)'s
   evidence log with this repo's read dates.
 
 ### Changed

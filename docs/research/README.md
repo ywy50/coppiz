@@ -21,4 +21,4 @@ project's research says so and keeps that project's read date.
 
 | # | Status | Question |
 |---|---|---|
-| [0001](0001-evidence-carried-from-clanker-rfc-0019.md) | Draft | What clanker's state-store survey established that coppiz inherits |
+| [0001](0001-evidence-carried-from-the-state-store-survey.md) | Draft | What clanker's state-store survey established that coppiz inherits |

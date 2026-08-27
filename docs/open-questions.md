@@ -48,7 +48,7 @@ Ordering inside each section is by what blocks implementation first.
     **Resolved 2026-08-27** (operator): the external claims the public README
     cites were reopened at their sources in this repo — etcd, rqlite,
     dqlite, TigerBeetle, and the Zig-store-gap search — and are marked
-    "reopened" in [research 0001](research/0001-evidence-carried-from-clanker-rfc-0019.md)'s
+    "reopened" in [research 0001](research/0001-evidence-carried-from-the-state-store-survey.md)'s
     evidence log with read dates of 2026-08-27. The remaining rows of that
     note stay flagged as carried from clanker and are not cited by the
     README. *Blocks:* first public release.

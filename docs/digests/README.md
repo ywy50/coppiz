@@ -6,7 +6,7 @@ what does not, with the date it was read.
 
 ## Inventory
 
-None yet. Candidates named by [research 0001](../research/0001-evidence-carried-from-clanker-rfc-0019.md):
+None yet. Candidates named by [research 0001](../research/0001-evidence-carried-from-the-state-store-survey.md):
 TigerBeetle (fixed-width records, deterministic fold, bounded allocation,
 deterministic simulation testing), dqlite (the embedded-library packaging
 shape), Raft (membership change as log entries), Hypercore/OrbitDB (p2p logs:

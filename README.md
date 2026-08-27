@@ -221,6 +221,6 @@ found no general-purpose Zig-native
 replicated store, and recorded the decision to build one as a standalone
 public project for anyone with the same problem. What that survey
 established, and what coppiz inherits from it, is in
-[research 0001](docs/research/0001-evidence-carried-from-clanker-rfc-0019.md);
+[research 0001](docs/research/0001-evidence-carried-from-the-state-store-survey.md);
 how clanker itself would embed it is one worked example in
 [PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md).

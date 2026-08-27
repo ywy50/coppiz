@@ -28,7 +28,7 @@ shipped narrative (that is the roadmap).
 
 | You want to know | Read |
 |---|---|
-| what this is and why it exists | [PRD 0001 Problem](prds/0001-journal-core.md#problem), then [research 0001](research/0001-evidence-carried-from-clanker-rfc-0019.md) |
+| what this is and why it exists | [PRD 0001 Problem](prds/0001-journal-core.md#problem), then [research 0001](research/0001-evidence-carried-from-the-state-store-survey.md) |
 | the data model | [PRD 0001](prds/0001-journal-core.md) — entries, slots, chain, control entries |
 | how cleanup works in an append-only store — opt-in, off by default | [PRD 0002](prds/0002-ttl-and-staleness.md), [ADR 0002](adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md) |
 | who is leader at 1, 2, 6 members, and what a partition does | [PRD 0003](prds/0003-membership-and-leadership.md), [RFC 0002](rfcs/0002-how-join-order-is-made-unspoofable.md) |
@@ -116,7 +116,7 @@ written directly in-process, session event streams replicated to mesh peers
 over loopback HTTP at `cursor + 1`, JSONL streams with no replication — and
 how coppiz would slot in are worked through as the example host in PRD 0005.
 Everything coppiz inherits from clanker's survey is listed with its read dates
-in [research 0001](research/0001-evidence-carried-from-clanker-rfc-0019.md);
+in [research 0001](research/0001-evidence-carried-from-the-state-store-survey.md);
 its sandbox and single-binary constraints are the strictest known host
 constraints, which is why they are kept in view, not because they are the
 target.

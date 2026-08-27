@@ -18,7 +18,7 @@ dqlite easy relative to etcd is that the Raft engine is inside the library,
 not a cluster someone runs beside the application. Every store clanker's
 survey rejected for small fleets was rejected for the same reason: it asks the
 operator to stand something up before the application can store a byte
-([research 0001](../research/0001-evidence-carried-from-clanker-rfc-0019.md)).
+([research 0001](../research/0001-evidence-carried-from-the-state-store-survey.md)).
 A library that required an external coordinator, a discovery service, or a
 separate replication daemon would reproduce exactly that.
 

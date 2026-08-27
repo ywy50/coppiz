@@ -56,7 +56,7 @@ version so far. clanker's shared state was JSON/JSONL files under
 directly in-process, their append-only `events` stream replicating to mesh
 peers at `cursor + 1`, while the remaining JSONL streams have no replication
 and the symlink + `shared_root` workaround stands
-([research 0001](../research/0001-evidence-carried-from-clanker-rfc-0019.md);
+([research 0001](../research/0001-evidence-carried-from-the-state-store-survey.md);
 [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md), *Example
 host*). The stage-1 spike RFC 0019 names has not been run.
 
@@ -85,7 +85,7 @@ host*). The stage-1 spike RFC 0019 names has not been run.
   becomes request/response and the host's `std.Io` ownership inverts.
 - **Evidence:** clanker RFC 0019 option T Packaging paragraph; dqlite's role
   in LXD (embedded, no separate process) — read 2026-08-16 in clanker's
-  research note, carried here ([research 0001](../research/0001-evidence-carried-from-clanker-rfc-0019.md)).
+  research note, carried here ([research 0001](../research/0001-evidence-carried-from-the-state-store-survey.md)).
 
 ### Option B — Service-first; the library is internal
 
@@ -224,7 +224,7 @@ the protocol clean enough that D stays possible".
 - clanker [RFC 0019 — Shared state store](https://github.com/maci0/clanker/blob/main/docs/rfcs/0019-shared-state-store.md),
   option T *Packaging* — names this decision.
 - clanker PRD 0011 (mesh) — "no second daemon", "serve owns sockets".
-- [Research 0001](../research/0001-evidence-carried-from-clanker-rfc-0019.md)
+- [Research 0001](../research/0001-evidence-carried-from-the-state-store-survey.md)
   — dqlite/rqlite/etcd shapes as surveyed there.
 - [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md) — the two routes
   into clanker.
