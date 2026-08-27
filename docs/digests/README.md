@@ -1,7 +1,7 @@
 # Digests
 
 What we can learn from an external project: one file per project, written
-after reading its source or design docs, naming what transfers to spine and
+after reading its source or design docs, naming what transfers to coppiz and
 what does not, with the date it was read.
 
 ## Inventory

@@ -1,12 +1,12 @@
-# spine — project conventions
+# coppiz — project conventions
 
-spine is a replicated, append-only ledger in **Zig 0.16.0**, standard
+coppiz is a replicated, append-only store in **Zig 0.16.0**, standard
 library only ([ADR 0001](docs/adrs/0001-zig-0-16-standard-library-only-for-the-core.md)).
 It is in the design phase: read [docs/README.md](docs/README.md) before
 touching anything, and [docs/open-questions.md](docs/open-questions.md)
 before deciding anything.
 
-spine is general-purpose. clanker is the first host and the origin, and its
+coppiz is general-purpose. clanker is the first host and the origin, and its
 constraints (static musl binary, sandboxed guests, no second daemon) are kept
 in view because they are the strictest known — but nothing under `src/` may
 know about clanker or any other host, and no API shape may exist only to suit
@@ -15,10 +15,10 @@ one ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md),
 
 ## Build & test
 
-- `zig build` builds the `spine` node; `zig build run` runs it; `zig build
+- `zig build` builds the `coppiz` node; `zig build run` runs it; `zig build
   test` runs unit tests plus the lint gates (`zig build lint` runs them
   alone). Read Zig's exit code directly, never through a pipe.
-- Zig checks `build.zig.zon`'s `minimum_zig_version` only when spine is
+- Zig checks `build.zig.zon`'s `minimum_zig_version` only when coppiz is
   fetched as a dependency, never for a tree built directly; the build script
   enforces the floor itself, so the gates always run under declared
   toolchain semantics.

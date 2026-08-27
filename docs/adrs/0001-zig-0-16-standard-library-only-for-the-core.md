@@ -9,7 +9,7 @@ Accepted — 2026-08-21.
 The brief (2026-08-21) states the language: Zig. The first and designing
 consumer, clanker, is a Zig 0.16 musl static binary that deliberately pins two
 fetched dependencies (`zwasm`, `vaxis`) and vendors its TOML parser rather
-than fetch a third; its RFC 0019 counts spine as "a third fetched dependency
+than fetch a third; its RFC 0019 counts coppiz as "a third fetched dependency
 against constraint 2's budget". A store that itself fetched dependencies
 would multiply that cost for every host, and a store that linked libc or a
 C library would break the single static binary clanker keeps on purpose.
@@ -21,11 +21,11 @@ parser, which only the node binary's local config needs.
 
 ## Decision
 
-The library (`src/root.zig` and everything under `src/ledger/`,
+The library (`src/root.zig` and everything under `src/journal/`,
 `src/cluster/`, `src/settings/`, `src/net/`) targets Zig 0.16.0, uses the
 standard library only, links no libc beyond what the host links, and
 declares no fetched dependencies in `build.zig.zon`. The node binary may
-vendor (not fetch) a TOML parser under `vendor/` for `spine.toml`
+vendor (not fetch) a TOML parser under `vendor/` for `coppiz.toml`
 ([OQ 35](../open-questions.md)); nothing under the library may import it.
 
 ## Consequences

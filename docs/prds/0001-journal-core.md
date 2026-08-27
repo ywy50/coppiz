@@ -1,17 +1,44 @@
-# PRD 0001 — Ledger core: append-only entries, slots, and the hash chain
+# PRD 0001 — Journal core: append-only entries, slots, and the hash chain
 
 ## Status
 
-Draft — 2026-08-21. None of this design is implemented; `src/root.zig`
-carries only the package version so far.
+Shipped (single-member core) — 2026-08-27. Draft 2026-08-21; the
+single-member phases 1–4 are implemented and tested (`zig build test`, 167
+tests). Source of truth: `src/journal/` — `entry.zig` and `slot.zig`
+(codecs, hashes, sign/verify), `chain.zig` (fold and validation), `expiry.zig`
+(PRD 0002 predicates), `segment.zig` and `store.zig` (on-disk segments,
+CRC, torn-tail recovery, compaction), `queue.zig` (unslotted queue),
+`journal.zig` (the single-member node), `src/settings/` (schema, fold,
+validation), `src/config/local.zig` (`coppiz.toml`), `src/main.zig` (the
+tier-0 CLI). The format magics are coppiz-derived (`CPPZ` entry, `CPSG`
+segment, `CPST` seal, `CPPQ` queue), not the draft's `SPNE`.
+
 This PRD is the data model every other PRD builds on: [0002](0002-ttl-and-staleness.md)
 (TTL and staleness), [0003](0003-membership-and-leadership.md) (membership,
 leadership), [0004](0004-settings.md) (settings), [0005](0005-embedding-the-library-as-the-product.md)
 (embedding). Terms are defined once in [the glossary](../glossary.md).
 
-Source of truth once shipped: `src/ledger/` (entry and slot codecs, chain
-verification, segment storage). Until then this document is the spec and
-[open-questions.md](../open-questions.md) lists what it does not yet settle.
+Acceptance criteria on one member: **G3** (byte flips and removed slots
+detected at open, named by position — store CRC scan plus fold chain
+refusal), **G4** (kill -9 mid-append, no acknowledged write lost — torn-tail
+truncation unit tests plus a process-level e2e that truncates the segment
+tail and reopens), **G5** (entry/segment/queue `version + 1` refused),
+**G6** (`journal.max_entry_bytes`, `cluster.max_journals`, and the queue
+bound each tripped by a test), **G7** (a member cannot forge another's
+entry — signature negative test). **G1** and **G2** (two members,
+byte-identical journals; hash-equal folds) need the replication transport,
+which phase 5 defers to PRD 0003; the fold-determinism hash is tested
+single-member.
+
+Implementation decisions recorded at the format freeze: one chain per
+journal with a cluster control journal (OQ 7 resolved); `author_seq` is
+monotone, gaps allowed (OQ 11 resolved); the `create_journal` control kind
+carries a new journal's id, name and initial settings (OQ 34, leader-only
+in v1); `join`/`leave`/`epoch`/`merge` fold since PRD 0003 phases 1–3
+(2026-08-27, [ADR 0005](../adrs/0005-join-order-is-slot-position.md)) —
+until then they were refused as unimplemented. Snapshots are deferred (OQ
+17); the unslotted queue bound is local config with a provisional default
+(OQ 55).
 
 ## Problem
 
@@ -32,15 +59,16 @@ the clarification of the same day) and from RFC 0019's drivers:
 
 - **Append-only.** Entries are never edited in place. The only mutations are
   the two [PRD 0002](0002-ttl-and-staleness.md) allows — TTL expiry and an
-  author marking its own entry stale — and both are opt-in by setting.
-- **Every member of a group holds the group's ledgers in full.** A member that
+  author marking its own entry stale — and both are opt-in per journal and
+  off by default.
+- **Every member of a group holds the group's journals in full.** A member that
   loses every peer still has everything its group owns; a peer that dies
   strands nothing but its own unreplicated tail. "Group" and "cluster" are
   the same thing at this level; [PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)
-  is where a ledger may be owned by one group among many, and it lists what
+  is where a journal may be owned by one group among many, and it lists what
   this PRD must get right now for that to stay possible.
 - **Scale 1 → n without a redeploy.** One process is a complete, working
-  ledger and is its own leader. Adding the second, third, sixth member must
+  journal and is its own leader. Adding the second, third, sixth member must
   not require an odd count, a quorum, or a restart of the first.
 - **Tamper-evident.** A member must not be able to rewrite history, and in
   particular must not be able to falsify *when it joined* (PRD 0003 depends on
@@ -63,16 +91,16 @@ the clarification of the same day) and from RFC 0019's drivers:
 1. An entry, once accepted, is replicated byte-identically to every member and
    is readable by its stable id `(author, author_seq)` forever, or until a
    PRD 0002 policy removes it.
-2. Every member folds the same ledger to the same state: same entries, same
+2. Every member folds the same journal to the same state: same entries, same
    order, same settings, same membership — deterministically, from the log
    alone.
 3. Any member can detect a rewritten, reordered, or truncated prefix at read
    time, and can prove which member authored any entry.
-4. A single process with no peers is a complete ledger: append, read, follow,
+4. A single process with no peers is a complete journal: append, read, follow,
    restart, all without network.
 5. The on-disk format and the wire format are versioned, and a reader refuses
    a version it does not know rather than misreading it.
-6. Entry size, ledger count, and per-process memory are bounded by settings,
+6. Entry size, journal count, and per-process memory are bounded by settings,
    not by what the host happens to allow. (The memory bound has no key in the
    drafted schema and no criterion below — [OQ 61](../open-questions.md).)
 
@@ -83,7 +111,7 @@ the clarification of the same day) and from RFC 0019's drivers:
   replication consensus-free for data entries (see Design, *Why append-only
   is what makes this small*).
 - **No queries beyond position, author, kind and time.** No secondary
-  indexes, no SQL, no joins in v1. Consumers fold the ledger into whatever
+  indexes, no SQL, no joins in v1. Consumers fold the journal into whatever
   view they need (clanker's board is exactly such a fold, ADR 0001 there).
 - **No Byzantine fault tolerance.** Members are authenticated and their
   entries signed, so a member cannot *impersonate* another or forge history —
@@ -94,9 +122,9 @@ the clarification of the same day) and from RFC 0019's drivers:
 - **No encryption at rest.** The host's disk is trusted. Wire encryption is
   [open question 23](../open-questions.md).
 - **No multi-cluster federation in v1.** One cluster, its members, its
-  ledgers; growing past one group is [PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)'s
+  journals; growing past one group is [PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)'s
   later overlay, which rests on the format choices this PRD already makes
-  (globally unique ledger ids, chain per ledger, self-describing segments).
+  (globally unique journal ids, chain per journal, self-describing segments).
 
 ## Design
 
@@ -110,7 +138,7 @@ heal". So:
 
 - An **entry** is what an author writes: immutable, author-signed, identified
   by `(author, author_seq)`. Its bytes never change, on any member, ever.
-- A **slot** is where the ledger put it: `(epoch, seq)`, assigned by the leader
+- A **slot** is where the journal put it: `(epoch, seq)`, assigned by the leader
   of that epoch, leader-signed, hash-chained to the previous slot. A slot
   references an entry by hash. An entry normally occupies exactly one slot;
   after a partition merge it may be *re-slotted* — a new slot references the
@@ -131,18 +159,18 @@ frozen):
 
 | Field | Size | Meaning |
 |---|---|---|
-| `magic` | 4 | `SPNE` |
+| `magic` | 4 | `CPPZ` |
 | `version` | 2 | entry format version; a reader refuses unknown values |
 | `kind` | 2 | `data` or one of the control kinds below |
-| `ledger` | 16 | ledger id: a *globally* unique 128-bit id (random at creation), never a per-cluster counter, so a ledger keeps its id when its owning group changes (PRD 0006); the name is a setting |
+| `journal` | 16 | journal id: a *globally* unique 128-bit id (random at creation), never a per-cluster counter, so a journal keeps its id when its owning group changes (PRD 0006); the name is a setting |
 | `author` | 16 | member id |
-| `author_seq` | 8 | dense per-(author, ledger) counter, starts at 1 |
+| `author_seq` | 8 | dense per-(author, journal) counter, starts at 1 |
 | `author_ts_ms` | 8 | author's wall clock at write; informational, never used for ordering or expiry |
 | `ttl_ms` | 8 | 0 = no TTL; see PRD 0002 for what enforcement does with it |
 | `payload_len` | 4 | bytes following the header |
 | `payload_hash` | 32 | SHA-256 of the payload |
 | `signature` | 64 | Ed25519 over every header field above, by `author`'s key |
-| `payload` | `payload_len` | opaque to spine; consumers define it |
+| `payload` | `payload_len` | opaque to coppiz; consumers define it |
 
 `entry_hash` = SHA-256 of the whole header including signature; it is what a
 slot references. A `stale` mark names its target by *entry id*
@@ -158,20 +186,20 @@ is what lets every member validate who marked ([PRD
 | `seq` | 8 | dense within the epoch, starts at 1 |
 | `slot_ts_ms` | 8 | the leader's clock at assignment; the *only* time basis PRD 0002 expiry uses; monotone non-decreasing within an epoch, clamped to ≥ the previous slot across epochs |
 | `entry_hash` | 32 | the entry placed here |
-| `prev_slot_hash` | 32 | hash of the previous slot in this ledger; genesis slot uses zeros |
+| `prev_slot_hash` | 32 | hash of the previous slot in this journal; genesis slot uses zeros |
 | `leader` | 16 | member id of the assigning leader |
 | `signature` | 64 | Ed25519 over the fields above, by the leader's key |
 
 `slot_hash` = SHA-256 over the slot. The chain is over slots, so the chain
 covers order *and* content (via `entry_hash`) *and* who ordered it.
 
-**Control entries.** Everything the ledger knows about itself is an entry in
+**Control entries.** Everything the journal knows about itself is an entry in
 the same chain, so it replicates by the same mechanism, is tamper-evident by
 the same hash, and can be folded deterministically by every member:
 
 | Kind | Author | Meaning | Defined in |
 |---|---|---|---|
-| `genesis` | the founder | creates the cluster and its first ledger; carries initial settings and the founder's key | PRD 0003, 0004 |
+| `genesis` | the founder | creates the cluster and its first journal; carries initial settings and the founder's key | PRD 0003, 0004 |
 | `join` | an existing member (the admitter) | admits a new member: id, public key, address. Its slot is the new member's seniority | PRD 0003 |
 | `leave` | the leaving member, or the leader evicting it | removes a member; its seniority is gone | PRD 0003 |
 | `epoch` | the new leader | opens a leadership term: why (`leader_lost`, `mode_change`, `merge`, or `manual` — the reason list PRD 0003 defines), who | PRD 0003 |
@@ -199,7 +227,7 @@ two-phase commit anywhere.
 
 **Write path.**
 
-1. A client calls `append(ledger, payload, ttl)` on its local member.
+1. A client calls `append(journal, payload, ttl)` on its local member.
 2. The member builds and signs the entry (`author_seq` = its last + 1),
    appends it to its **local unslotted queue** (durable, so a crash does not
    lose an acknowledged-as-accepted write), and forwards it to the leader.
@@ -233,20 +261,20 @@ slot hash without trusting the peer. A member is `syncing` until it has
 reached the leader's head, and a `syncing` member is never leader-eligible
 (PRD 0003) and never serves backfill pages past its own verified head.
 
-**Storage.** One directory per member, one subdirectory per ledger, segment
+**Storage.** One directory per member, one subdirectory per journal, segment
 files of slots+entries in chain order, each record length-prefixed and
 CRC-checked so a torn tail write is detected and truncated at startup, and
 a sparse position→offset index per segment (position = `(epoch, seq)`;
-`seq` alone cannot key it — it restarts at 1 every epoch). The per-ledger
-subdirectory is named for the ledger's id in lowercase hex, never for its
+`seq` alone cannot key it — it restarts at 1 every epoch). The per-journal
+subdirectory is named for the journal's id in lowercase hex, never for its
 name: the name is a mutable setting, and keying a directory by a chosen
-string drags filesystem naming rules into ledger identity — on
+string drags filesystem naming rules into journal identity — on
 case-insensitive filesystems such as Windows NTFS and macOS's default APFS,
-ledgers named `Foo` and `foo` would share one directory and one chain;
+journals named `Foo` and `foo` would share one directory and one chain;
 Windows refuses reserved device names (`con`, `nul`) and names ending in a
 dot or space; a name carrying `/` or `\` escapes the member directory.
 None of that is spellable in hex digits. A segment's header carries the
-format version, the ledger id and the id of the group that sequenced it, so
+format version, the journal id and the id of the group that sequenced it, so
 a segment is self-describing when it moves between groups (ownership
 transfer or parity reconstruction, PRD 0006); a **sealed** segment — one
 behind the head that will never be appended to — has a recorded hash and is
@@ -261,15 +289,15 @@ time.
 default is `every` on the leader and `batched` on followers
 ([open question 14](../open-questions.md)).
 
-**Multiple ledgers per cluster.** A cluster holds many ledgers; each has its
+**Multiple journals per cluster.** A cluster holds many journals; each has its
 own id, name, chain, and PRD 0002 settings ("schema"). Membership and
-leadership are cluster-level (one leader sequences all ledgers) in v1, to
-keep one fold; per-ledger leadership is [open question 8](../open-questions.md).
-The chain is per ledger, not per cluster, because a ledger is the unit
+leadership are cluster-level (one leader sequences all journals) in v1, to
+keep one fold; per-journal leadership is [open question 8](../open-questions.md).
+The chain is per journal, not per cluster, because a journal is the unit
 PRD 0006 assigns to one group and encodes with parity — a cluster-wide chain
 could not be split ([open question 7](../open-questions.md) leans that way
-for this reason). The count of ledgers is itself bounded by settings
-(`cluster.max_ledgers`; value unset, [OQ 55](../open-questions.md)).
+for this reason). The count of journals is itself bounded by settings
+(`cluster.max_journals`; value unset, [OQ 55](../open-questions.md)).
 
 **Dependencies.**
 
@@ -282,17 +310,17 @@ for this reason). The count of ledgers is itself bounded by settings
 **Implementation phases** (files are proposals; the first commit that
 creates them is the source of truth):
 
-1. `src/ledger/entry.zig`, `src/ledger/slot.zig` — codecs, hashes, sign and
+1. `src/journal/entry.zig`, `src/journal/slot.zig` — codecs, hashes, sign and
    verify, with unit tests and a fuzz test on the decoders (untrusted wire
    input). Pure, no I/O.
-2. `src/ledger/chain.zig` — fold and validation: given a verified prefix state
+2. `src/journal/chain.zig` — fold and validation: given a verified prefix state
    and a `(slot, entry)` pair, accept or name the refusal. Pure. Table-driven
    tests for every control kind's validation rule.
-3. `src/ledger/segment.zig`, `src/ledger/store.zig` — on-disk segments,
+3. `src/journal/segment.zig`, `src/journal/store.zig` — on-disk segments,
    CRC, torn-tail recovery, index, snapshot. Tests open a store, crash it
    mid-write (truncate the file), reopen, and assert the verified head.
-4. `src/ledger/ledger.zig` — the single-member library API: open, append,
-   read, follow. An e2e test runs the `spine` binary standalone.
+4. `src/journal/journal.zig` — the single-member library API: open, append,
+   read, follow. An e2e test runs the `coppiz` binary standalone.
 5. Replication (forward, broadcast, backfill) lands with PRD 0003, since it
    needs a leader to exist.
 
@@ -304,7 +332,7 @@ creates them is the source of truth):
 | Slot signature does not verify, or `leader` is not the leader of `epoch` | refused; the member keeps its head and requests backfill from a different peer |
 | `prev_slot_hash` mismatch | refused; the receiving member suspects its own history or the sender's and enters reconciliation (PRD 0003 *merge*); it does not overwrite |
 | Torn write at the segment tail | truncated at open, logged; the entries lost were never acknowledged past `local` |
-| Payload larger than `ledger.max_entry_bytes` | refused at `append` with `too_large` before anything is written |
+| Payload larger than `journal.max_entry_bytes` | refused at `append` with `too_large` before anything is written |
 | Unknown entry or slot `version` | refused with `unsupported_version`; the member keeps running on what it can read |
 | Author's `author_seq` has a gap | the slot is held, the leader requests the missing entries from the author; a gap that never fills is [open question 11](../open-questions.md) |
 | Disk full | `append` fails with the OS error; the member stops accepting writes but keeps serving reads and backfill |
@@ -312,7 +340,7 @@ creates them is the source of truth):
 
 ## Acceptance criteria
 
-- [ ] (G1) Two members, 10,000 appends from each, every member's ledger is
+- [ ] (G1) Two members, 10,000 appends from each, every member's journal is
   byte-identical and every entry id resolves on both.
 - [ ] (G2) The fold of the same log on two members yields identical
   membership, settings, leader and stale/expired sets, checked by hash.
@@ -322,9 +350,9 @@ creates them is the source of truth):
   acknowledged-`slotted` write lost.
 - [ ] (G5) A store or frame with `version + 1` is refused with
   `unsupported_version`, not misread.
-- [ ] (G6) `ledger.max_entry_bytes`
+- [ ] (G6) `journal.max_entry_bytes`
   ([OQ 36](../open-questions.md); default unset there, like the other two's
-  values at [OQ 55](../open-questions.md)), `cluster.max_ledgers`, and the
+  values at [OQ 55](../open-questions.md)), `cluster.max_journals`, and the
   `sync.unslotted_max_bytes` queue bound are enforced and each has a test
   that trips it.
 - [ ] (G7) A member cannot produce a valid entry attributed to another member
@@ -335,8 +363,8 @@ creates them is the source of truth):
 The cross-cutting register is [docs/open-questions.md](../open-questions.md);
 the ones that belong to the core specifically:
 
-- Whether the chain should be one per ledger (as drafted) or one per
-  cluster spanning all ledgers. Per-ledger keeps ledgers independently
+- Whether the chain should be one per journal (as drafted) or one per
+  cluster spanning all journals. Per-journal keeps journals independently
   prunable; per-cluster gives one seq for everything. (OQ 7)
 - Whether `author_ts_ms` belongs in the signed header at all, given it is
   never used for ordering or expiry — it is there for consumers, and

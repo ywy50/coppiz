@@ -2,9 +2,11 @@
 
 ## Status
 
-Discussion — opened 2026-08-21. Blocks [PRD 0003](../prds/0003-membership-and-leadership.md)'s
-`seniority` mode; the PRD is drafted on option A below and will follow this
-RFC's decision.
+Decided — 2026-08-27, option A (join is a chain entry; seniority is its slot
+position). [ADR 0005](../adrs/0005-join-order-is-slot-position.md) records
+the choice; PRD 0003 phases 1–3 implement it. The open question it left on
+concurrent-join ordering is [OQ 58](../open-questions.md), resolved the same
+day to the admitter's receipt order.
 
 An RFC is a *request for comment*: it presents the options and a recommendation
 so a decision can be made, and it is not itself the decision record. When it is
@@ -51,10 +53,10 @@ timestamp and the earliest wins — is the status quo to beat and is option E.
 
 - **What it is:** a member's `join` is a control entry written by an
   *existing* member (the admitter) and sequenced by the leader into the
-  hash-chained, leader-signed slot sequence ([PRD 0001](../prds/0001-ledger-core.md)).
+  hash-chained, leader-signed slot sequence ([PRD 0001](../prds/0001-journal-core.md)).
   Seniority = the `(epoch, seq)` of that slot; the founder's is the `genesis`
   slot. Time plays no part; order is position.
-- **Maturity:** the mechanism is the ledger itself — nothing additional.
+- **Maturity:** the mechanism is the journal itself — nothing additional.
   Append-only logs as membership records is how Raft handles configuration
   changes (membership entries in the log) and how permissioned ledgers record
   enrolment.
@@ -191,7 +193,7 @@ deterministic, which B and C's are not.
 
 ## References
 
-- [PRD 0001](../prds/0001-ledger-core.md) — chain, slots, control kinds.
+- [PRD 0001](../prds/0001-journal-core.md) — chain, slots, control kinds.
 - [PRD 0003](../prds/0003-membership-and-leadership.md) — the mode this
   serves.
 - Raft membership changes as log entries — Ongaro & Ousterhout 2014, §6

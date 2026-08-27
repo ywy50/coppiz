@@ -1,8 +1,8 @@
 const std = @import("std");
 
-// spine builds two things from one tree, on purpose: the library module
-// (`spine`, src/root.zig) a host such as clanker fetches as a dependency,
-// and the `spine` executable (src/main.zig) that wraps that same library
+// coppiz builds two things from one tree, on purpose: the library module
+// (`coppiz`, src/root.zig) a host such as clanker fetches as a dependency,
+// and the `coppiz` executable (src/main.zig) that wraps that same library
 // as a standalone node. Which of the two leads the design is RFC 0001.
 pub fn build(b: *std.Build) void {
     enforceToolchainFloor();
@@ -10,12 +10,12 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const options = b.addOptions();
-    // The raw zon declaration only: the library parses it where `spine.version`
+    // The raw zon declaration only: the library parses it where `coppiz.version`
     // is defined (src/root.zig), so the single-source-of-truth value is never
     // carried twice in lockstep (RELEASES.md).
     options.addOption([]const u8, "version_text", @import("build.zig.zon").version);
 
-    const lib_mod = b.addModule("spine", .{
+    const lib_mod = b.addModule("coppiz", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -23,13 +23,13 @@ pub fn build(b: *std.Build) void {
     lib_mod.addOptions("build_options", options);
 
     const exe = b.addExecutable(.{
-        .name = "spine",
+        .name = "coppiz",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "spine", .module = lib_mod },
+                .{ .name = "coppiz", .module = lib_mod },
             },
         }),
     });
@@ -37,10 +37,27 @@ pub fn build(b: *std.Build) void {
 
     // addRunArtifact already ties the run to the freshly built binary; no
     // step here needs the install performed first.
-    const run_step = b.step("run", "Build and run the spine node");
+    const run_step = b.step("run", "Build and run the coppiz node");
     const run_cmd = b.addRunArtifact(exe);
     if (b.args) |args| run_cmd.addArgs(args);
     run_step.dependOn(&run_cmd.step);
+
+    // `zig build docs` regenerates docs/configuration.md from the settings
+    // schema (PRD 0004 phase 5). The docgen exe writes the file directly, so
+    // the step needs no shell redirection; the pinned test in render.zig
+    // fails the build when the checked-in file drifts from the schema.
+    const docgen = b.addExecutable(.{
+        .name = "docgen",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/settings/docgen.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const docgen_run = b.addRunArtifact(docgen);
+    docgen_run.addFileArg(b.path("docs/configuration.md"));
+    const docs_step = b.step("docs", "Regenerate docs/configuration.md from the settings schema");
+    docs_step.dependOn(&docgen_run.step);
 
     addChecks(b, lib_mod, exe);
 }
@@ -48,7 +65,7 @@ pub fn build(b: *std.Build) void {
 /// Fails the build when the toolchain executing it is older than the floor
 /// declared in build.zig.zon. Zig itself never checks that field for a tree
 /// built directly (verified on 0.16.0: a floor of 99.0.0 builds silently);
-/// only a consumer fetching spine as a dependency gets it checked. Yet every
+/// only a consumer fetching coppiz as a dependency gets it checked. Yet every
 /// gate in addChecks assumes the declared toolchain's semantics — zig fmt's
 /// output and --ast-check, std.zig.Tokenizer's lexing behind the test
 /// registration check, test-block collection from module roots — so an
@@ -58,7 +75,7 @@ fn enforceToolchainFloor() void {
     const floor_text = @import("build.zig.zon").minimum_zig_version;
     if (!meetsZigFloor(@import("builtin").zig_version, floor_text))
         std.debug.panic(
-            "spine requires Zig {s} or newer; running {f}",
+            "coppiz requires Zig {s} or newer; running {f}",
             .{ floor_text, @import("builtin").zig_version },
         );
 }
@@ -127,6 +144,8 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
     test_step.dependOn(&b.addRunArtifact(lib_tests).step);
     test_step.dependOn(&b.addRunArtifact(exe_tests).step);
     test_step.dependOn(&b.addRunArtifact(build_tests).step);
+    // The process-level e2e tests spawn the installed binary.
+    test_step.dependOn(b.getInstallStep());
 
     // Analysis gates. Until CI decides what it gates (OQ 45), `zig build
     // test` is the one blocking entry point, so it carries the checks: the
@@ -1221,7 +1240,7 @@ const TestRegistrationStep = struct {
     /// test roots are constrained: that is where the documented
     /// convention puts both halves, while an intermediate module's imports
     /// are ordinary use. An import resolving to no walked module (`std`,
-    /// `build_options`, the `spine` package) needs no wrapper. One report
+    /// `build_options`, the `coppiz` package) needs no wrapper. One report
     /// line per distinct import string per root, whatever the number of bare
     /// occurrences.
     fn declarationAnalysisGaps(
@@ -1291,7 +1310,7 @@ const TestRegistrationStep = struct {
             // matching named resolves everywhere and needs no report; one
             // matching folded alone resolves only where the filesystem
             // ignores case. Package and builtin imports ("std",
-            // "build_options", the spine package) match neither and stay
+            // "build_options", the coppiz package) match neither and stay
             // out, as does anything pointing outside the walked tree. Roots
             // stay among the candidates: a wrong-case import of another root
             // reports just the same. The folded map is derived from named's
@@ -2510,7 +2529,7 @@ test "zigNearMissName catches every spelling a gate's filters skip" {
     // ".zon" is the manifest spelling whose ".zig" is conventional.
     try std.testing.expect(!zigNearMissName("plain.zig"));
     try std.testing.expect(!zigNearMissName("build.zig.zon"));
-    try std.testing.expect(!zigNearMissName("spine.zon"));
+    try std.testing.expect(!zigNearMissName("coppiz.zon"));
     // Names merely resembling Zig stay out: no ".zig" substring.
     try std.testing.expect(!zigNearMissName("zig"));
     try std.testing.expect(!zigNearMissName("ziggurat"));
@@ -3829,4 +3848,13 @@ test "all three gate steps pass a conforming tree recording nothing" {
         registration_gate.step.result_error_msgs.items.len,
     );
     try std.testing.expectEqual(@as(usize, 0), coverage_gate.step.result_error_msgs.items.len);
+}
+
+test "all public declarations analyze" {
+    // build.zig is a test root (addChecks compiles it as its own test
+    // binary), so it owes the src/ modules it imports the same refAllDecls
+    // pairing any other root owes. docgen.zig is an executable root — no
+    // test root under src/ imports it — so this import is what registers it
+    // for test collection and forces its declarations through the analyzer.
+    std.testing.refAllDecls(@import("src/settings/docgen.zig"));
 }

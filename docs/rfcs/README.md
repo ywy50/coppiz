@@ -27,4 +27,4 @@ reference for what one would do ([OQ 41](../open-questions.md)).
 | # | Status | Title |
 |---|---|---|
 | [0001](0001-library-first-or-service-first.md) | Discussion | Library-first or service-first: which surface leads the design |
-| [0002](0002-how-join-order-is-made-unspoofable.md) | Discussion | How join order is made unspoofable |
+| [0002](0002-how-join-order-is-made-unspoofable.md) | Decided | How join order is made unspoofable |

@@ -2,14 +2,33 @@
 
 ## Status
 
-Draft — 2026-08-21. Depends on [PRD 0001](0001-ledger-core.md) (control
+Draft — 2026-08-21. Depends on [PRD 0001](0001-journal-core.md) (control
 kinds `genesis`, `join`, `leave`, `epoch`, `merge`; slots; chain) and
 [PRD 0004](0004-settings.md) (`leadership.*` settings and the
 `reconfigurable` gate). The unspoofable-join mechanism it relies on is argued
 as [RFC 0002](../rfcs/0002-how-join-order-is-made-unspoofable.md); this PRD
 states the design the RFC recommends and will follow the RFC's decision.
-Source of truth once shipped: `src/cluster/` (membership fold, election,
-failure detection, merge).
+
+Phases 1–3 shipped 2026-08-27, on the RFC's decision ([ADR
+0005](../adrs/0005-join-order-is-slot-position.md), option A): the pure
+membership fold, the election function, and the epoch/merge rules, plus the
+deterministic simulator that drives them ([OQ 27](../open-questions.md)).
+Source of truth: `src/cluster/membership.zig`, `src/cluster/election.zig`,
+`src/cluster/epoch.zig`, the `join`/`leave`/`epoch`/`merge` rules wired into
+`src/journal/chain.zig`, and `src/sim/sim.zig` (the simulator, roadmap item
+5). OQ 58 (concurrent-join ordering) and OQ 33 (settings at merge) resolved
+with the drafted defaults (admitter receipt order; losing-side `settings`
+re-slotted as no-ops). Remaining: phase 4+ (wire protocol, OQ 19), the node
+loop (phase 5), and the e2e matrix (phase 6), which the simulator's scenarios
+are the first slice of.
+
+One implementation note the simulator pinned down ([OQ 44](../open-questions.md)):
+a merge converges only if every node **re-folds from the last common slot** —
+the losing branch's entries re-slot as no-ops for the *survivor's* fold, but
+cannot undo what the loser already folded (a settings change, a join), so
+the loser must discard its branch and fold the merged chain from the common
+prefix. That is a fold *discipline* the node loop must implement; it is not
+a fold rule.
 
 ## Problem
 
@@ -19,7 +38,7 @@ Raft-style quorum needs an odd count and a majority, so two instances cannot
 elect, and one instance is a degenerate cluster. Instead of quorum, the brief
 asks for leader election modes an operator can reason about at every size:
 
-- **seniority** — whoever joined the ledger earliest leads; the order of
+- **seniority** — whoever joined the journal earliest leads; the order of
   joining must be automatically detected and *unspoofable* by any member.
 - **configured authorities** — the config names who leads in case of conflict
   (by id, address or DNS name); for two members, name one; for one member, it
@@ -66,7 +85,7 @@ than baked in. The default is [open question 2](../open-questions.md).
   want strict single-leadership at n ≥ 3 is on the [roadmap](../ROADMAP.md),
   not in this PRD; the modes here are what make 1 and 2 and even counts work.
 - **No automatic discovery.** Peers come from config or from a `join` the
-  operator admitted; spine does not multicast or scan.
+  operator admitted; coppiz does not multicast or scan.
 - **No Byzantine tolerance.** A member that signs with its own key and follows
   the protocol is trusted for what it authors; the chain stops it lying about
   *others* or about *history*, not about its own future entries. See PRD 0001
@@ -76,8 +95,8 @@ than baked in. The default is [open question 2](../open-questions.md).
 
 **Identity.** A member is an Ed25519 keypair plus a 128-bit member id derived
 from the public key (so the id cannot be chosen to collide). The private key
-lives in the member's data directory (`member.key`), never in the ledger. The
-public key is in the ledger — in `genesis` for the founder and in the `join`
+lives in the member's data directory (`member.key`), never in the journal. The
+public key is in the journal — in `genesis` for the founder and in the `join`
 entry for everyone else — which is how every member verifies every signature
 without a side channel.
 
@@ -101,8 +120,8 @@ seniority rank 0). This is the whole answer to "cannot be spoofed" (RFC 0002):
 **Admission** (borrowed from clanker PRD 0011, which already solved this for
 its mesh): `cluster.admission = allowlist | prompt | open`. `allowlist`
 admits a dial whose public key matches a `[[peers]]` entry; `prompt` queues it
-for `spine admit <id>`; `open` admits anyone who can reach the port (for
-loopback and lab use, warned about by `spine doctor`). Admission is the
+for `coppiz admit <id>`; `open` admits anyone who can reach the port (for
+loopback and lab use, warned about by `coppiz doctor`). Admission is the
 cluster's trust boundary; once the `join` is slotted the member is as trusted
 as any other. How the allowlist learns the key out of band is [open question
 21](../open-questions.md).
@@ -178,7 +197,7 @@ Its exact semantics are [open question 12](../open-questions.md).
 `{epoch: prev + 1, reason: leader_lost | mode_change | merge | manual,
 leader: self}`. This reason list is tier-1's; the federation overlay of
 [PRD 0006](0006-scaling-to-groups-sharding-and-parity.md) adds
-`ownership_transfer`, which a ledger's new owner appends when it continues
+`ownership_transfer`, which a journal's new owner appends when it continues
 the adopted chain after a transfer. Slots in the new epoch start at `seq = 1`. Every member
 validates that the claimed leader is what `leader(...)` returns for *their*
 fold and liveness; a member that disagrees does not accept the epoch and
@@ -202,7 +221,7 @@ both heads computes the same survivor and the same re-slot order — so even
 members that were on neither side converge. What readers see: an entry's
 `(epoch, seq)` can change exactly once, at merge, and only for entries
 written on the losing side during the partition; its entry id never changes.
-Readers that need a stable handle use entry ids ([PRD 0001](0001-ledger-core.md)).
+Readers that need a stable handle use entry ids ([PRD 0001](0001-journal-core.md)).
 
 The cost, stated: a writer on the losing side that asked for `write.ack =
 slotted` got a slot that later moved. `slotted` therefore means "ordered
@@ -223,7 +242,7 @@ setting they change by a `settings` entry the leader appends. The gate is
 - `false` — every member refuses a `settings` entry that touches
   `leadership.*`, `invalid_settings: leadership frozen`. The only way to
   change the mode is the offline procedure in [open question
-  5](../open-questions.md): stop every member, run `spine reconfigure` on
+  5](../open-questions.md): stop every member, run `coppiz reconfigure` on
   one, which appends the entry and an epoch locally, then restart the rest so
   they backfill it — *that* is still a chain event, so no member can be
   running a different mode than the chain says.
@@ -246,7 +265,7 @@ member under `seniority` with `reconfigurable = true`, add members, switch to
 | `leadership.reconfigurable` | bool | `true` | from `true` → `false` live; `false` → `true` offline only |
 | `cluster.admission` | `allowlist`, `prompt`, `open` | `allowlist` | yes |
 | `cluster.max_members` | u16 | 32 | yes |
-| `cluster.max_ledgers` | u32 | unset ([OQ 55](../open-questions.md)) | yes |
+| `cluster.max_journals` | u32 | unset ([OQ 55](../open-questions.md)) | yes |
 | `cluster.heartbeat_ms` | u64 | 1000 | yes |
 | `cluster.suspect_after_ms` | u64 | 5000 | yes |
 | `membership.evict_after_ms` | u64 | 0 (never) | yes |
@@ -260,12 +279,16 @@ join-order mechanism), clanker PRD 0011 (admission modes, reused as design).
 
 1. `src/cluster/membership.zig` — pure fold of `genesis`/`join`/`leave` into
    the member table with seniority and state; validation rules for each.
+   Shipped 2026-08-27.
 2. `src/cluster/election.zig` — pure `leader(mode, settings, members,
    liveness)`; table tests for every mode at n = 1, 2, 3, 4, 6 with every
-   liveness subset.
+   liveness subset. Shipped 2026-08-27.
 3. `src/cluster/epoch.zig` — `epoch` validation and the merge rule: given two
    heads, compute survivor and re-slot order; property test that any member
-   given both heads computes the same result.
+   given both heads computes the same result. Shipped 2026-08-27, with the
+   deterministic simulator ([OQ 27](../open-questions.md), `src/sim/sim.zig`)
+   as the phase-3 acceptance harness — its scenarios are the first slice of
+   the e2e matrix below.
 4. `src/net/` — framing, heartbeats, forward/broadcast/backfill
    ([open question 19](../open-questions.md) decides HTTP vs own framing).
 5. `src/cluster/node.zig` — the loop: failure detector → election → epoch;
@@ -289,12 +312,12 @@ join-order mechanism), clanker PRD 0011 (admission modes, reused as design).
 | A member presents a chain whose `join` slots differ from ours | its chain fails `prev_slot_hash` at the first divergence; the branch the mode's ranking makes the loser (*Partition and merge*, above) is archived, never accepted as truth |
 | `settings` touches `leadership.*` while `reconfigurable = false` | refused by every member, `leadership frozen` |
 | Newcomer cannot reach any member to backfill | stays `syncing`; never eligible; retries with backoff |
-| Authority list names an address no member advertised | that entry matches nobody; `spine doctor` warns; election skips it |
+| Authority list names an address no member advertised | that entry matches nobody; `coppiz doctor` warns; election skips it |
 | All members restart simultaneously | each folds its chain; the senior/live authority becomes leader as soon as liveness is established; nothing is written until then |
 
 ## Acceptance criteria
 
-- [ ] (G1) `spine` started in an empty directory is leader of a one-member
+- [ ] (G1) `coppiz` started in an empty directory is leader of a one-member
   cluster and accepts appends with no config but its data directory.
 - [ ] (G2) E2E (a) passes for `seniority`, `configured`, `combined`.
 - [ ] (G3) E2E (e): a forged earlier `join` is refused by every member; the

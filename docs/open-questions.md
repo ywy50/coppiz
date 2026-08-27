@@ -35,7 +35,7 @@ Ordering inside each section is by what blocks implementation first.
    (`write.ack = local | slotted`, honoured by the owning group), PRD 0003
    assumes a writer can ask for `slotted` without saying where the choice
    lives, while PRD 0005's API sketch passes `.ack` per `append` call.
-   Disagreement cannot fork the ledger, which
+   Disagreement cannot fork the journal, which
    suggests local config or a call parameter with a configured default.
    *Blocks:* PRD 0001 phase 4 API defaults. *Answer from:* the operator; also
    clanker's RFC 0019 open question 1 ("stall or keep working").
@@ -48,16 +48,20 @@ Ordering inside each section is by what blocks implementation first.
 
 ## B. Ordering, epochs and merge
 
-7. **One chain per ledger, or one per cluster?** Per ledger (as drafted)
-   keeps ledgers independently prunable and lets a consumer follow one
+7. **One chain per journal, or one per cluster?** Per journal (as drafted)
+   keeps journals independently prunable and lets a consumer follow one
    stream cheaply; per cluster gives a single `(epoch, seq)` for everything
    and one place for cluster-scoped settings. The compromise — a control
-   ledger for cluster-scoped entries plus per-ledger data chains — doubles
+   journal for cluster-scoped entries plus per-journal data chains — doubles
    the fold. *Blocks:* PRD 0001 phase 2 (fold). *Answer from:* design; decide
    before the on-disk format freezes.
-8. **Per-ledger or cluster-level leadership?** Drafted cluster-level (one
-   leader sequences all ledgers). Per-ledger leadership spreads load and
-   isolates a hot ledger, at the cost of N elections and N failure detectors.
+   **Resolved 2026-08-27** (design, at the format freeze): one chain per
+   journal, with the cluster's control journal its own chain carrying
+   `genesis`, `create_journal`, cluster-scoped `settings`, and (with PRD
+   0003) membership and epochs. Recorded in PRD 0001's status.
+8. **Per-journal or cluster-level leadership?** Drafted cluster-level (one
+   leader sequences all journals). Per-journal leadership spreads load and
+   isolates a hot journal, at the cost of N elections and N failure detectors.
    *Blocks:* PRD 0003 phase 2. *Answer from:* measurement, after a single
    leader is shown to saturate.
 11. **An `author_seq` gap that never fills; refused entries consume a seq.**
@@ -67,6 +71,12 @@ Ordering inside each section is by what blocks implementation first.
     becomes monotone; dedup still works), or make the author re-announce its
     head on reconnect so the leader can close the gap. *Blocks:* PRD 0001
     phase 2 validation.
+    **Resolved 2026-08-27** (design): gaps allowed — `author_seq` is
+    monotone per (author, journal), and the fold dedups redeliveries by
+    looking the entry id up in its table (an entry at or below the author's
+    last seq is accepted only when byte-identical to the recorded one), so
+    the unslotted-queue replay after a crash is idempotent. Recorded in PRD
+    0001's status.
 12. **`tiebreak = freshest` semantics.** "Highest acknowledged `(epoch,
     seq)`" across epochs is not totally ordered after a merge; the draft
     freezes the evaluation at election. Is the extra mode worth its
@@ -80,7 +90,12 @@ Ordering inside each section is by what blocks implementation first.
 33. **Conflicting `settings` on two branches.** After a merge the surviving
     branch's value wins and the losing branch's `settings` entries are
     re-slotted as no-ops (PRD 0004). Should they instead re-apply in order
-    (last writer wins by merged position)? *Blocks:* PRD 0003 phase 3.
+    (last writer wins by merged position)?
+    **Resolved 2026-08-27** (operator): no-op re-slot, as drafted — the
+    survivor's value wins; the losing side's `settings` entries re-slot as
+    no-ops. Re-applying in order stays a merge-rule change away. Recorded in
+    PRD 0003's status.
+    *Blocks:* PRD 0003 phase 3.
 37. **Failure-detector timings and leader lease.** Heartbeat 1 s, suspect at
     5 s are placeholders. Is there a leader *lease* (the old leader stops
     slotting when it cannot hear a majority of its last-known members), or
@@ -107,7 +122,7 @@ Ordering inside each section is by what blocks implementation first.
    leader order, which is either the point or a surprise. *Blocks:* PRD 0003
    phase 1.
 5. **Changing leadership settings when `reconfigurable = false`.** Drafted as
-   an offline procedure (`spine reconfigure` on one stopped member, others
+   an offline procedure (`coppiz reconfigure` on one stopped member, others
    backfill it). Is "stop everything" acceptable, or is a signed operator
    override (OQ 22) wanted so the lock can be lifted live by someone who is
    not a member? *Blocks:* PRD 0003 phase 5 and the CLI.
@@ -138,6 +153,10 @@ Ordering inside each section is by what blocks implementation first.
     (its option A). Ordering same-batch joins by newcomer id instead of
     receipt order would remove that discretion entirely, at the cost of one
     fold rule. Cheap to decide while the format is unfrozen.
+    **Resolved 2026-08-27** (operator): slot order — the admitter's receipt
+    order is the chain's order, which makes the fold deterministic by
+    construction; ordering same-batch joins by newcomer id remains a
+    one-fold-rule change. Recorded in PRD 0003's status.
     *Blocks:* PRD 0003 phase 1 (membership fold). *Answer from:* the
     operator.
 
@@ -155,7 +174,7 @@ Ordering inside each section is by what blocks implementation first.
     *Blocks:* PRD 0002 phase 4.
 24. **Slot count grows forever.** Under `retain = none` a removed entry still
     costs one slot (~170 bytes) forever, because removing a slot breaks the
-    chain. A long-lived high-churn ledger needs an *archival checkpoint*: a
+    chain. A long-lived high-churn journal needs an *archival checkpoint*: a
     leader-signed root over a prefix that lets members drop the slots
     behind it while keeping verifiability from the root. That is a second
     chain-level mechanism and is out of v1. When does it become necessary?
@@ -165,9 +184,9 @@ Ordering inside each section is by what blocks implementation first.
     but not every byte that ever existed. PRD 0003's "definitely has the
     full state" should be defined as "at head of the chain", and the docs
     should say so. *Blocks:* PRD 0003 phase 1 wording.
-57. **Is author-marked staleness itself switchable per ledger?** [ADR
+57. **Is author-marked staleness itself switchable per journal?** [ADR
     0002](adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md)
-    records that *whether either cause is active … [is] a per-ledger
+    records that *whether either cause is active … [is] a per-journal
     setting*, and its title calls both mutations opt-in. But the schema
     drafted in [PRD 0002](prds/0002-ttl-and-staleness.md) has no setting
     that turns the `stale` cause off: `stale.who` names who may mark
@@ -178,6 +197,14 @@ Ordering inside each section is by what blocks implementation first.
     entry already marked), or narrow the accepted record's claim to TTL
     enforcement when it is next touched. Must settle before the settings
     schema is generated ([PRD 0004](prds/0004-settings.md) phase 1).
+    **Resolved 2026-08-27** (operator): the `stale` cause is switchable per
+    journal, matching ADR 0002. [PRD 0002](prds/0002-ttl-and-staleness.md)'s
+    settings table gains `stale.enforce = off | author` (default `off`; a
+    `stale` entry is refused while `off`) and defaults `stale.cleanup` to
+    `keep`. Both removal causes are now a hard opt-in per journal, off by
+    default, live-changeable and prospective — a `settings` entry takes
+    effect only for entries slotted after it ([PRD
+    0004](prds/0004-settings.md)).
     *Blocks:* PRD 0004 phase 1, not the core. *Answer from:* the operator.
 
 ## E. Storage and format
@@ -200,22 +227,22 @@ Ordering inside each section is by what blocks implementation first.
     during an upgrade? Drafted: a reader refuses a newer version, so the
     leader must be upgraded *last* (it writes). Needs a written procedure
     and a test. *Blocks:* first release.
-36. **Maximum entry size and large payloads.** `ledger.max_entry_bytes`
+36. **Maximum entry size and large payloads.** `journal.max_entry_bytes`
     default is unset. clanker's streams are 1–2 KB lines; sessions are up to
     1.75 MB and are explicitly *not* a first consumer. A blob shape (chunked
     entries, or content-addressed side storage) is roadmap. *Blocks:* PRD
     0001 phase 4 defaults.
 39. **Backup and restore.** A data directory copied while the node runs may
     hold a torn tail (recovered at open) — is `cp -r` a supported backup, or
-    does `spine export` exist? Restoring a member from backup must not
+    does `coppiz export` exist? Restoring a member from backup must not
     resurrect a `leave` or fork the chain; the chain makes this detectable,
     but the procedure needs a runbook. *Blocks:* first release.
-55. **Size bounds still without values.** PRD 0001 G6 requires the ledger cap
-    (`cluster.max_ledgers`) and the unslotted-queue bound
+55. **Size bounds still without values.** PRD 0001 G6 requires the journal cap
+    (`cluster.max_journals`) and the unslotted-queue bound
     (`sync.unslotted_max_bytes`) enforced with a test that trips each, but
     neither has a default or an overflow behaviour yet: what `append` returns
     when the queue is full (refuse locally? evict the oldest unslotted
-    entry?), and what hitting the ledger cap refuses (creation only, or
+    entry?), and what hitting the journal cap refuses (creation only, or
     `genesis` too?). Siblings of OQ 36 for the two
     bounds the core cannot ship without. *Blocks:* PRD 0001 phase 3–4
     defaults.
@@ -231,13 +258,13 @@ Ordering inside each section is by what blocks implementation first.
     *Blocks:* PRD 0001 phase 5 (backfill lands with PRD 0003), PRD 0003
     phase 1 (member states).
 
-61. **What bounds per-process memory?** [PRD 0001](prds/0001-ledger-core.md)
-    goal 6 requires entry size, ledger count *and per-process memory* to be
+61. **What bounds per-process memory?** [PRD 0001](prds/0001-journal-core.md)
+    goal 6 requires entry size, journal count *and per-process memory* to be
     bounded by settings, but only the first two have keys
-    (`ledger.max_entry_bytes`, `cluster.max_ledgers`; the unslotted queue adds
+    (`journal.max_entry_bytes`, `cluster.max_journals`; the unslotted queue adds
     `sync.unslotted_max_bytes`, OQ 55) — no memory bound exists anywhere in
     the drafted schema, and no acceptance criterion covers the clause. What
-    is the knob (a fold/snapshot cache cap, a per-ledger page budget,
+    is the knob (a fold/snapshot cache cap, a per-journal page budget,
     nothing before measurement?), and what does a member do at the bound?
     Sibling of OQs 36 and 55.
     *Blocks:* PRD 0001 phase 3–4 defaults. *Answer from:* measurement, like
@@ -266,16 +293,16 @@ Ordering inside each section is by what blocks implementation first.
     *Blocks:* PRD 0005 phases 1 and 3.
 30. **Integration path with clanker.** clanker's RFC 0019 stage-1 spike is
     specified in clanker's tree and unrun. Run it there first (throwaway) and
-    then build spine, or build spine's core and make the spike *use* spine?
+    then build coppiz, or build coppiz's core and make the spike *use* coppiz?
     The second avoids building the cursor logic twice; the first gives
     clanker an answer without waiting. Which code survives? *Blocks:* PRD
     0005 phase 5. *Answer from:* the operator, jointly with clanker's RFC
     0019 next steps.
-34. **Ledger lifecycle.** Who may create a ledger (any member? leader only?
+34. **Journal lifecycle.** Who may create a journal (any member? leader only?
     a setting?), and can one be *dropped* — which would be the only
     non-chain deletion — or only frozen (no further appends) and expired
-    away? *Blocks:* PRD 0001 phase 4 (`node.ledger(name)` semantics).
-35. **TOML parser for `spine.toml`.** Vendor clanker's (same toolchain,
+    away? *Blocks:* PRD 0001 phase 4 (`node.journal(name)` semantics).
+35. **TOML parser for `coppiz.toml`.** Vendor clanker's (same toolchain,
     already patched for 0.16) or hand-roll the subset the local config
     needs. ADR 0001 allows vendoring, not fetching. *Blocks:* PRD 0004
     phase 4.
@@ -283,7 +310,7 @@ Ordering inside each section is by what blocks implementation first.
     `author:author_seq` ids are drafted; is a single opaque token better for
     an HTTP API, and should ids be exposed to consumers at all or only
     cursors? *Blocks:* PRD 0005 phase 1 API.
-46. **Which non-clanker hosts are the design targets?** spine is
+46. **Which non-clanker hosts are the design targets?** coppiz is
     general-purpose by brief (clarified 2026-08-21), but every concrete
     constraint so far comes from one host. Naming two or three other host
     shapes — a CLI tool that runs in short processes, a long-lived service on
@@ -295,7 +322,7 @@ Ordering inside each section is by what blocks implementation first.
 47. **Several processes on one data directory, SQLite-style.** SQLite lets
     N processes open one file (file locks, busy timeout); clanker relies on
     that today for its session databases, with `run`/`repl` processes
-    writing beside `serve`. spine v1 flocks the directory to one process and
+    writing beside `serve`. coppiz v1 flocks the directory to one process and
     expects short-lived processes to talk to the long-lived one. Supporting
     multi-process opens natively would mean: one process holds the listener
     and leader role, others append through a local IPC the library provides
@@ -309,11 +336,18 @@ Ordering inside each section is by what blocks implementation first.
 16. **The name.** `spine` is the codename from clanker's RFC 0019 ("the
     spine") and is generic enough to collide on package indexes and search.
     Decide before publishing; check the Zig package namespace, GitHub, and
-    crates/npm for collisions. Candidates so far: `spine`, `ledgerlet`,
-    `zledger`, `tally`, `quill`, `rostrum`. *Blocks:* first public release
-    (the `.name` in `build.zig.zon` and the module name change with it).
+    crates/npm for collisions. Candidates considered: `spine`, `journallet`,
+    `zjournal`, `tally`, `quill`, `rostrum`, `accrete`, `crescent`,
+    `creszent`, `bonsai`, `bonzai`, `coppice`, `tabula`, `weir`, `coppiz`.
+    **Resolved 2026-08-27** (operator): the product is named `coppiz` —
+    [ADR 0004](adrs/0004-the-product-is-named-coppiz.md). The library
+    module, node binary, `build.zig.zon` `.name` and `coppiz.toml` use
+    that identifier. Spoken English lands on *copies*; the coppice
+    metaphor (stools persist, poles harvested) is the one the spelling
+    carries, not the COP-iss pronunciation.
+    *Blocks:* none; was first public release.
 18. **Licence.** Not chosen. clanker's research tracked licences of every
-    surveyed store (BUSL, CSL, Apache, MIT) as a selection criterion; spine
+    surveyed store (BUSL, CSL, Apache, MIT) as a selection criterion; coppiz
     should be unambiguous from the first public commit. *Blocks:* first
     public commit; also a `LICENSE` path in `build.zig.zon`.
 27. **Testing strategy: deterministic simulation.** TigerBeetle's VOPR-style
@@ -322,9 +356,13 @@ Ordering inside each section is by what blocks implementation first.
     discipline clanker's research named worth copying. PRD 0001–0003's
     "pure fold, pure election, pure merge" split is what makes it possible.
     Decide early: is the simulator phase 0 of the cluster work, or a later
-    addition? *Blocks:* PRD 0003 phase 1 (it changes how the node loop is
-    written).
-29. **Observability.** `spine status` / `node.status()`: leader, epoch, head,
+    addition?
+    **Resolved 2026-08-27** (operator): now, before the node loop — the
+    simulator over the pure fold/election/merge functions ships with PRD
+    0003 phases 1–3, and the node loop is written to be drivable by it.
+    Recorded in PRD 0003's status.
+    *Blocks:* PRD 0003 phase 1 (it changes how the node loop is written).
+29. **Observability.** `coppiz status` / `node.status()`: leader, epoch, head,
     members and states, lag per follower, pending checkpoint bytes, last
     merge. Metrics format (Prometheus text?) and where logs go. *Blocks:*
     PRD 0005 phase 3.
@@ -335,7 +373,7 @@ Ordering inside each section is by what blocks implementation first.
     divergence). *Blocks:* nothing; documentation.
 41. **Record-store tooling.** clanker maintains its `docs/` stores with
     sandboxed tools (`clanker rfc`, `clanker adr`, …) that write
-    compare-and-swap and keep the inventories in sync. spine's stores are
+    compare-and-swap and keep the inventories in sync. coppiz's stores are
     hand-maintained for now; inventories drift the way clanker's did before
     its tools existed. Reuse clanker's tools pointed at this tree, or accept
     hand maintenance until the project is bigger? *Blocks:* nothing.
@@ -358,20 +396,20 @@ Ordering inside each section is by what blocks implementation first.
     names only `CHANGELOG.md`, `README.md`, `RELEASES.md`, `build.zig`,
     `build.zig.zon` and `src/`. Every design record lives under `docs/`,
     and PRD 0001 says a document "is the spec" until code replaces it, so a
-    host that adds spine as a dependency gets a library whose spec is not in
+    host that adds coppiz as a dependency gets a library whose spec is not in
     the package (SQLite and dqlite ship theirs). Excluding
     [qnd-notes.md](../qnd-notes.md) is clearly right; excluding `docs/` was
     never stated as a decision. Decide either way before the first host
-    fetches spine ([PRD 0005](prds/0005-embedding-the-library-as-the-product.md)
+    fetches coppiz ([PRD 0005](prds/0005-embedding-the-library-as-the-product.md)
     phase 5) or the first public release. *Blocks:* PRD 0005 phase 5.
     *Answer from:* the operator.
 
 ## I. Scaling past one group (PRD 0006)
 
-48. **Grouping unit and range key.** Ownership by whole ledger is the
+48. **Grouping unit and range key.** Ownership by whole journal is the
     drafted unit; the drafted split key is the author-id prefix so each
     author's stream stays in one group. Is that enough for hosts whose
-    ledgers have many authors and one hot range, or is a payload-derived
+    journals have many authors and one hot range, or is a payload-derived
     key needed (which breaks `author_seq` density)? *Blocks:* PRD 0006
     phase 3. *Answer from:* OQ 46's host shapes; measurement.
 49. **When does the group count need to be uneven?** Under `seniority`,
@@ -382,7 +420,7 @@ Ordering inside each section is by what blocks implementation first.
     leadership modes and the same concurrency model as members — election is
     a pure function over an abstract member type, and a group supplies the
     same five inputs (identity = genesis hash, seniority = its `join` slot in
-    the federation ledger, address, liveness and sync via its current
+    the federation journal, address, liveness and sync via its current
     representative). An uneven group count is therefore **not** a
     requirement; it would become one only if a `quorum` mode were chosen at
     the federation level, which is roadmap and not designed. Recorded in
@@ -398,28 +436,28 @@ Ordering inside each section is by what blocks implementation first.
     *slots* or only to payloads, given `ttl.retain`? *Blocks:* PRD 0006
     phase 4.
 51. **Cross-group routing and read semantics.** Forwarding an append to the
-    owner is drafted; a read of a non-owned ledger either forwards (one
+    owner is drafted; a read of a non-owned journal either forwards (one
     round-trip, fresh) or hits a follower copy (local, lagging). Which is the
     default, and does `write.ack` mean "owner slotted" or "local forwarded"?
     Relates to OQ 3 and OQ 31. *Blocks:* PRD 0006 phase 2.
 52. **What group identity must the core headers carry now?** Drafted:
-    segment headers carry ledger id + sequencing group id; entry headers
-    carry the ledger id but no group id ([PRD
-    0001](prds/0001-ledger-core.md)), and slot headers carry neither (the
+    segment headers carry journal id + sequencing group id; entry headers
+    carry the journal id but no group id ([PRD
+    0001](prds/0001-journal-core.md)), and slot headers carry neither (the
     slot's `leader` member id implies the group via that group's chain).
     Is the implication enough for a verifier in another group, or should
     the slot carry the group id explicitly (16 more bytes per slot,
     forever)? *Blocks:* PRD 0001 phase 1 — the format freeze.
 53. **Membership and discovery at 10⁵.** A new instance must find *a*
     member of *some* group: seed lists in local config (drafted), a
-    directory ledger in the federation, or DNS. Which, and how does an
+    directory journal in the federation, or DNS. Which, and how does an
     instance choose a group to join (operator-assigned, nearest, smallest)?
     *Blocks:* PRD 0006 phase 1.
 54. **Measurements that replace the tier numbers.** 32 per group and
     ~1,000 / ~100,000 per tier are intent. The first measurement set: size-1
     append latency; per-member connection count and memory at 8, 16, 32
     members; append-to-visible p50/p99 across one group; join/backfill time
-    for a 1 GB ledger; then the same at 3 × 8 and 10 × 8 in two groups of
+    for a 1 GB journal; then the same at 3 × 8 and 10 × 8 in two groups of
     groups. Where is the harness and what hardware counts? *Blocks:*
     promoting any tier number from intent to claim.
 
@@ -432,11 +470,11 @@ becomes concrete:
   cluster — or is "one cluster per consumer" the rule?
 - **Quota and fairness** between authors (a runaway writer filling every
   member's disk).
-- **Ledger-level access control** — may every member append to every ledger?
+- **Journal-level access control** — may every member append to every journal?
 - **Time travel API** (`at_slot`) exposure and cost.
 - **Entry payload validation hooks** — a host-supplied predicate the leader
   runs before slotting, so a consumer can enforce its own schema at the
-  ledger boundary (would make refusal a chain-wide rule only if every member
+  journal boundary (would make refusal a chain-wide rule only if every member
   runs the same hook, which brings the OQ 1 trust question back).
 - **Migration story off JSONL** for clanker's existing streams (import with
   original timestamps preserved in `author_ts_ms`?).
@@ -445,8 +483,8 @@ becomes concrete:
 - **Windows/macOS support** — `std.Io` covers them; flock semantics and
   fsync guarantees differ; untested.
 - **Locality and placement** — which group a consumer's appends go to when
-  several could own a new ledger; geography-aware placement is a federation
+  several could own a new journal; geography-aware placement is a federation
   policy nobody has specified.
 - **Cross-group stale marks and checkpoints** — a `stale` is authored where
-  the author lives, but the ledger lives in its owning group; forwarding
+  the author lives, but the journal lives in its owning group; forwarding
   makes it work, but the checkpoint cadence is the owner's clock.

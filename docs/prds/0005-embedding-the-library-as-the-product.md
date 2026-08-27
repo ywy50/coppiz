@@ -3,7 +3,7 @@
 ## Status
 
 Draft — 2026-08-21, reframed the same day after the operator clarified that
-spine is for anyone with this class of problem, not for clanker specifically.
+coppiz is for anyone with this class of problem, not for clanker specifically.
 Depends on every other PRD for what is being exposed, and on
 [RFC 0001](../rfcs/0001-library-first-or-service-first.md) for which surface
 leads; [ADR 0003](../adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)
@@ -24,10 +24,10 @@ extra infrastructure to set up. What makes SQLite easy to embed is specific:
 - it needs no network, no identity, no configuration to be useful at size 1;
 - several processes on one machine can open the same file.
 
-A replicated ledger cannot be *that* simple in every respect — it has peers,
+A replicated journal cannot be *that* simple in every respect — it has peers,
 a key, a listener — but it can be that simple *at size 1* and grow from there
 by configuration of the same node ([ADR 0003](../adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
-The last SQLite property, several processes on one file, is the one spine
+The last SQLite property, several processes on one file, is the one coppiz
 does not inherit for free and is [OQ 47](../open-questions.md).
 
 Who this is for: any program that needs a durable, replicated, append-only
@@ -40,10 +40,10 @@ host and the one whose constraints are best known; its specifics are an
 
 ## Goals
 
-1. A Zig host adds spine as a `build.zig.zon` dependency and opens a ledger
+1. A Zig host adds coppiz as a `build.zig.zon` dependency and opens a journal
    with a data directory and nothing else; no peers means a one-member
    cluster.
-2. The same library, wrapped, is the `spine` node binary: a host that does
+2. The same library, wrapped, is the `coppiz` node binary: a host that does
    not want to link it runs it and speaks to it over a small API.
 3. Nothing outside the library is required at any size (ADR 0003): no
    coordinator, daemon, broker or discovery service.
@@ -69,31 +69,31 @@ host and the one whose constraints are best known; its specifics are an
 **The library API** (sketch; names will move, shape should not):
 
 ```zig
-const spine = @import("spine");
+const coppiz = @import("coppiz");
 
-var node = try spine.Node.open(io, gpa, .{ .data_dir = "data/spine" });
+var node = try coppiz.Node.open(io, gpa, .{ .data_dir = "data/coppiz" });
 defer node.close();
 
-const ledger = try node.ledger("events");            // by name; creates if allowed
-const id = try ledger.append(payload, .{ .ttl_ms = 0, .ack = .slotted });
-try ledger.markStale(id);                            // only our own entries
+const journal = try node.journal("events");            // by name; creates if allowed
+const id = try journal.append(payload, .{ .ttl_ms = 0, .ack = .slotted });
+try journal.markStale(id);                            // only our own entries
 
-var it = try ledger.read(.{ .from = .{ .epoch = 0, .seq = 0 }, .include_stale = false });
+var it = try journal.read(.{ .from = .{ .epoch = 0, .seq = 0 }, .include_stale = false });
 while (try it.next()) |rec| { _ = rec.entry; _ = rec.slot; }
 
-const sub = try ledger.follow(cursor, onSlot, ctx);  // called on the host's io
-_ = node.leader(); _ = node.members(); _ = ledger.settings();
+const sub = try journal.follow(cursor, onSlot, ctx);  // called on the host's io
+_ = node.leader(); _ = node.members(); _ = journal.settings();
 ```
 
-The API takes a ledger by name or id and never assumes the local group owns
-it: when a ledger lives in another group ([PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)),
+The API takes a journal by name or id and never assumes the local group owns
+it: when a journal lives in another group ([PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)),
 `append` and `read` forward, and the host's code does not change.
 
 `Node.open` with no `[[peers]]` and no listener is the SQLite case: a
 one-member cluster, the process is its own leader, every call is local. The
 listener, peers and admission are fields of the same `open` options or of
-`spine.toml` in the data directory; adding them later is what turns the
-embedded ledger into a cluster member without changing the host's code.
+`coppiz.toml` in the data directory; adding them later is what turns the
+embedded journal into a cluster member without changing the host's code.
 
 **I/O and threads.** The library takes a `std.Io` from the host and does all
 network and disk work through it. Heartbeats, backfill and the leader's
@@ -104,12 +104,12 @@ like "one process owns the sockets" keep it.
 
 **One data directory, one process (v1).** `open` takes a flock on
 `<data_dir>/lock`; a second process gets `locked`. This is the one SQLite
-property spine does not have yet: SQLite lets N processes share one file
+property coppiz does not have yet: SQLite lets N processes share one file
 through file locks and a busy timeout, and a host that runs several short
 processes on one machine (clanker's `run`s beside its `serve`) would expect
 the same. The v1 answer is "the long-lived process owns the directory, the
 short-lived ones talk to it", and [OQ 47](../open-questions.md) asks whether
-spine should instead support multi-process opens natively.
+coppiz should instead support multi-process opens natively.
 
 **The node binary** is `src/main.zig`: the library plus a TOML config, a
 CLI (`init`, `run`, `status`, `members`, `admit`, `deny`, `append`, `read`,
@@ -121,13 +121,13 @@ both from one tree either way. (`settings schema` is PRD 0004's;
 **Service API shape** (if kept): HTTP/1.1 + JSON on a separate port from
 replication, for non-Zig hosts, for short-lived processes beside a
 long-lived node (the multi-process case above), and for operators. One
-resource per ledger, cursors as `epoch:seq`, follow as SSE. It is a thin
+resource per journal, cursors as `epoch:seq`, follow as SSE. It is a thin
 wrapper that calls the library — never a second implementation of any rule.
 
 **Examples directory.** `examples/` carries one minimal host per shape, each
 built by `zig build examples` and each a test: `embed-single/` (size 1, no
 network), `embed-cluster/` (three embedded nodes in one test process,
-partition and heal), `sidecar/` (a host speaking to a `spine` node). These
+partition and heal), `sidecar/` (a host speaking to a `coppiz` node). These
 are the contract that the library serves hosts in general; a change that
 breaks an example breaks the build.
 
@@ -149,27 +149,27 @@ it does today, read in its tree on 2026-08-21:
   (`POST /api/sessions/<id>/events`, backfill with `GET …/events?after=`),
   and a peer accepts a record only at `cursor + 1` into a replica database
   under `state/mesh/<owner>/sessions/`. That is a single-author, cursor-checked,
-  append-only stream — the exact shape of a spine ledger with one author.
+  append-only stream — the exact shape of a coppiz journal with one author.
 - Its other streams (`improvements.jsonl`, `token_stats.jsonl`,
   `autolearn.jsonl`, `reasoning.jsonl`) are JSONL files with no replication.
 - Sandboxed WASM guests never touch SQLite or the network directly; they go
   through name-gated host functions (`ck_session`, planned `ck_state`).
 
-How spine fits that host, two routes, both speaking to the same library:
+How coppiz fits that host, two routes, both speaking to the same library:
 
-| Route | How a guest reaches the ledger | clanker change | Trade |
+| Route | How a guest reaches the journal | clanker change | Trade |
 |---|---|---|---|
-| **A. library inside `serve`, behind a host function** (clanker RFC 0019 option A + T) | guest calls `ck_state` (name-gated, like `ck_chat`); host calls the library in-process | one host channel + routes; spine as a dependency beside the already-vendored SQLite | single static binary kept; keys and sockets never in the sandbox; the path clanker's RFC recommends |
-| **B. `spine` node beside clanker, guest or host speaks the service API** | a guest or native client speaks loopback HTTP to a `spine` process per instance ([RFC 0001](../rfcs/0001-library-first-or-service-first.md) option B) | `network_allow` to loopback | none to the harness — zero harness change, so it works for experiments today; but clanker's `network_allow` cannot scope a guest to one port, and a second daemon is what its PRD 0011 rules out |
+| **A. library inside `serve`, behind a host function** (clanker RFC 0019 option A + T) | guest calls `ck_state` (name-gated, like `ck_chat`); host calls the library in-process | one host channel + routes; coppiz as a dependency beside the already-vendored SQLite | single static binary kept; keys and sockets never in the sandbox; the path clanker's RFC recommends |
+| **B. `coppiz` node beside clanker, guest or host speaks the service API** | a guest or native client speaks loopback HTTP to a `coppiz` process per instance ([RFC 0001](../rfcs/0001-library-first-or-service-first.md) option B) | `network_allow` to loopback | none to the harness — zero harness change, so it works for experiments today; but clanker's `network_allow` cannot scope a guest to one port, and a second daemon is what its PRD 0011 rules out |
 
 What clanker would put in first: the event streams it already replicates by
 hand (session `events`, and the JSONL streams that have no replication at
-all) — single-author ledgers, which exercise replication and backfill without
+all) — single-author journals, which exercise replication and backfill without
 exercising leadership under contention. The ~16 KB of contended documents
-(goals, cards) next, as a ledger folded into state, which is what clanker's
+(goals, cards) next, as a journal folded into state, which is what clanker's
 board already is (its ADR 0001). Session *transcripts* and blobs stay in
 SQLite. The multi-process point above matters here: clanker's short-lived
-`run`/`repl` processes write session files directly today, and under spine
+`run`/`repl` processes write session files directly today, and under coppiz
 v1 they would append through `serve` instead — or OQ 47 is answered.
 
 **Dependencies.** All other PRDs; RFC 0001; ADR 0003. For the clanker
@@ -177,14 +177,14 @@ example: its RFC 0019 and stage-1 spike note.
 
 **Implementation.**
 
-1. `src/root.zig` — the public API surface over `src/ledger/` and
+1. `src/root.zig` — the public API surface over `src/journal/` and
    `src/cluster/`; `examples/embed-single/` built by `zig build examples`.
 2. `examples/embed-cluster/` once PRD 0003 exists.
 3. `src/main.zig` + `src/cli/` — the node CLI over the library;
    `examples/sidecar/`.
 4. `src/api/` — the service API (conditional on RFC 0001).
 5. First host integration, in that host's tree (for clanker: a branch that
-   fetches spine, adds `ck_state`, routes one stream through it behind a
+   fetches coppiz, adds `ck_state`, routes one stream through it behind a
    flag, measured against its spike note's three journeys — burst, backfill,
    hostile wire).
 
@@ -194,7 +194,7 @@ example: its RFC 0019 and stage-1 spike note.
 |---|---|
 | Host opens a data directory another process holds | `open` fails `locked`; never two nodes on one directory (v1; OQ 47) |
 | Host never calls `run()`/`tick()` | local appends work at size 1; with peers, nothing replicates and the failure detector never runs — `doctor` names it |
-| Library version and on-disk version differ | `open` refuses unknown newer formats; older formats are migrated only by an explicit `spine migrate` |
+| Library version and on-disk version differ | `open` refuses unknown newer formats; older formats are migrated only by an explicit `coppiz migrate` |
 | Service API reachable without auth | v1 binds loopback by default; a non-loopback bind without the auth setting is a startup warning ([OQ 38](../open-questions.md)) |
 
 ## Acceptance criteria
@@ -202,7 +202,7 @@ example: its RFC 0019 and stage-1 spike note.
 - [ ] (G1) `examples/embed-single/` opens, appends, reads and follows with no
   config beyond a directory; builds from a fresh checkout with
   `zig build examples`.
-- [ ] (G2) The `spine` binary and `examples/sidecar/` replicate to each other
+- [ ] (G2) The `coppiz` binary and `examples/sidecar/` replicate to each other
   (one embedded, one standalone) — proof that the two surfaces are one
   library.
 - [ ] (G3) A fresh checkout's `build.zig.zon` declares no dependencies and

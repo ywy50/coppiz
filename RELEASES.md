@@ -1,20 +1,20 @@
 # Release and compatibility policy
 
-spine has no published releases. Development happens at the version declared
+coppiz has no published releases. Development happens at the version declared
 in `build.zig.zon`; that value alone does not make a release. A version is
 published only when an immutable `vMAJOR.MINOR.PATCH` Git tag and a matching
 dated `CHANGELOG.md` section exist for the same commit.
 
 `build.zig.zon` is the single source of truth for the program version.
 `build.zig` reads it and hands the raw value to the library, which parses it
-into `spine.version` (`src/root.zig`) and fails the build for values that are
+into `coppiz.version` (`src/root.zig`) and fails the build for values that are
 not valid Semantic Versioning; the node binary imports the library and prints
 that value in its startup banner (the placeholder in `src/main.zig`; flag
 parsing, including a real `--version`, lands with the CLI).
 
 ## Compatibility contract
 
-spine uses Semantic Versioning with the following explicit pre-1.0 policy:
+coppiz uses Semantic Versioning with the following explicit pre-1.0 policy:
 
 - `0.MINOR.0` may make breaking changes. Release notes must label each break
   and give a concrete migration.
@@ -24,7 +24,7 @@ spine uses Semantic Versioning with the following explicit pre-1.0 policy:
 
 The public contract includes more than Zig declarations: the library API in
 `src/root.zig`; documented CLI commands, flags and output; the schema of
-ledger settings and local config and their defaults; the on-disk entry, slot,
+journal settings and local config and their defaults; the on-disk entry, slot,
 segment and snapshot formats (each carries a version a reader refuses when
 unknown); and the replication wire protocol once [OQ
 19](docs/open-questions.md) decides whether it is public (RFC 0001 keeps the
@@ -46,5 +46,5 @@ itself make a reachable surface private.
 
 A stable surface is deprecated before removal. The deprecation names its
 replacement, emits a warning where practical, and stays for at least one minor
-release. On-disk format changes ship with `spine migrate`, never with an
+release. On-disk format changes ship with `coppiz migrate`, never with an
 implicit rewrite at open.

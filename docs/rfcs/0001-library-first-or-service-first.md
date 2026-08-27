@@ -5,7 +5,7 @@
 Discussion — opened 2026-08-21. clanker's RFC 0019 (option T, Packaging)
 names this as "the new project's first design decision". Blocking question
 for [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md) phases 1 and 3;
-the core ([PRD 0001](../prds/0001-ledger-core.md)) can start before it is
+the core ([PRD 0001](../prds/0001-journal-core.md)) can start before it is
 decided.
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -40,7 +40,7 @@ equals doubles the stable surface before there is one user.
 3. One implementation of every rule: whichever surface is secondary must be a
    thin wrapper, never a second opinion (clanker's CLI/web-UI-over-one-tool
    rule).
-4. Size-1 simplicity: opening a ledger must be as cheap as opening a SQLite
+4. Size-1 simplicity: opening a journal must be as cheap as opening a SQLite
    file.
 
 **Out of scope.** The wire protocol for replication between members ([OQ
@@ -78,7 +78,7 @@ host*). The stage-1 spike RFC 0019 names has not been run.
 - **Cons:** non-Zig consumers wait for the wrapper or a C ABI; the public
   contract is Zig declarations, which pre-1.0 Zig churn makes fragile; a
   library cannot be upgraded independently of its host (clanker must rebuild
-  to pick up a spine fix).
+  to pick up a coppiz fix).
 - **Cost to adopt:** none beyond building the core; this is the default
   direction of the PRDs as drafted.
 - **Cost to leave:** moderate — moving to service-first later means the API
@@ -89,11 +89,11 @@ host*). The stage-1 spike RFC 0019 names has not been run.
 
 ### Option B — Service-first; the library is internal
 
-- **What it is:** the `spine` node and its HTTP/JSON API are the product; the
+- **What it is:** the `coppiz` node and its HTTP/JSON API are the product; the
   Zig library exists but is not a stable contract. Hosts, clanker included,
   run a node and speak HTTP.
 - **Maturity:** the rqlite/etcd shape; every language can use it on day one.
-- **How it would fit:** clanker runs a `spine` process per instance and a
+- **How it would fit:** clanker runs a `coppiz` process per instance and a
   WASM guest or native client speaks loopback HTTP (PRD 0005 route B).
 - **Pros:** language-neutral from the start; independent upgrade of the
   store; the contract is an HTTP API, which versions cleanly; operators can
@@ -140,7 +140,7 @@ host*). The stage-1 spike RFC 0019 names has not been run.
 
 ### Status quo — do nothing
 
-- **What it is:** no spine; clanker keeps files and its in-tree fan-out.
+- **What it is:** no coppiz; clanker keeps files and its in-tree fan-out.
 - **Pros:** zero work.
 - **Cons:** RFC 0019's problem stands; nothing general-purpose exists in Zig.
 - **Cost to adopt:** zero now; the breakage and non-pooling RFC 0019 lists

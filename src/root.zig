@@ -1,10 +1,10 @@
-//! spine — a replicated, append-only ledger library.
+//! coppiz — a replicated, append-only store library.
 //!
-//! Only the package version lives here so far; the ledger design itself is
+//! Only the package version lives here so far; the journal design itself is
 //! not started. It lives in docs/: start at docs/README.md, then docs/prds/
 //! for what each part is meant to be and docs/open-questions.md for what is
 //! still undecided. This file is also the library's test root: it gives
-//! `zig build test` its library half and claims the module name `spine`.
+//! `zig build test` its library half and claims the module name `coppiz`.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -18,6 +18,13 @@ pub const version: std.SemanticVersion =
         @compileError(
             "build.zig.zon version is not semver: '" ++ build_options.version_text ++ "'",
         );
+
+/// The library's public surface: the single-member node and the local
+/// config parser (PRD 0001 phase 4, PRD 0004 phase 4). The settings schema
+/// and the journal primitives are reachable through these modules.
+pub const journal = @import("journal/journal.zig");
+pub const config = @import("config/local.zig");
+pub const render = @import("settings/render.zig");
 
 comptime {
     // Every src/ module should be referenced here (or from src/main.zig
@@ -44,6 +51,23 @@ test "all public declarations analyze" {
     // New submodules go here as they are added:
     //     std.testing.refAllDecls(@import("sub/x.zig"));
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("journal/entry.zig"));
+    std.testing.refAllDecls(@import("journal/slot.zig"));
+    std.testing.refAllDecls(@import("journal/expiry.zig"));
+    std.testing.refAllDecls(@import("journal/chain.zig"));
+    std.testing.refAllDecls(@import("journal/segment.zig"));
+    std.testing.refAllDecls(@import("journal/store.zig"));
+    std.testing.refAllDecls(@import("journal/queue.zig"));
+    std.testing.refAllDecls(@import("settings/schema.zig"));
+    std.testing.refAllDecls(@import("settings/validate.zig"));
+    std.testing.refAllDecls(@import("settings/fold.zig"));
+    std.testing.refAllDecls(@import("settings/render.zig"));
+    std.testing.refAllDecls(@import("config/local.zig"));
+    std.testing.refAllDecls(@import("journal/journal.zig"));
+    std.testing.refAllDecls(@import("cluster/membership.zig"));
+    std.testing.refAllDecls(@import("cluster/election.zig"));
+    std.testing.refAllDecls(@import("cluster/epoch.zig"));
+    std.testing.refAllDecls(@import("sim/sim.zig"));
 }
 
 test "version round-trips the zon text the build hands over" {
@@ -51,7 +75,7 @@ test "version round-trips the zon text the build hands over" {
     // the library exposes (and main prints) must be that text parsed back
     // out unchanged. major == 0 alone cannot see the wiring break: if
     // build.zig fed any other parseable value here, every test stayed green
-    // while `spine` reported a version no release carries.
+    // while `coppiz` reported a version no release carries.
     var buffer: [64]u8 = undefined;
     const formatted = try std.fmt.bufPrint(&buffer, "{f}", .{version});
     try std.testing.expectEqualStrings(build_options.version_text, formatted);
