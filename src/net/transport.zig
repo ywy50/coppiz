@@ -635,6 +635,20 @@ fn acceptAndEcho(listener: *Listener) error{Canceled}!void {
     conn.send(tio, "pong") catch {};
 }
 
+fn acceptEchoThenExpectEof(listener: *Listener) error{Canceled}!void {
+    var conn = listener.accept(tio) catch return;
+    defer conn.close(tio);
+    const body = conn.recv(tio, test_alloc) catch return;
+    defer test_alloc.free(body);
+    conn.send(tio, "pong") catch {};
+    if (conn.recv(tio, test_alloc)) |extra| {
+        test_alloc.free(extra);
+        @panic("drop did not end the live connection: recv returned data");
+    } else |err| if (err != error.EndOfStream) {
+        @panic("drop did not end the live connection with EndOfStream");
+    }
+}
+
 test "a dropped edge refuses dials and ends live connections" {
     var hub = Hub.init(test_alloc);
     defer hub.deinit();
@@ -643,19 +657,20 @@ test "a dropped edge refuses dials and ends live connections" {
     var dialer = try hub.dialer(test_alloc, "node-b");
     defer dialer.deinit();
 
-    // The first connection works end to end.
+    // The first connection works end to end; the accept side then blocks on
+    // a second recv, which the drop below must end with EndOfStream.
     var group: std.Io.Group = .init;
-    group.async(tio, acceptAndEcho, .{&listener});
+    group.async(tio, acceptEchoThenExpectEof, .{&listener});
     var conn = try dialer.connect(tio, test_alloc, "node-a");
     defer conn.close(tio);
     try conn.send(tio, "ping");
     const reply = try conn.recv(tio, test_alloc);
     defer test_alloc.free(reply);
     try std.testing.expectEqualStrings("pong", reply);
-    try group.await(tio);
 
-    // Dropping the edge refuses new dials.
+    // Dropping the edge ends the live connection and refuses new dials.
     try hub.drop(test_alloc, tio, "node-b", "node-a");
+    try group.await(tio);
     try std.testing.expectError(
         error.ConnectionRefused,
         dialer.connect(tio, test_alloc, "node-a"),
