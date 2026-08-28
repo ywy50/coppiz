@@ -51,9 +51,9 @@ const Node = struct {
     listener: transport.Listener,
     dialer: transport.Transport,
     /// The host's wire client to this node (its own operator channel). The
-    /// demo reads through it: the node's folds are owned by the loop, so a
-    /// host must never read them directly while the loop runs — reads go
-    /// through the loop like any wire client's.
+    /// demo polls join/heal state through it; payload reads go through the
+    /// node's loop instead (`cn.localReadRange`), so the host never touches
+    /// the folds directly while the loop runs.
     client: *coppiz.net.client.Client,
     /// The seed list handed to the node's options: the loop's bootstrap
     /// reads it for the node's whole life, so the demo owns it (ClusterNode
@@ -145,18 +145,20 @@ fn expectEq(comptime T: type, expected: T, actual: T) !void {
 }
 
 /// Whether the four demo payloads have all replicated to every member, read
-/// over the wire (each node's operator channel).
+/// through each member's own loop (`cn.localReadRange` — the host's read
+/// path, PRD 0005).
 fn allReplicated(
     nodes_list: []const *const Node,
     payloads_list: []const []const u8,
 ) !bool {
+    const main_id = nodes_list[0].node.journalIdByName("main").?;
     for (nodes_list) |n| {
         const Ctx = struct {
             wanted: []const []const u8,
             found: [4]bool = [_]bool{false} ** 4,
         };
         var ctx = Ctx{ .wanted = payloads_list };
-        try n.client.read("main", null, false, false, &ctx, struct {
+        try n.cn.localReadRange(n.cn.io, main_id, null, null, false, false, &ctx, struct {
             fn on(
                 c: *Ctx,
                 _: *const journal.slot.Slot,
