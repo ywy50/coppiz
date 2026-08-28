@@ -92,6 +92,12 @@ pub const Queue = struct {
             good = off;
         }
         if (off != records.len) {
+            // A torn tail is the crash's partial write at the file's end and
+            // may be truncated; a break with valid records after it is
+            // mid-file damage, and truncating would silently drop entries
+            // that were acknowledged and fsynced (PRD 0001 G3, as
+            // `Store.openJournal` does).
+            if (findValidRecordAfter(records, off)) return error.Corrupt;
             try file.setLength(io, header_len + good);
         }
         if (len != header_len + good) try file.sync(io);
@@ -205,6 +211,20 @@ fn encodeRecord(en: *const entry.Entry, buf: []u8) void {
     @memcpy(buf[record_prefix_len + entry.header_len ..], en.payload);
     const crc = std.hash.crc.Crc32.hash(buf[record_prefix_len..]);
     std.mem.writeInt(u32, buf[4..8], crc, .little);
+}
+
+/// Whether any valid record begins at or after `from` — the test that tells
+/// a torn tail (nothing valid follows) from mid-file corruption (valid data
+/// follows; refusing beats truncating away good records). Byte-wise because
+/// a torn write can start at any byte.
+fn findValidRecordAfter(records: []const u8, from: usize) bool {
+    var off = from;
+    while (off < records.len) : (off += 1) {
+        const rec_len = scanRecord(records[off..]) catch continue;
+        _ = entry.decode(records[off + record_prefix_len .. off + rec_len]) catch continue;
+        return true;
+    }
+    return false;
 }
 
 /// Validates one record's prefix and CRC, returning its total length.

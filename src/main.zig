@@ -245,7 +245,19 @@ fn cmdServe(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void 
     defer seed_peers.deinit(gpa);
     for (cfg.peers.items) |peer| {
         if (peer.public_key) |hex| {
-            if (hexKeyToBytes(hex)) |key| try allowlist.append(gpa, key);
+            // A key that does not parse must not be dropped: the peer would
+            // still be dialed as a seed and then refused at hello, with the
+            // allowlist silently one entry short and nothing said about it.
+            const key = hexKeyToBytes(hex) orelse {
+                var stderr_writer = std.Io.File.stderr().writer(io, &stderr_buf);
+                try stderr_writer.interface.print(
+                    "coppiz: peer {s}: public_key must be 64 hex characters\n",
+                    .{peer.address},
+                );
+                try stderr_writer.interface.flush();
+                return error.InvalidPeerPublicKey;
+            };
+            try allowlist.append(gpa, key);
         }
         try seed_peers.append(gpa, peer.address);
     }

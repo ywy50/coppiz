@@ -464,14 +464,20 @@ pub const Hub = struct {
         const ep = try allocator.create(Endpoint);
         errdefer allocator.destroy(ep);
         ep.* = .{ .allocator = allocator };
-        try self.endpoints.put(allocator, try allocator.dupe(u8, address), ep);
         const l = try allocator.create(HubListener);
         errdefer allocator.destroy(l);
+        const l_address = try allocator.dupe(u8, address);
+        errdefer allocator.free(l_address);
         l.* = .{
             .hub = self,
-            .address = try allocator.dupe(u8, address),
+            .address = l_address,
             .endpoint = ep,
         };
+        const key = try allocator.dupe(u8, address);
+        errdefer allocator.free(key);
+        // Last fallible step: once the map owns `ep` no errdefer above may
+        // fire, or `Hub.deinit` would destroy an endpoint already freed.
+        try self.endpoints.put(allocator, key, ep);
         return .{
             .ctx = l,
             .accept_fn = HubListener.acceptFn,
@@ -583,7 +589,6 @@ const HubDialer = struct {
             pipe.out.deinit();
             pipe.in.deinit();
         }
-        try self.hub.pipes.append(hub_alloc, pipe);
 
         const from_conn = try hub_alloc.create(PipeConn);
         errdefer hub_alloc.destroy(from_conn);
@@ -599,6 +604,9 @@ const HubDialer = struct {
             .in = &pipe.out,
             .out = &pipe.in,
         };
+        // Last fallible step: the errdefers above free the pipe, so the hub
+        // must not own it until nothing can still fail.
+        try self.hub.pipes.append(hub_alloc, pipe);
         ep.pushConn(io, to_conn.conn());
         _ = allocator; // connections are hub-owned; the caller's allocator is unused
         return from_conn.conn();
