@@ -51,6 +51,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-28 — `Direction.readInto` frees an interior pointer on a partial read (latent)](bugs/2026-08-28-direction-partial-read-free.md)
 - [2026-08-28 — `HubListener.closeFn` writes `endpoint.closed` without the endpoint mutex (latent)](bugs/2026-08-28-hub-listener-close-race.md)
 - [2026-08-28 — PR #19's install-only-coppiz wiring broke the G2 sidecar test; `zig build test` was red on `main` again](bugs/2026-08-28-g2-sidecar-needs-install.md)
+- [2026-08-28 — `ServingProc.stop` burns 5 s per killed serve: the process-level tests spent ~60 s of the gate on zombie polls](bugs/2026-08-28-servingproc-stop-zombie-poll.md)
 - [2026-08-29 — `reforwardQueue`'s leader-slot branches never complete `pending_locals`: an embedded host's `localAppend` hangs forever on election](bugs/2026-08-29-reforward-queue-loses-local-completion.md)
 - [2026-08-29 — merge data re-slots refuse `settings`/`checkpoint`/`stale` records: the heal never completes (and a `leave` before data can lose the branch)](bugs/2026-08-29-merge-data-reslot-refusals.md)
 - [2026-08-29 — the now-live merge settle rule kills the leader's checkpoint cadence: `MergeSettling` is fatal to the loop after every heal](bugs/2026-08-29-settle-rule-kills-checkpoint-cadence.md)

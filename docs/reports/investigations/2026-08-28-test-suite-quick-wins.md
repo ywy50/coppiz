@@ -192,11 +192,49 @@ instances, no stack, no repro since).
 - The 196–212 s gate times recorded above were measured under concurrent
   build load. On an idle machine the gate is ~75 s: `lib_tests` 153 tests in
   30 s and `exe_tests` 13 tests in ~60 s run in parallel, everything else
-  under 2 s. `exe_tests` is now the critical path; its profile is dominated
-  by three process-level tests (grows 1→2→3: 31 s, different-genesis
-  refused: 22 s, live reconfiguration: 10 s) whose time is real TCP cluster
-  convergence in Debug plus ~55 ms per `coppiz status`/`read` poll spawn —
-  rec 3's "do not shrink the e2e timings" applies.
+  under 2 s. An initial profile attributed `exe_tests`' time to three slow
+  tests (grows, different-genesis, reconfiguration) — that attribution was
+  off by one (the gap-before-completion method) and the slowness was not
+  cluster convergence at all.
+
+### The real `exe_tests` cost: a 5 s zombie poll per serve kill
+
+The process-level tests' cluster work is sub-second (verified by
+replicating every phase by hand: joins, settings, reads and refusals all
+complete in 0.1–0.3 s). The ~60 s of `exe_tests` was the test harness:
+`ServingProc.stop` SIGKILLs a serve and then polls `kill(pid, 0)` up to
+500 × 10 ms, but the killed child was never reaped, so it sat as a zombie
+and the poll always burned the full 5 s — and every serve was stopped twice
+(explicitly and via `defer`). Six stops in the "grows" test alone = 30 s of
+polling. Fixed: `stop` now reaps the child (`wait`) when it still exists,
+guarded so the double-stop's second wait is skipped (a second wait panics
+the io — wait4 → ECHILD). `exe_tests`: 60 s → 4 s; the gate: ~75 s → ~31 s
+([bug 2026-08-28 — `ServingProc.stop` burns 5 s per killed serve](../bugs/2026-08-28-servingproc-stop-zombie-poll.md)).
+
+### The `lib_tests` cost: fixed settle sleeps → condition polls (gate ~31 s → ~20 s)
+
+With the harness clean, `lib_tests` (31 s) was the critical path. A complete
+per-test profile (the pass-1 profile was cut short by the OQ 62 spin) shows
+the six in-process cluster e2e tests are ~27 s of it, and their cost is the
+fixed wall-clock waits: ~7 s of semantic waits (suspect timeouts, TTL
+expiries, the G4 checkpoint cadence — irreducible, rec 3) and ~10 s of
+"settle" sleeps ("let the backfill finish", "let the broadcast land") whose
+conditions are directly observable in-process:
+
+- the backfill settles wait on `ClusterNode.syncing` (cleared only when the
+  control + data sync reaches the head — the exact "backfill done" state),
+- the broadcast settle in e2e (c) waits on B/C's control folds holding the
+  new `leadership.mode` value.
+
+Six fixed settles became condition polls with 10 s caps: strictly more
+robust (a poll waits until the state really holds — a slow machine no longer
+has to fit inside a fixed guess) and faster on fast machines. `lib_tests`:
+31 s → 20 s; the gate: ~31 s → ~20.4 s (three consecutive green runs,
+261/261 tests). The remaining fixed waits are semantic (G4's 800 ms cadence
+and 150 ms burst spacing). The OQ 62 spin has not reproduced in ~20
+consecutive direct runs since the pass-2 busy-spin removal — correlation
+consistent with that change having removed the trigger, though the root
+cause is still unknown.
 
 ### Recommendations 2 and 3
 
@@ -205,7 +243,10 @@ instances, no stack, no repro since).
   binary), never as an executable.
 - Recommendation 3 stands as written: do not shrink the e2e timings. The
   measured profile confirms they are the suite's cost and that the waits
-  exit early; a timing change would alter what the tests verify.
+  exit early; a timing change would alter what the tests verify. The
+  settle-wait conversions above do not violate it: they replace fixed
+  guesses with waits on the actual observed state, which is a robustness
+  improvement, not a timing change.
 
 ## References
 
@@ -213,7 +254,8 @@ instances, no stack, no repro since).
   [2026-08-28 — `zig build test` is red: `Hub.deinit(self, io)` arity](../bugs/2026-08-28-build-test-red-hub-deinit-arity.md),
   [2026-08-28 — the CLI test root uses `std.c.getpid()` without linking libc](../bugs/2026-08-28-build-test-red-libc-getpid.md),
   [2026-08-28 — the process-level e2e tests race the install step](../bugs/2026-08-28-process-tests-race-install.md),
-  [2026-08-28 — PR #19's install-only-coppiz wiring broke the G2 sidecar test](../bugs/2026-08-28-g2-sidecar-needs-install.md)
+  [2026-08-28 — PR #19's install-only-coppiz wiring broke the G2 sidecar test](../bugs/2026-08-28-g2-sidecar-needs-install.md),
+  [2026-08-28 — `ServingProc.stop` burns 5 s per killed serve](../bugs/2026-08-28-servingproc-stop-zombie-poll.md)
   (all Resolved by this work)
 - Follow-up: [OQ 62](../../open-questions.md) — the intermittent CPU spin
 - Code: `build.zig` (addChecks at build.zig:160-233; examples at
