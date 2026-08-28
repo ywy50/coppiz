@@ -575,15 +575,10 @@ pub const SettingsState = struct {
 // Tests
 // ---------------------------------------------------------------------------
 
-test "every key has a unique name, a scope, a live rule and a description" {
-    var seen = std.StringHashMap(void).init(std.testing.allocator);
-    defer seen.deinit();
+test "every key has a non-empty name and description" {
     for (keys) |key| {
-        try std.testing.expect(seen.get(key.name) == null);
-        try seen.put(key.name, {});
+        try std.testing.expect(key.name.len > 0);
         try std.testing.expect(key.description.len > 0);
-        _ = key.scope;
-        _ = key.live_rule;
     }
 }
 

@@ -385,7 +385,7 @@ const FuzzCtx = struct {
         // of bounds, and a successful decode must consume exactly the
         // declared record.
         const got = decode(buf[0..len]) catch return;
-        try std.testing.expectEqual(header_len + got.payload.len, buf.len);
+        try std.testing.expectEqual(header_len + got.payload.len, len);
     }
 };
 

@@ -329,13 +329,14 @@ test "a minimal config parses into its fields" {
     try std.testing.expectEqual(@as(usize, 3), config.genesis.items.len);
 
     const mode = schema.keyIndex("leadership.mode").?;
+    try std.testing.expectEqual(mode, config.genesis.items[0].key);
     const mode_name = schema.enumName(mode, config.genesis.items[0].value.enum_value).?;
     try std.testing.expectEqualStrings("configured", mode_name);
     const authorities = schema.keyIndex("leadership.authorities").?;
+    try std.testing.expectEqual(authorities, config.genesis.items[2].key);
     try std.testing.expectEqualStrings("a1b2", config.genesis.items[2].value.string_list[0]);
     const list = config.genesis.items[2].value.string_list;
     try std.testing.expectEqualStrings("node.example", list[1]);
-    try std.testing.expect(authorities == schema.keyIndex("leadership.authorities").?);
 }
 
 test "a journal setting in local config is a startup error naming the layer" {

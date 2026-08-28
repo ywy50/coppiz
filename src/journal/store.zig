@@ -908,8 +908,11 @@ test "the directory lock excludes a second opener and releases on close" {
     var env = TestEnv.init();
     defer env.deinit();
     const store = try env.openStore();
-    defer store.deinit();
     try std.testing.expectError(error.AlreadyOpen, env.openStore());
+    store.deinit();
+
+    const reopened = try env.openStore();
+    defer reopened.deinit();
 }
 
 test "a small seal threshold spans segments and reopens cleanly" {
