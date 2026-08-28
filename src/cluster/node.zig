@@ -2897,12 +2897,20 @@ test "e2e (b): partition a 2-member seniority cluster, write on both sides, heal
         }
         try std.testing.expect(joined);
     }
-    // Let B's backfill finish: a fixed wall-clock wait. The wait is an
-    // io.sleep, not a busy spin — the test runs on the main thread and the
-    // node loops on the io's worker threads, so the loops keep running
-    // during the sleep (the spin it replaced was burning a core for nothing).
+    // Let B's backfill finish before the partition severs them: wait for
+    // the node to stop syncing (control + data journals at the head)
+    // instead of a fixed guess at the backfill time.
     {
-        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(2000), .awake) catch {};
+        const deadline = wallMs(tio) + 10_000;
+        var synced = false;
+        while (wallMs(tio) < deadline) {
+            if (!cn_b.syncing) {
+                synced = true;
+                break;
+            }
+            std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+        }
+        try std.testing.expect(synced);
     }
     // Partition both ways.
     try hub.drop(test_alloc, tio, "a", "b");
@@ -3149,8 +3157,26 @@ test "e2e (c): configured leadership with a stall fallback never elects without 
         try settings_fold.encodeChanges(&changes, buf);
         const reply = try a.client.settings("__cluster__", buf);
         try std.testing.expectEqual(@as(usize, 0), reply.refusal.len);
-        // Let the broadcast land on B and C before partitioning.
-        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(2000), .awake) catch {};
+        // The settings must land on B and C before the partition severs
+        // them; wait for the actual value on both control folds instead of
+        // a fixed guess at the broadcast time (a poll is also robust on
+        // slow machines — it waits until the broadcast has really landed).
+        {
+            const deadline = wallMs(tio) + 10_000;
+            var landed = false;
+            while (wallMs(tio) < deadline) {
+                const b_mode = b.node.control.settings.getEnum(mode_key);
+                const c_mode = c.node.control.settings.getEnum(mode_key);
+                if (std.mem.eql(u8, b_mode, "configured") and
+                    std.mem.eql(u8, c_mode, "configured"))
+                {
+                    landed = true;
+                    break;
+                }
+                std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+            }
+            try std.testing.expect(landed);
+        }
     }
 
     // A still leads (the only authority).
@@ -3301,9 +3327,20 @@ fn ttlTrioInit(
         const hc = trio.c.client.hello() catch return error.NotJoined;
         if (hb.epoch < 1 or hc.epoch < 1) return error.NotJoined;
     }
-    // Let the joins and backfills settle before appends race them.
+    // Let the joins and backfills settle before appends race them: wait for
+    // every node to stop syncing instead of a fixed guess at the backfill
+    // time.
     {
-        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(1500), .awake) catch {};
+        const deadline = wallMs(tio) + 10_000;
+        var settled = false;
+        while (wallMs(tio) < deadline) {
+            if (!trio.a.cn.syncing and !trio.b.cn.syncing and !trio.c.cn.syncing) {
+                settled = true;
+                break;
+            }
+            std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+        }
+        try std.testing.expect(settled);
     }
     return trio;
 }
@@ -3621,9 +3658,19 @@ test "e2e: a newly elected leader slots its own queued entries" {
         }
         try std.testing.expect(joined);
     }
-    // Let B's backfill settle before the partition.
+    // Let B's backfill settle before the partition: wait for the node to
+    // stop syncing instead of a fixed guess at the backfill time.
     {
-        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(1500), .awake) catch {};
+        const deadline = wallMs(tio) + 10_000;
+        var synced = false;
+        while (wallMs(tio) < deadline) {
+            if (!b.cn.syncing) {
+                synced = true;
+                break;
+            }
+            std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+        }
+        try std.testing.expect(synced);
     }
 
     try hub.drop(test_alloc, tio, "a", "b");
@@ -3707,7 +3754,18 @@ test "embedded host appends through the loop from its own thread (PRD 0005)" {
         const hb = b.client.hello() catch return error.NotJoined;
         const hc = c.client.hello() catch return error.NotJoined;
         if (hb.epoch < 1 or hc.epoch < 1) return error.NotJoined;
-        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(1500), .awake) catch {};
+        // Settle = the joiners' backfills reached the head; wait for that
+        // state instead of a fixed guess at the backfill time.
+        const settle_deadline = wallMs(tio) + 10_000;
+        var settled = false;
+        while (wallMs(tio) < settle_deadline) {
+            if (!b.cn.syncing and !c.cn.syncing) {
+                settled = true;
+                break;
+            }
+            std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+        }
+        try std.testing.expect(settled);
     }
 
     // The host's own writes: through the follower (forwarded) and the
@@ -3787,7 +3845,18 @@ test "embedded host reads through the loop from its own thread (PRD 0005)" {
         }
         const hb = b.client.hello() catch return error.NotJoined;
         if (hb.epoch < 1) return error.NotJoined;
-        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(1500), .awake) catch {};
+        // Settle = B's backfill reached the head; wait for that state
+        // instead of a fixed guess at the backfill time.
+        const settle_deadline = wallMs(tio) + 10_000;
+        var settled = false;
+        while (wallMs(tio) < settle_deadline) {
+            if (!b.cn.syncing) {
+                settled = true;
+                break;
+            }
+            std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+        }
+        try std.testing.expect(settled);
     }
 
     // The host's own writes: on the follower (forwarded) and on the leader

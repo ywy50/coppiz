@@ -210,8 +210,31 @@ polling. Fixed: `stop` now reaps the child (`wait`) when it still exists,
 guarded so the double-stop's second wait is skipped (a second wait panics
 the io — wait4 → ECHILD). `exe_tests`: 60 s → 4 s; the gate: ~75 s → ~31 s
 ([bug 2026-08-28 — `ServingProc.stop` burns 5 s per killed serve](../bugs/2026-08-28-servingproc-stop-zombie-poll.md)).
-`lib_tests` (30 s) is now the critical path — the in-process cluster e2e,
-whose cost is the semantic settle/expiry waits (rec 3).
+
+### The `lib_tests` cost: fixed settle sleeps → condition polls (gate ~31 s → ~20 s)
+
+With the harness clean, `lib_tests` (31 s) was the critical path. A complete
+per-test profile (the pass-1 profile was cut short by the OQ 62 spin) shows
+the six in-process cluster e2e tests are ~27 s of it, and their cost is the
+fixed wall-clock waits: ~7 s of semantic waits (suspect timeouts, TTL
+expiries, the G4 checkpoint cadence — irreducible, rec 3) and ~10 s of
+"settle" sleeps ("let the backfill finish", "let the broadcast land") whose
+conditions are directly observable in-process:
+
+- the backfill settles wait on `ClusterNode.syncing` (cleared only when the
+  control + data sync reaches the head — the exact "backfill done" state),
+- the broadcast settle in e2e (c) waits on B/C's control folds holding the
+  new `leadership.mode` value.
+
+Six fixed settles became condition polls with 10 s caps: strictly more
+robust (a poll waits until the state really holds — a slow machine no longer
+has to fit inside a fixed guess) and faster on fast machines. `lib_tests`:
+31 s → 20 s; the gate: ~31 s → ~20.4 s (three consecutive green runs,
+261/261 tests). The remaining fixed waits are semantic (G4's 800 ms cadence
+and 150 ms burst spacing). The OQ 62 spin has not reproduced in ~20
+consecutive direct runs since the pass-2 busy-spin removal — correlation
+consistent with that change having removed the trigger, though the root
+cause is still unknown.
 
 ### Recommendations 2 and 3
 
@@ -220,7 +243,10 @@ whose cost is the semantic settle/expiry waits (rec 3).
   binary), never as an executable.
 - Recommendation 3 stands as written: do not shrink the e2e timings. The
   measured profile confirms they are the suite's cost and that the waits
-  exit early; a timing change would alter what the tests verify.
+  exit early; a timing change would alter what the tests verify. The
+  settle-wait conversions above do not violate it: they replace fixed
+  guesses with waits on the actual observed state, which is a robustness
+  improvement, not a timing change.
 
 ## References
 

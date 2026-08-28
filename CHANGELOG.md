@@ -67,6 +67,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 - The process-level tests reap their killed serve processes instead of
   polling a zombie for 5 s each: `zig build test` dropped from ~75 s to
   ~31 s on an idle machine (all 244 tests unchanged).
+- The cluster e2e tests wait for the actual backfill/broadcast state (a
+  node's sync finished, a settings change landed) instead of fixed
+  "settle" sleeps: `zig build test` dropped from ~31 s to ~20 s on an idle
+  machine (all 261 tests unchanged; the waits are now robust on slow
+  machines too, since they end when the state really holds).
 
 ### Added
 
