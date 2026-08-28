@@ -1064,13 +1064,23 @@ const ServingProc = struct {
     child: std.process.Child,
 
     fn stop(self: ServingProc) void {
-        const child = self.child;
+        var child = self.child;
         // A raw kill that tolerates the child having already exited (the
         // io's child.kill treats ESRCH as a programmer bug and panics);
         // then poll with signal 0 until it is gone, so the directory lock
         // is released before the next step opens the dir.
         if (child.id) |pid| {
             std.posix.kill(pid, std.posix.SIG.KILL) catch {};
+            // Reap when the child still exists (alive, or a zombie from a
+            // crash): a second stop (each test stops its serves explicitly
+            // and via defer) finds the child already reaped (ESRCH) and
+            // skips the wait — a second wait would make the io panic (wait4
+            // → ECHILD, "double-free"). Without the reap, the SIGKILL'd
+            // child stays a zombie and the kill(0) poll below burns its full
+            // 5 s (measured 2026-08-28).
+            if (std.posix.kill(pid, @enumFromInt(0))) |_| {
+                _ = child.wait(tio) catch {};
+            } else |_| {}
             var tries: u32 = 0;
             while (tries < 500) : (tries += 1) {
                 std.posix.kill(pid, @enumFromInt(0)) catch break;
