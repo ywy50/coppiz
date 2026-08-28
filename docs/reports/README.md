@@ -70,6 +70,7 @@ motive; mark unverified as unverified, or omit it.
 
 ### Investigations
 
+- [2026-08-29 — simulator leader evaluation and TCP page writes](investigations/2026-08-29-runtime-sweep-sim-micro.md)
 - [2026-08-29 — write-path data flow: queue drains, replication re-encodes, and per-frame overhead](investigations/2026-08-29-runtime-sweep-queue-wire.md)
 - [2026-08-29 — range reads and open-time discovery on the journal read paths](investigations/2026-08-29-runtime-sweep-journal-read.md)
 - [2026-08-29 — settings key resolution and checkpoint removal sets on the control paths](investigations/2026-08-29-runtime-sweep-settings-checkpoint.md)

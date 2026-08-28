@@ -72,6 +72,11 @@ pub const World = struct {
     now_ms: u64,
     control_id: [16]u8,
     nodes: std.ArrayListUnmanaged(Node),
+    /// id -> index into `nodes`. Nodes are appended (init, addMember) and
+    /// never removed — `crash` only marks them dead — so the map stays
+    /// current for the world's lifetime. `nodeIndex` was a linear scan per
+    /// lookup, and each `viewsFor` does one lookup per fold member per call.
+    node_by_id: std.AutoHashMap([16]u8, usize),
     /// link[i * n + j]: whether node i may send to node j. A partition
     /// closes the links across its sets; self links are always open.
     links: std.ArrayListUnmanaged(bool),
@@ -101,6 +106,7 @@ pub const World = struct {
             .now_ms = 1000,
             .control_id = control_id,
             .nodes = .empty,
+            .node_by_id = std.AutoHashMap([16]u8, usize).init(allocator),
             .links = .empty,
             .reorder = false,
             .partition_head = null,
@@ -123,6 +129,7 @@ pub const World = struct {
             .chain = .empty,
             .inbox = .empty,
         });
+        try self.node_by_id.put(founder_id, 0);
         try self.growLinks(1);
 
         // Genesis: the founder creates the cluster and folds its initial
@@ -154,6 +161,7 @@ pub const World = struct {
             node.inbox.deinit(self.allocator);
         }
         for (0..2) |i| self.partition_sides[i].deinit(self.allocator);
+        self.node_by_id.deinit();
         self.nodes.deinit(self.allocator);
         self.links.deinit(self.allocator);
         self.* = undefined;
@@ -204,10 +212,7 @@ pub const World = struct {
     }
 
     fn nodeIndex(self: *World, id: [16]u8) ?usize {
-        for (self.nodes.items, 0..) |node, i| {
-            if (std.mem.eql(u8, &node.id, &id)) return i;
-        }
-        return null;
+        return self.node_by_id.get(id);
     }
 
     pub fn nodeId(self: *World, index: usize) [16]u8 {
@@ -419,8 +424,9 @@ pub const World = struct {
             .chain = .empty,
             .inbox = .empty,
         });
-        try self.growLinks(self.nodes.items.len);
         const newcomer = self.nodes.items.len - 1;
+        try self.node_by_id.put(id, newcomer);
+        try self.growLinks(self.nodes.items.len);
 
         const payload = try self.allocator.alloc(
             u8,
