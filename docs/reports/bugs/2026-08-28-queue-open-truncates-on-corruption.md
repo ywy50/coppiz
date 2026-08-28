@@ -8,7 +8,9 @@
 
 ## Status
 
-Open.
+Resolved — `Queue.open` mirrors the store's torn-tail test: a valid
+record after the break refuses with `Corrupt`; regression test flips a
+byte mid-file.
 
 ## Symptom and impact
 
@@ -24,7 +26,18 @@ The queue's open scan has no equivalent of the store's torn-tail handling: it tr
 
 ## Resolution
 
-Not yet fixed. Suggested direction: mirror the store's `findValidRecordAfter` behavior — a valid record after the failure point is mid-file corruption and must refuse to open (or repair conservatively), while a clean end-of-file after the failure is a torn tail and may truncate. A regression test should flip a byte mid-file and assert the queue refuses to open rather than dropping later entries.
+Fixed as suggested: the open scan's break now runs `validRecordAfter`
+(a byte-wise scan for any decodable record at or after the break, the
+store's own `findValidRecordAfter` pattern). A valid record after the
+failure point is mid-file corruption and the open refuses with
+`error.Corrupt`; a clean end-of-file after the break is a torn tail and
+is truncated as before.
+
+Regression test ("mid-file corruption is refused at open, not truncated
+away"): two records, one flipped byte inside the first record's payload
+— open now refuses with `Corrupt` instead of silently dropping the
+acknowledged second entry. Verified to fail (the old code truncated and
+returned success) against the pre-fix scan.
 
 ## Verification
 
@@ -37,4 +50,4 @@ None. Related storage-path defect: the segment-ordinal collision after compact (
 ## References
 
 - Code: `src/journal/queue.zig:90-96` (open scan + truncate), `src/journal/store.zig:743` (`findValidRecordAfter`)
-- Fix: none
+- Fix: `src/journal/queue.zig` (open scan + `validRecordAfter`); regression test in the same file. `zig build test` green.

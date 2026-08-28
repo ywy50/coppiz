@@ -8,7 +8,8 @@
 
 ## Status
 
-Open.
+Resolved — `parsePeerKey` refuses a `public_key` that is not exactly 64
+hex chars at parse time; regression test added.
 
 ## Symptom and impact
 
@@ -32,7 +33,17 @@ Key content is validated at consumption (silently) instead of at parse time (str
 
 ## Resolution
 
-Not yet fixed. Suggested direction: validate `public_key` at parse time (refuse anything that is not 64 hex chars with a named error), or at least surface the drop in `cmdServe` as a diagnostic. A regression test should feed a malformed key through config parsing and expect a refusal or a warning.
+Fixed at the strict layer: `parsePeerKey` now validates the key's
+content — exactly 64 hex chars, refused with `InvalidValue` otherwise —
+so a malformed key cannot reach `cmdServe`'s allowlist at all. The
+`if (hexKeyToBytes(hex)) |key|` in `cmdServe` remains as defense in
+depth. (The existing "minimal config" test's `public_key = "abcd"`
+sample was updated to a valid 64-hex key, since "abcd" is now — and
+always was — an unparseable identity.)
+
+Regression test ("a malformed peer public_key is refused at parse
+time"): a short key, a 65-char key and a 64-char non-hex key are each
+refused with `InvalidValue`.
 
 ## Verification
 
@@ -45,4 +56,4 @@ None. Contained to the CLI's allowlist path.
 ## References
 
 - Code: `src/main.zig:247-249` (`cmdServe` allowlist), `src/config/local.zig:233-237` (`parsePeerKey`)
-- Fix: none
+- Fix: `src/config/local.zig` (`parsePeerKey`); regression test in the same file. `zig build test` green.

@@ -8,7 +8,9 @@
 
 ## Status
 
-Open.
+Resolved — `applyCheckpoint` reads `cluster.last_merge` (the control
+fold); the epoch test now folds a real merge entry instead of
+hand-assigning the field.
 
 ## Symptom and impact
 
@@ -30,7 +32,16 @@ Grep confirms `last_merge` has exactly one assignment in the tree (`epoch.zig:19
 
 ## Resolution
 
-Not yet fixed. Suggested fix: read `cluster.last_merge` in `applyCheckpoint`. Add a regression test that folds a merge on the control chain, then a checkpoint in a data journal within `settle_ms`, and expects `error.MergeSettling` — without the hand-assignment currently used at `epoch.zig:628`.
+Fixed as suggested: `applyCheckpoint` reads `cluster.last_merge` (the
+control fold, which owns the merge facts) instead of `self.last_merge`
+(a data fold, always `null`). The settle check itself was sound.
+
+The epoch test at `epoch.zig:628` that hand-assigned the data fold's
+field was rewritten to fold a real `merge` entry on the control chain
+(`applyMerge` sets `cluster.last_merge`), then a data checkpoint within
+`settle_ms` — `error.MergeSettling` fires through the real wiring.
+A second, independent regression test lives in `chain.zig` ("a
+checkpoint inside merge.settle_ms of a real merge entry is refused").
 
 ## Verification
 
@@ -44,4 +55,4 @@ None — contained fix. Note the same heal path also carries the reslotted `crea
 ## References
 
 - Code: `src/journal/chain.zig:642-662` (`applyCheckpoint`), `:659` (wrong fold), `src/cluster/epoch.zig:186-195` (`applyMerge`), `:628` (test hand-assignment)
-- Fix: none
+- Fix: `src/journal/chain.zig` (`applyCheckpoint`), `src/cluster/epoch.zig` (test rewritten), `src/journal/chain.zig` (new test). `zig build test` green.

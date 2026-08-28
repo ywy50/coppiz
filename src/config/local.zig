@@ -115,8 +115,19 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, config: *Config) Pa
     }
 }
 
+/// Cuts a line at the first `#` that is outside a basic string. In TOML a
+/// `#` inside `"..."` is data, not a comment; the byte-wise cut corrupted
+/// quoted values that contained one (bug
+/// 2026-08-28-toml-parser-quote-unaware).
 fn stripComment(line: []const u8) []const u8 {
-    if (std.mem.indexOfScalar(u8, line, '#')) |i| return line[0..i];
+    var in_quotes = false;
+    for (line, 0..) |c, i| {
+        if (c == '"') {
+            in_quotes = !in_quotes;
+        } else if (c == '#' and !in_quotes) {
+            return line[0..i];
+        }
+    }
     return line;
 }
 
@@ -232,7 +243,18 @@ fn parsePeerKey(
     }
     if (std.mem.eql(u8, key, "public_key")) {
         if (peer.public_key) |old| allocator.free(old);
-        peer.public_key = try allocator.dupe(u8, unquote(value));
+        const hex = unquote(value);
+        // A public_key names the peer's identity for the join allowlist; a
+        // key that is not exactly 64 hex chars could never verify. Refuse
+        // it here — the config layer is deliberately strict — instead of
+        // silently dropping it from the allowlist at serve time, where the
+        // operator sees only a refused join (bug
+        // 2026-08-28-cmdserve-silent-allowlist-drop).
+        if (hex.len != 64) return error.InvalidValue;
+        for (hex) |c| {
+            if (!std.ascii.isHex(c)) return error.InvalidValue;
+        }
+        peer.public_key = try allocator.dupe(u8, hex);
         return;
     }
     return error.UnknownKey;
@@ -267,7 +289,9 @@ pub fn parseValue(
     };
 }
 
-/// Parses a `["a", "b"]` string array into owned slices.
+/// Parses a `["a", "b"]` string array into owned slices. Commas inside a
+/// quoted item are data, not separators; the byte-wise split corrupted them
+/// (bug 2026-08-28-toml-parser-quote-unaware).
 fn parseStringArray(allocator: std.mem.Allocator, value: []const u8) ParseError![][]const u8 {
     const inner = std.mem.trim(u8, value, " \t");
     if (inner.len < 2 or inner[0] != '[' or inner[inner.len - 1] != ']') {
@@ -279,11 +303,22 @@ fn parseStringArray(allocator: std.mem.Allocator, value: []const u8) ParseError!
         for (out.items) |item| allocator.free(item);
         out.deinit(allocator);
     }
-    var it = std.mem.splitScalar(u8, body, ',');
-    while (it.next()) |raw| {
-        const item = std.mem.trim(u8, raw, " \t");
-        if (item.len == 0) continue;
-        try out.append(allocator, try allocator.dupe(u8, unquote(item)));
+    var start: usize = 0;
+    var in_quotes = false;
+    for (body, 0..) |c, i| {
+        if (c == '"') {
+            in_quotes = !in_quotes;
+        } else if (c == ',' and !in_quotes) {
+            const item = std.mem.trim(u8, body[start..i], " \t");
+            if (item.len > 0) {
+                try out.append(allocator, try allocator.dupe(u8, unquote(item)));
+            }
+            start = i + 1;
+        }
+    }
+    const last = std.mem.trim(u8, body[start..], " \t");
+    if (last.len > 0) {
+        try out.append(allocator, try allocator.dupe(u8, unquote(last)));
     }
     return out.toOwnedSlice(allocator);
 }
@@ -313,7 +348,7 @@ test "a minimal config parses into its fields" {
         \\
         \\[[peers]]
         \\address = "10.0.0.2:6400"
-        \\public_key = "abcd"
+        \\public_key = "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd"
         \\
         \\[genesis]
         \\leadership.mode = "configured"
@@ -362,6 +397,36 @@ test "unknown keys are refused, not ignored" {
     try std.testing.expectError(error.UnknownKey, parse(test_alloc, unknown_genesis, &config));
 }
 
+test "a # inside a quoted value is data, not a comment" {
+    // Bug 2026-08-28-toml-parser-quote-unaware: stripComment cut at the
+    // first `#` regardless of quotes, so `data_dir = "/var/lib/coppiz#prod"`
+    // parsed as the broken value `"/var/lib/coppiz` (leading quote kept).
+    var config = Config{ .allocator = test_alloc };
+    defer config.deinit();
+    try parse(test_alloc, "data_dir = \"/var/lib/coppiz#prod\"\n", &config);
+    try std.testing.expectEqualStrings("/var/lib/coppiz#prod", config.data_dir.?);
+}
+
+test "a comma inside a quoted array item is data, not a separator" {
+    // Bug 2026-08-28-toml-parser-quote-unaware: parseStringArray split on
+    // every comma, so `["node-a,node-b"]` became the two bogus entries
+    // `"node-a` and `node-b"`.
+    var config = Config{ .allocator = test_alloc };
+    defer config.deinit();
+    try parse(test_alloc,
+        \\[genesis]
+        \\leadership.authorities = ["node-a,node-b"]
+    , &config);
+    const authorities = schema.keyIndex("leadership.authorities").?;
+    var list: ?[]const []const u8 = null;
+    for (config.genesis.items) |change| {
+        if (change.key == authorities) list = change.value.string_list;
+    }
+    const got = list orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), got.len);
+    try std.testing.expectEqualStrings("node-a,node-b", got[0]);
+}
+
 test "bad values are refused" {
     var config = Config{ .allocator = test_alloc };
     defer config.deinit();
@@ -373,6 +438,29 @@ test "bad values are refused" {
     try std.testing.expectError(error.InvalidValue, parse(test_alloc, bad_int, &config));
     const bad_list = "[genesis]\nleadership.authorities = \"not-an-array\"\n";
     try std.testing.expectError(error.InvalidValue, parse(test_alloc, bad_list, &config));
+}
+
+test "a malformed peer public_key is refused at parse time" {
+    // Bug 2026-08-28-cmdserve-silent-allowlist-drop: a public_key that was
+    // not exactly 64 hex chars passed config parsing and was silently
+    // dropped from the join allowlist at serve time — a refused join with
+    // no diagnostic. The config layer refuses it here instead.
+    var config = Config{ .allocator = test_alloc };
+    defer config.deinit();
+    const short = "[[peers]]\naddress = \"10.0.0.2:6400\"\npublic_key = \"abcd\"\n";
+    try std.testing.expectError(error.InvalidValue, parse(test_alloc, short, &config));
+
+    var config2 = Config{ .allocator = test_alloc };
+    defer config2.deinit();
+    const wrong_len = "[[peers]]\naddress = \"10.0.0.2:6400\"\npublic_key = \"" ++
+        "abcd" ** 16 ++ "a" ++ "\"\n";
+    try std.testing.expectError(error.InvalidValue, parse(test_alloc, wrong_len, &config2));
+
+    var config3 = Config{ .allocator = test_alloc };
+    defer config3.deinit();
+    const non_hex = "[[peers]]\naddress = \"10.0.0.2:6400\"\npublic_key = \"" ++
+        "gg" ** 32 ++ "\"\n";
+    try std.testing.expectError(error.InvalidValue, parse(test_alloc, non_hex, &config3));
 }
 
 test "genesis initial settings fold back to the parsed state (PRD 0004 G6 half)" {

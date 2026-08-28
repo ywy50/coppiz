@@ -290,7 +290,7 @@ const Fix = struct {
         chain.encodeGenesisPayload(
             .{ .founder_key = self.founder.public_key.toBytes(), .changes = &.{} },
             g,
-        );
+        ) catch unreachable;
         const g_en = try self.entryFor(self.founder, .genesis, self.control_id, 1, g);
         const g_sl = try self.slotFor(
             self.founder,
@@ -622,10 +622,24 @@ test "a checkpoint inside merge.settle_ms of the last merge is refused" {
     var data = try chain.FoldState.init(test_alloc, false, fix.data_id);
     defer data.deinit();
 
-    // A checkpoint in the data journal: the settle rule reads the cluster's
-    // merge.settle_ms and the fold's last_merge (set when the merge entry
-    // folded). Hand-build the data fold with a merge recorded at ts 1000.
-    data.last_merge = .{ .position = .{ .epoch = 1, .seq = 9 }, .slot_ts_ms = 1000 };
+    // A real merge entry folds on the control chain and records the merge
+    // fact THERE — the settle rule reads the cluster fold's last_merge; a
+    // data fold never sees a merge entry (bug
+    // 2026-08-28-merge-settle-rule-dead). The old test hand-assigned the
+    // data fold's field, which no fold path ever sets.
+    var merge_buf: [16]u8 = undefined;
+    encodeMergePayload(.{ .branch_epoch = 1, .branch_seq = 2 }, &merge_buf);
+    const merge_en = try fix.entryFor(fix.founder, .merge, fix.control_id, 3, &merge_buf);
+    const merge_sl = try fix.slotFor(
+        fix.founder,
+        1,
+        3,
+        entry.entryHash(&merge_en),
+        control.head_slot_hash,
+        2000,
+    );
+    try control.applyControl(&merge_sl, &merge_en);
+    try std.testing.expect(control.last_merge != null);
 
     const checkpoint = @import("../journal/chain.zig").CheckpointPayload{
         .expire_through = .{ .epoch = 1, .seq = 1 },
@@ -645,7 +659,7 @@ test "a checkpoint inside merge.settle_ms of the last merge is refused" {
         1,
         entry.entryHash(&cp_en),
         slot.genesis_prev,
-        2000, // 1000 ms after the merge: inside settle_ms (default 30000)
+        3000, // 1000 ms after the merge: inside settle_ms (default 30000)
     );
     try std.testing.expectError(
         error.MergeSettling,
@@ -659,7 +673,7 @@ test "a checkpoint inside merge.settle_ms of the last merge is refused" {
         1,
         entry.entryHash(&cp_en),
         slot.genesis_prev,
-        1000 + 30000,
+        2000 + 30000,
     );
     try data.applyData(&control, &late_sl, &cp_en);
     try std.testing.expect(data.entries.contains(cp_en.id()));

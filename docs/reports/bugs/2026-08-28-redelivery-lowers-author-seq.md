@@ -8,7 +8,9 @@
 
 ## Status
 
-Open.
+Resolved — `registerEntry` only ever raises the author's `last_seq`;
+regression test redelivers an old entry and checks a conflicting
+same-id entry is still refused.
 
 ## Symptom and impact
 
@@ -24,7 +26,18 @@ Not dynamically reproduced; statically certain. Sketch: author A has seqs 5 (E1)
 
 ## Resolution
 
-Not yet fixed. Suggested fix: only raise `last_seq` (`if (en.author_seq > last) put`), never lower it. A regression test should redeliver an old entry and then assert a conflicting same-id entry is still refused.
+Fixed as suggested: `registerEntry` writes
+`last_seq = max(old last_seq, en.author_seq)` instead of
+unconditionally `en.author_seq`, so a redelivered entry below the
+high-water mark never lowers it and the dedup rule's early return for
+`author_seq > last_seq` stays sound.
+
+Regression test (`chain.zig` "a redelivery below the author's last_seq
+does not lower it"): E1 (seq 5) and E2 (seq 6) fold, E1 is redelivered
+at a new position (accepted as the byte-identical dedup), then a
+*conflicting* entry with E2's id is refused with `DuplicateConflict` —
+before the fix the redelivery lowered the mark to 5 and the conflict
+passed the seq check without any dedup comparison.
 
 ## Verification
 
@@ -37,4 +50,4 @@ None — contained. Low priority.
 ## References
 
 - Code: `src/journal/chain.zig:474-480` (`checkAuthorSeq`), `:492-522` (`registerEntry`, esp. `:518`)
-- Fix: none
+- Fix: `src/journal/chain.zig` (`registerEntry`); regression test in the same file. `zig build test` green.

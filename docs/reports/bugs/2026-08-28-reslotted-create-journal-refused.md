@@ -8,7 +8,9 @@
 
 ## Status
 
-Open.
+Resolved — `create_journal` got a re-slotted variant that skips only the
+author check; regression test folds a losing-branch create_journal
+through `applyControlReslotted`.
 
 ## Symptom and impact
 
@@ -31,7 +33,20 @@ The `create_journal` entry never folds; the merge aborts.
 
 ## Resolution
 
-Not yet fixed. Suggested direction: give `create_journal` a reslotted variant (mirroring `applyJoinReslotted`) that skips `checkAuthorIsLeader` but keeps payload/name/max-journals validation, and route `.create_journal` to it from `applyControlReslotted`. A regression test should fold a losing branch containing a `create_journal` through `doMergeControl` and expect the merge to complete with the journal registered.
+Fixed as suggested. `applyCreateJournal` is split into an author check
+plus `applyCreateJournalValidated` (payload decode, name length,
+max-journals, initial-settings validation, registry insert, register);
+`applyControlReslotted` routes `.create_journal` to
+`applyCreateJournalReslotted`, which runs the validated core without
+`checkAuthorIsLeader` — the entry bytes were already signature-checked
+against the member table and `checkAuthorSeq` ran in the re-slot path, so
+nothing unvalidated gets in.
+
+Regression test (`chain.zig` "a re-slotted create_journal is accepted and
+registers the journal"): a second member joins, then its create_journal
+is re-slotted by the founder — the merge's exact shape — and the journal
+registers. Before the fix the re-slot was always refused with
+`NotLeader`.
 
 ## Verification
 
@@ -44,4 +59,4 @@ Related merge-path defects: the settle rule reading the wrong fold (reported sep
 ## References
 
 - Code: `src/journal/chain.zig:311-316` (routing), `:374-381` (reslotted dispatch), `:559-587` (`applyCreateJournal`), `src/cluster/node.zig:2115-2118` (merge re-slot)
-- Fix: none
+- Fix: `src/journal/chain.zig` (`applyCreateJournalReslotted`); regression test in the same file. `zig build test` green.

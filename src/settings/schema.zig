@@ -325,8 +325,14 @@ pub const Value = union(enum) {
             .enum_value => |v| .{ .enum_value = v },
             .string_list => |items| blk: {
                 const out = try allocator.alloc([]const u8, items.len);
+                var filled: usize = 0;
+                errdefer {
+                    for (out[0..filled]) |item| allocator.free(item);
+                    allocator.free(out);
+                }
                 for (items, 0..) |item, i| {
                     out[i] = try allocator.dupe(u8, item);
+                    filled += 1;
                 }
                 break :blk .{ .string_list = out };
             },
@@ -396,7 +402,10 @@ pub fn valueLen(value: Value) usize {
 }
 
 /// Encodes a value canonically into `buf` (which must hold `valueLen`).
-pub fn encodeValue(value: Value, buf: []u8) void {
+/// Refuses a value the wire format cannot carry: the string_list count and
+/// every item length are u16 fields (bug
+/// 2026-08-28-settings-codec-u16-overflow).
+pub fn encodeValue(value: Value, buf: []u8) error{SettingsTooLarge}!void {
     switch (value) {
         .boolean => |v| buf[0] = @intFromBool(v),
         .u64 => |v| std.mem.writeInt(u64, buf[0..8], v, .little),
@@ -404,11 +413,13 @@ pub fn encodeValue(value: Value, buf: []u8) void {
         .u16 => |v| std.mem.writeInt(u16, buf[0..2], v, .little),
         .enum_value => |v| std.mem.writeInt(u16, buf[0..2], v, .little),
         .string_list => |items| {
+            if (items.len > std.math.maxInt(u16)) return error.SettingsTooLarge;
             var len_buf: [2]u8 = undefined;
             std.mem.writeInt(u16, &len_buf, @intCast(items.len), .little);
             @memcpy(buf[0..2], &len_buf);
             var off: usize = 2;
             for (items) |item| {
+                if (item.len > std.math.maxInt(u16)) return error.SettingsTooLarge;
                 std.mem.writeInt(u16, &len_buf, @intCast(item.len), .little);
                 @memcpy(buf[off .. off + 2], &len_buf);
                 off += 2;
@@ -556,7 +567,7 @@ pub const SettingsState = struct {
             const len = valueLen(value);
             const scratch = try allocator.alloc(u8, len);
             defer allocator.free(scratch);
-            encodeValue(value, scratch);
+            try encodeValue(value, scratch);
             try out.appendSlice(allocator, scratch);
         }
         return out.toOwnedSlice(allocator);
@@ -656,7 +667,7 @@ test "value codec round-trips every value shape" {
         };
         const encoded = try allocator.alloc(u8, valueLen(value));
         defer allocator.free(encoded);
-        encodeValue(value, encoded);
+        try encodeValue(value, encoded);
         const decoded = try decodeValue(allocator, key_index, encoded);
         defer decoded.deinit(allocator);
         try std.testing.expect(value.eql(decoded));

@@ -8,7 +8,9 @@
 
 ## Status
 
-Open (latent).
+Resolved — a partial read re-bases the remainder into its own allocation
+(and the related empty-frame misread is fixed too); regression tests
+added.
 
 ## Symptom and impact
 
@@ -42,7 +44,19 @@ The partial-read branch stores a slice derived from the allocation instead of re
 
 ## Resolution
 
-Not yet fixed. Suggested direction: on a partial read, copy the remainder into a fresh allocation (or keep the original allocation and track an offset), so every `free` is on an allocation start. A regression test should push a chunk and read it in two smaller pieces under `std.testing.allocator`.
+Fixed: on a partial read, `readInto` copies the remainder into a fresh
+allocation (an OOM leaves the chunk intact and returns the error) and
+frees the original chunk, so every later `free` is on an allocation
+start. The related latent defect in the same function was fixed too: an
+empty pushed body (a legal zero-length frame, per `framing.zig`'s own
+round-trip test) is consumed and the read continues, instead of being
+returned as 0 and misread as `EndOfStream` by `recvFrame`.
+
+Regression tests: "a partial read leaves a freeable remainder" (push
+"hello", read 4 then 4 under `std.testing.allocator` — the second read
+used to free `&buf[4]`, which the GPA catches as an invalid free) and
+"an empty pushed body is data, not a close" (push "" then "abc", one
+3-byte read returns "abc").
 
 ## Verification
 
@@ -55,4 +69,4 @@ None. Related hub defects reported separately (errdefer double-free, duplicate-a
 ## References
 
 - Code: `src/net/transport.zig:269-291` (`Direction.readInto`), `:247-257` (`push`), `:340-347` (sendFrame chunk sizes)
-- Fix: none
+- Fix: `src/net/transport.zig` (`Direction.readInto`); regression tests in the same file. `zig build test` green.

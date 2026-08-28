@@ -553,13 +553,9 @@ pub const ClusterNode = struct {
             if (self.entryKnown(en.journal, en.id())) {
                 // The slot landed while this member was backfilling or
                 // merging, so `onSlot` never ran for it: whoever is waiting
-                // on this entry is resolved here, before the queue drops it.
-                if (self.pending_clients.fetchRemove(en.id())) |kv| {
-                    self.ackClient(kv.value, en.id(), "") catch {};
-                }
-                if (self.pending_locals.fetchRemove(en.id())) |kv| {
-                    completeLocal(kv.value, self.io, en.id(), "");
-                }
+                // on this entry is resolved here, before the queue drops it
+                // (bug 2026-08-28-localappend-completion-lost).
+                self.completePendingFor(&en);
                 self.node.queue.remove(en.journal, en.id()) catch {};
                 continue;
             }
@@ -988,7 +984,13 @@ pub const ClusterNode = struct {
         try self.node.queue.scan(&ctx, struct {
             fn cb(c: *Ctx, en: *const entry.Entry) anyerror!void {
                 if (!std.mem.eql(u8, &en.author, &c.self.node.member_id)) return;
-                if (c.self.entryKnown(en.journal, en.id())) return;
+                if (c.self.entryKnown(en.journal, en.id())) {
+                    // Applied through another path (a sync page) that may
+                    // not have posted the ack/completion (bug
+                    // 2026-08-28-localappend-completion-lost).
+                    c.self.completePendingFor(en);
+                    return;
+                }
                 _ = try c.self.slotAndBroadcast(en, false);
                 if (c.self.pending_clients.fetchRemove(en.id())) |kv| {
                     c.self.ackClient(kv.value, en.id(), "") catch {};
@@ -1800,7 +1802,20 @@ pub const ClusterNode = struct {
         self.node.applyReplicated(jid, &m.sl, &en, m.reslotted) catch |err| switch (err) {
             error.BadPrevHash => {
                 // The peer's chain does not chain to mine: a healed
-                // partition. Compute the survivor and act.
+                // partition, or a missed broadcast. From my own current
+                // leader it is a redelivery only when the fold already
+                // knows it — an unknown record is a gap in that journal,
+                // caught up by a sync, not a merge (bug
+                // 2026-08-28-follower-data-gap-stale; a different leader
+                // stays the partition-merge path below).
+                const my_leader = if (self.node.control.epoch) |ep| ep.leader else null;
+                if (my_leader != null and
+                    std.mem.eql(u8, &m.sl.leader, &my_leader.?) and
+                    !self.entryKnown(jid, en.id()))
+                {
+                    try self.requestSync(conn_id, jid, self.headFor(jid).next());
+                    return;
+                }
                 try self.onDivergence(conn_id, m.sl.leader, m.sl.epoch);
             },
             else => {
@@ -1819,13 +1834,24 @@ pub const ClusterNode = struct {
         }
         // A client awaiting this entry's slot — the wire client or an
         // embedded host (PRD 0005).
-        if (std.mem.eql(u8, &en.author, &self.node.member_id)) {
-            if (self.pending_clients.fetchRemove(en.id())) |kv| {
-                self.ackClient(kv.value, en.id(), "") catch {};
-            }
-            if (self.pending_locals.fetchRemove(en.id())) |kv| {
-                completeLocal(kv.value, self.io, en.id(), "");
-            }
+        self.completePendingFor(&en);
+    }
+
+    /// Posts the ack/completion for an entry of mine that just folded — a
+    /// wire client's ack and an embedded host's completion (PRD 0005).
+    /// Called wherever the slot lands: a broadcast (onSlot), a sync page
+    /// (onSyncPage), and the queue sweeps when the entry is already known
+    /// (slotQueuedEntries / reforwardQueue). Without the sync-page and
+    /// queue-sweep sites, a completion registered while backfilling is
+    /// dropped by onSlot's sync guard and the host's write blocks forever
+    /// (bug 2026-08-28-localappend-completion-lost).
+    fn completePendingFor(self: *ClusterNode, en: *const entry.Entry) void {
+        if (!std.mem.eql(u8, &en.author, &self.node.member_id)) return;
+        if (self.pending_clients.fetchRemove(en.id())) |kv| {
+            self.ackClient(kv.value, en.id(), "") catch {};
+        }
+        if (self.pending_locals.fetchRemove(en.id())) |kv| {
+            completeLocal(kv.value, self.io, en.id(), "");
         }
     }
 
@@ -1985,6 +2011,11 @@ pub const ClusterNode = struct {
                 self.closeConn(conn_id);
                 return;
             };
+            // A client or host awaiting this entry's slot: the broadcast
+            // was dropped by the sync guard, so this apply is what must
+            // post the ack/completion (bug
+            // 2026-08-28-localappend-completion-lost).
+            self.completePendingFor(&e);
             off += rec.next_offset;
         }
         if (self.syncing) {
@@ -2473,7 +2504,7 @@ pub const ClusterNode = struct {
         };
         const buf = try self.allocator.alloc(u8, settings_fold.payloadLen(payload));
         defer self.allocator.free(buf);
-        settings_fold.encodePayload(payload, buf);
+        try settings_fold.encodePayload(payload, buf);
         // Journal-scoped changes are entries in the journal's own chain
         // (PRD 0004); cluster-scoped ones live in the control journal's.
         const authored =
@@ -3115,7 +3146,7 @@ test "e2e (c): configured leadership with a stall fallback never elects without 
         const len = settings_fold.changesLen(&changes);
         const buf = try test_alloc.alloc(u8, len);
         defer test_alloc.free(buf);
-        settings_fold.encodeChanges(&changes, buf);
+        try settings_fold.encodeChanges(&changes, buf);
         const reply = try a.client.settings("__cluster__", buf);
         try std.testing.expectEqual(@as(usize, 0), reply.refusal.len);
         // Let the broadcast land on B and C before partitioning.
@@ -3254,7 +3285,7 @@ fn ttlTrioInit(
     const len = settings_fold.changesLen(&changes);
     const buf = try test_alloc.alloc(u8, len);
     defer test_alloc.free(buf);
-    settings_fold.encodeChanges(&changes, buf);
+    try settings_fold.encodeChanges(&changes, buf);
     const reply = try trio.a.client.settings("main", buf);
     if (reply.refusal.len != 0) return error.SettingsRefused;
 
@@ -3416,7 +3447,7 @@ test "e2e (G4): three members remove the same set at the same checkpoint slot, b
             const len = settings_fold.changesLen(&changes);
             const buf = try test_alloc.alloc(u8, len);
             defer test_alloc.free(buf);
-            settings_fold.encodeChanges(&changes, buf);
+            try settings_fold.encodeChanges(&changes, buf);
             const reply = try trio.a.client.settings("main", buf);
             try std.testing.expectEqual(@as(usize, 0), reply.refusal.len);
             // The leftover fast cadence fires once more with an empty set
@@ -3479,7 +3510,7 @@ test "e2e (G6): a skewed follower's clock changes what it shows, not what it sto
         const len = settings_fold.changesLen(&changes);
         const buf = try test_alloc.alloc(u8, len);
         defer test_alloc.free(buf);
-        settings_fold.encodeChanges(&changes, buf);
+        try settings_fold.encodeChanges(&changes, buf);
         const reply = try trio.a.client.settings("main", buf);
         try std.testing.expectEqual(@as(usize, 0), reply.refusal.len);
     }

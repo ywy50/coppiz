@@ -8,7 +8,8 @@
 
 ## Status
 
-Open.
+Resolved — `stripComment` and `parseStringArray` are quote-aware; two
+regression tests cover `#` and `,` inside quoted values.
 
 ## Symptom and impact
 
@@ -39,7 +40,17 @@ Expected: `/var/lib/coppiz#prod`. The comma case: `parseStringArray` on `["node-
 
 ## Resolution
 
-Not yet fixed. Suggested direction: make the scanner quote-aware — only strip a `#` that is outside a quoted region, and only split `parseStringArray` on commas outside quotes. A regression test should cover `#` and `,` inside quoted values for every key that accepts a quoted string.
+Fixed. `stripComment` now tracks a `"` toggle and cuts only at a `#`
+outside a basic string; `parseStringArray` splits on commas only outside
+quotes (tracking the same toggle), so a quoted item survives whole.
+`unquote` is unchanged — with the scans fixed, its both-ends-quoted rule
+now always sees intact values.
+
+Regression tests (`config/local.zig`): `data_dir = "/var/lib/coppiz#prod"`
+parses to `/var/lib/coppiz#prod` (was `"/var/lib/coppiz`), and
+`leadership.authorities = ["node-a,node-b"]` yields exactly one item
+`node-a,node-b` (was two bogus entries). Both verified red against the
+old byte-wise scans.
 
 ## Verification
 
@@ -53,4 +64,4 @@ The same scanner is shared by the CLI's `settings set` grammar (`parseValue`), s
 ## References
 
 - Code: `src/config/local.zig:118-121` (`stripComment`), `:271-289` (`parseStringArray`), `:292-296` (`unquote`)
-- Fix: none
+- Fix: `src/config/local.zig`; regression tests in the same file. `zig build test` green.

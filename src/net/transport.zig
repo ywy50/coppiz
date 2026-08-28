@@ -277,8 +277,19 @@ pub const Direction = struct {
                     const taken = self.chunks.orderedRemove(0);
                     self.mutex.unlock(io);
                     self.allocator.free(taken);
+                    // An empty frame body (a legal zero-length frame) is
+                    // data, not a close: keep reading instead of returning 0.
+                    if (n == 0) continue;
                 } else {
-                    self.chunks.items[0] = chunk[n..];
+                    // A partial read must not store an interior slice of the
+                    // allocation: a later full read would free it. Re-base
+                    // the remainder into its own allocation first.
+                    const remainder = self.allocator.dupe(u8, chunk[n..]) catch {
+                        self.mutex.unlock(io);
+                        return error.OutOfMemory;
+                    };
+                    self.allocator.free(chunk);
+                    self.chunks.items[0] = remainder;
                     self.mutex.unlock(io);
                 }
                 return n;
@@ -458,9 +469,11 @@ pub const Hub = struct {
     }
 
     /// Registers `address` as a listenable endpoint. One listener per
-    /// address; a second registration is refused by `connect` (the map's
-    /// first entry wins).
+    /// address; a second registration is refused with `AddressInUse` (a
+    /// `put` overwrite would leak the first endpoint and orphan its
+    /// listener).
     pub fn listen(self: *Hub, allocator: std.mem.Allocator, address: []const u8) !Listener {
+        if (self.endpoints.contains(address)) return error.AddressInUse;
         const ep = try allocator.create(Endpoint);
         errdefer allocator.destroy(ep);
         ep.* = .{ .allocator = allocator };
@@ -492,7 +505,9 @@ pub const Hub = struct {
     /// The dial side bound to `from`: connects to any endpoint by name.
     pub fn dialer(self: *Hub, allocator: std.mem.Allocator, from: []const u8) !Transport {
         const d = try allocator.create(HubDialer);
-        d.* = .{ .hub = self, .from = try allocator.dupe(u8, from) };
+        errdefer allocator.destroy(d);
+        const from_dup = try allocator.dupe(u8, from);
+        d.* = .{ .hub = self, .from = from_dup };
         return .{
             .ctx = d,
             .connect_fn = HubDialer.connectFn,
@@ -554,6 +569,12 @@ const HubListener = struct {
         const self: *HubListener = @ptrCast(@alignCast(ctx));
         if (self.closed) return;
         self.closed = true;
+        // `closed` is read under the endpoint mutex by pushConn and
+        // acceptConn; a close racing an accept/dial must not be a data race.
+        // Capture the mutex before `self` is destroyed below.
+        const ep_mutex = &self.endpoint.mutex;
+        ep_mutex.lockUncancelable(io);
+        defer ep_mutex.unlock(io);
         self.endpoint.closed = true;
         self.endpoint.sem.post(io);
         self.hub.allocator.free(self.address);
@@ -577,15 +598,17 @@ const HubDialer = struct {
         const hub_alloc = self.hub.allocator;
         const pipe = try hub_alloc.create(Pipe);
         errdefer hub_alloc.destroy(pipe);
+        const from = try hub_alloc.dupe(u8, self.from);
+        errdefer hub_alloc.free(from);
+        const to_dup = try hub_alloc.dupe(u8, to);
+        errdefer hub_alloc.free(to_dup);
         pipe.* = .{
             .out = .{ .allocator = hub_alloc },
             .in = .{ .allocator = hub_alloc },
-            .from = try hub_alloc.dupe(u8, self.from),
-            .to = try hub_alloc.dupe(u8, to),
+            .from = from,
+            .to = to_dup,
         };
         errdefer {
-            hub_alloc.free(pipe.from);
-            hub_alloc.free(pipe.to);
             pipe.out.deinit();
             pipe.in.deinit();
         }
@@ -747,4 +770,83 @@ test "pipe reader returns EndOfStream when the peer closes" {
 fn acceptAndClose(listener: *Listener) error{Canceled}!void {
     var conn = listener.accept(tio) catch return;
     conn.close(tio);
+}
+
+test "hub listen refuses a duplicate address" {
+    var hub = Hub.init(test_alloc);
+    defer hub.deinit(tio);
+    var l1 = try hub.listen(test_alloc, "node-a");
+    defer l1.close(tio);
+    try std.testing.expectError(error.AddressInUse, hub.listen(test_alloc, "node-a"));
+
+    // The first listener is untouched: it still accepts and echoes.
+    var dialer = try hub.dialer(test_alloc, "node-b");
+    defer dialer.deinit();
+    var group: std.Io.Group = .init;
+    group.async(tio, acceptAndEcho, .{&l1});
+    var conn = try dialer.connect(tio, test_alloc, "node-a");
+    defer conn.close(tio);
+    try conn.send(tio, "ping");
+    const reply = try conn.recv(tio, test_alloc);
+    defer test_alloc.free(reply);
+    try std.testing.expectEqualStrings("pong", reply);
+    try group.await(tio);
+}
+
+/// One full hub lifecycle under an allocator that fails at a chosen
+/// allocation: init, listen, dial (with the accept side closing any conn
+/// that gets through), teardown. Every path must be free of leaks and
+/// double-frees — the GPA backing this allocator panics on either.
+fn hubRound(failing: std.mem.Allocator) !void {
+    var hub = Hub.init(failing);
+    defer hub.deinit(tio);
+    var listener = try hub.listen(failing, "node-a");
+    var group: std.Io.Group = .init;
+    group.async(tio, acceptAndClose, .{&listener});
+    defer {
+        // Closing the listener wakes the blocked accept with a refusal.
+        listener.close(tio);
+        group.await(tio) catch {};
+    }
+    var dialer = try hub.dialer(failing, "node-b");
+    defer dialer.deinit();
+    if (dialer.connect(tio, failing, "node-a")) |conn| {
+        conn.close(tio);
+    } else |_| {}
+}
+
+test "hub connect and listen never double-free on allocation failure" {
+    // Fail one allocation at a time until a round succeeds. Before the fix
+    // a failure after the pipe entered hub.pipes freed it twice at deinit.
+    var i: usize = 0;
+    while (i < 64) : (i += 1) {
+        var failing = std.testing.FailingAllocator.init(test_alloc, .{ .fail_index = i });
+        if (hubRound(failing.allocator())) |_| break else |_| {}
+    }
+}
+
+test "a partial read leaves a freeable remainder" {
+    var dir = Direction{ .allocator = test_alloc };
+    defer dir.deinit();
+    dir.push(tio, "hello");
+    var first: [4]u8 = undefined;
+    var second: [4]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 4), try dir.readInto(tio, &first));
+    try std.testing.expectEqualStrings("hell", &first);
+    // The remainder was re-based into its own allocation; freeing it here
+    // must not free an interior pointer of the original chunk.
+    try std.testing.expectEqual(@as(usize, 1), try dir.readInto(tio, &second));
+    try std.testing.expectEqualStrings("o", second[0..1]);
+}
+
+test "an empty pushed body is data, not a close" {
+    var dir = Direction{ .allocator = test_alloc };
+    defer dir.deinit();
+    // A zero-length frame body is legal on the wire (framing.zig); reading
+    // it must consume it and continue, not report a close.
+    dir.push(tio, "");
+    dir.push(tio, "abc");
+    var buf: [3]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 3), try dir.readInto(tio, &buf));
+    try std.testing.expectEqualStrings("abc", &buf);
 }

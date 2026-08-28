@@ -133,7 +133,7 @@ pub const World = struct {
             .changes = genesis_changes_ref,
         });
         const g_buf = try allocator.alloc(u8, g_len);
-        chain.encodeGenesisPayload(
+        try chain.encodeGenesisPayload(
             .{ .founder_key = founder_kp.public_key.toBytes(), .changes = genesis_changes_ref },
             g_buf,
         );
@@ -165,16 +165,36 @@ pub const World = struct {
         return crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
     }
 
+    /// Extends the link matrix to n×n (n = the new member count). The
+    /// matrix width changes with the count, so a flat extension would shift
+    /// every existing cell's (row, column) meaning; the old values are
+    /// rewritten at the new stride instead. New links start open; links a
+    /// partition closed stay closed (bug
+    /// 2026-08-28-sim-growlinks-reopens-partition).
     fn growLinks(self: *World, n: usize) !void {
-        while (self.links.items.len < n * n) {
-            try self.links.append(self.allocator, false);
+        const old_n = n - 1;
+        if (old_n > 0) {
+            const old = try self.allocator.dupe(bool, self.links.items);
+            defer self.allocator.free(old);
+            try self.links.resize(self.allocator, n * n);
+            var i: usize = 0;
+            while (i < old_n) : (i += 1) {
+                var j: usize = 0;
+                while (j < old_n) : (j += 1) {
+                    self.links.items[i * n + j] = old[i * old_n + j];
+                }
+            }
+        } else {
+            try self.links.resize(self.allocator, 1);
         }
-        // New links start open; a partition closes the cross links and heal
-        // reopens everything.
-        var i: usize = 0;
-        while (i < n) : (i += 1) {
-            var j: usize = 0;
-            while (j < n) : (j += 1) self.links.items[i * n + j] = true;
+        // The newcomer's row and column start open. Some of those cells sit
+        // in the old matrix's range (a closed link's flat slot now means a
+        // link to the newcomer), so they are set explicitly, not left to
+        // the resize.
+        var k: usize = 0;
+        while (k <= old_n) : (k += 1) {
+            self.links.items[k * n + old_n] = true;
+            self.links.items[old_n * n + k] = true;
         }
     }
 
@@ -773,7 +793,7 @@ fn settingsEntryPayload(buf: []u8, key: u16, value: schema.Value) []const u8 {
     };
     const len = settings_fold.payloadLen(pl);
     std.debug.assert(buf.len >= len);
-    settings_fold.encodePayload(pl, buf);
+    settings_fold.encodePayload(pl, buf) catch unreachable;
     return buf[0..len];
 }
 
@@ -880,6 +900,29 @@ test "partitioned joins merge with deterministic seniority (RFC 0002)" {
             slot.Position.order(d_member.seniority, c_member.seniority) == .lt,
         );
     }
+}
+
+test "growLinks keeps a partition's closed links closed when a member joins" {
+    // Bug 2026-08-28-sim-growlinks-reopens-partition: growLinks filled the
+    // whole matrix with `true`, silently healing every link `partition`
+    // closed — the sides could hear each other again mid-partition.
+    var world = try World.init(test_alloc, 0xABCD, test_control_id, &.{});
+    defer world.deinit();
+    const a: usize = 0;
+    const b = try world.addMember(memberKey(1), "node-b", a);
+    try world.assertConverged();
+    try world.partition(&.{ &[_]usize{a}, &[_]usize{b} });
+    try world.tick();
+    try world.tick();
+
+    const c = try world.addMember(memberKey(2), "node-c", b);
+
+    // The partition's cross links survive the join.
+    try std.testing.expect(!world.linkOpen(a, b));
+    try std.testing.expect(!world.linkOpen(b, a));
+    // The newcomer can reach its admitting side, and it was admitted.
+    try std.testing.expect(world.linkOpen(b, c));
+    try std.testing.expect(world.linkOpen(c, b));
 }
 
 test "leader crash: the survivors elect and continue without a merge" {

@@ -8,7 +8,8 @@
 
 ## Status
 
-Open.
+Resolved — `growLinks` rebuilds the link matrix at the new stride,
+preserving every link `partition` closed; regression test added.
 
 ## Symptom and impact
 
@@ -54,7 +55,21 @@ It only needed to initialize the *new* node's row and column (the appended `fals
 
 ## Resolution
 
-Not yet fixed. Suggested direction: initialize only the newcomer's row/column to `true` (the cells that were appended as `false`), preserving the closed cross links. A regression test should `partition` then `addMember` and assert the cross links remain closed (and that the newcomer can reach its admitting side).
+Fixed. The matrix width changes with the member count, so a flat
+extension would shift every existing cell's (row, column) meaning — the
+report's simpler "init only the new row/column" suggestion would still
+misplace closed links. `growLinks` now copies the old matrix, resizes to
+`n × n`, rewrites the old cells at the new stride, and explicitly opens
+the newcomer's row and column (some of those cells sit in the old
+matrix's flat range, so they must be set, not left to the resize).
+
+Regression test ("growLinks keeps a partition's closed links closed when
+a member joins"): partition a 2-node world, add a member, and assert the
+cross links (`a → b`, `b → a`) stay closed while the newcomer can reach
+its admitting side — the report's repro, previously
+`TestUnexpectedResult`. The existing "partitioned joins merge" scenario
+still passes with the links genuinely closed (the sides self-elect under
+the default mode).
 
 ## Verification
 
@@ -68,4 +83,4 @@ None — contained to the simulator. Worth a test because the shipped "partition
 ## References
 
 - Code: `src/sim/sim.zig:168-179` (`growLinks`), `:182-184` (`linkOpen`), `:380+` (`addMember`), `:439-462` (`partition`)
-- Fix: none
+- Fix: `src/sim/sim.zig` (`growLinks`); regression test in the same file. `zig build test` green.

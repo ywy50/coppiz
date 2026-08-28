@@ -8,7 +8,12 @@
 
 ## Status
 
-Open.
+Resolved — `JournalDir` now tracks a monotone `next_ordinal`; `sealHead`,
+`compact` and `truncate` allocate fresh names from it (never colliding with
+an in-use file), and `loadJournal` restores it from the highest loaded
+segment. Regression test "compact then seal and a second compact never
+collide with segment names" (`store.zig`), verified to fail on the old
+`len + 1` logic.
 
 ## Symptom and impact
 
@@ -36,7 +41,24 @@ Both defects share one root cause: segment ordinal numbering assumes files are a
 
 ## Resolution
 
-Not yet fixed. Suggested direction: derive the ordinal from the maximum existing ordinal (or track a counter in the journal dir), and pass `.truncate = false` semantics explicitly where a fresh file is intended — or better, make `sealHead`/`compact` allocate a fresh ordinal that cannot collide with an in-use file. A regression test should combine compact with seal (and a second compact), then reopen and scan.
+Fixed. `sealHead` names the next segment from `jd.next_ordinal`
+(monotone, never reused), `compact` renames to
+`first_new .. first_new + old_count` where `first_new = jd.next_ordinal`,
+the delete walk parses each `seg-*` name and removes ordinals below
+`first_new`, `truncate` resets `next_ordinal = 2` (it rebuilds to one
+segment), and `loadJournal` sets `next_ordinal` one past the highest
+loaded segment. `createJournal` seeds it at 2. The rewrite never touches
+an open segment's file: on the second compaction the fresh names are all
+above every existing file, so a mid-rewrite error cannot leave the old
+handles pointing at truncated files.
+
+Regression test (`store.zig` "compact then seal and a second compact
+never collide with segment names"): seal_threshold 200, append 5, compact
+out record 3 (`retain = .none`), append 6 and 7 (the second append seals
+the head — the old code truncated the journal's own first segment here),
+compact again out record 5, reopen, scan. Expected `{1, 2, 4, 6, 7}`;
+verified to fail (`TestExpectedEqual`, records misread) when the old
+`jd.segments.items.len + 1` ordinal is restored.
 
 ## Verification
 
@@ -50,4 +72,4 @@ Related but weaker variant in the same family: the mid-compaction error path (se
 ## References
 
 - Code: `src/journal/store.zig:263-281` (`sealHead`), `:368-463` (`compact`), `:404-407` (truncate on rewrite)
-- Fix: none
+- Fix: `src/journal/store.zig` (`JournalDir.next_ordinal`; `sealHead`, `compact`, `truncate`, `loadJournal`, `createJournal`); regression test in the same file. `zig build test` green (all 261+ tests, exit 0).

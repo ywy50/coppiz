@@ -8,7 +8,10 @@
 
 ## Status
 
-Open.
+Resolved — `encodeChanges`/`encodePayload`/`encodeValue` now refuse with
+`error.SettingsTooLarge` when a count or length exceeds `max u16`;
+regression tests in `fold.zig` (a 65,536-byte item) and the atomic-commit
+test drive the encode path.
 
 ## Symptom and impact
 
@@ -39,7 +42,21 @@ Nothing enforces the 64 KiB bound on the encode path. `validateState`'s `authori
 
 ## Resolution
 
-Not yet fixed. Suggested direction: enforce the codec limit at encode time — either return a proper error when `changesLen`/`valueLen` exceeds `max u16` (and reject it in validation with a named refusal such as `settings_too_large`), or extend the wire format's length fields. A regression test should feed a ≥ 64 KiB value through the full `settings set` path in a debug build and expect a clean refusal, not a panic.
+Fixed. `schema.encodeValue` returns `error{SettingsTooLarge}` when the
+string_list count or an item length exceeds `max u16`; `fold.encodeChanges`
+refuses a change list whose count or any `valueLen` exceeds `max u16`; and
+`fold.encodePayload` propagates. The error set
+(`fold.SettingsTooLargeError`) ripples through every caller —
+`chain.encodeGenesisPayload`/`encodeCreateJournalPayload`, the node's
+settings/genesis paths, `journal.init`, the CLI `settings set`, and the
+simulator — which now propagate it (`try`) instead of silently
+truncating. No wire-format change: the decode side's u16 fields are the
+cap, and the encode side now enforces the same bound.
+
+Regression tests (`fold.zig`): a single 65,536-byte authority item
+(`changesLen = 65546`) returns `SettingsTooLarge` from `encodeChanges`
+(was a debug-build panic), and the same cap refuses an individual
+over-long item from `encodeValue`.
 
 ## Verification
 
@@ -53,4 +70,4 @@ The fold's `applySettings` is also not atomic under OOM (reported separately). B
 ## References
 
 - Code: `src/settings/fold.zig:36-57` (`changesLen`/`encodeChanges`), `src/settings/schema.zig:383-420` (`valueLen`/`encodeValue`), `src/config/local.zig:271-289` (`parseStringArray`)
-- Fix: none
+- Fix: `src/settings/fold.zig`, `src/settings/schema.zig`, and every encode caller (`src/journal/chain.zig`, `src/journal/journal.zig`, `src/cluster/node.zig`, `src/cluster/epoch.zig`, `src/cluster/membership.zig`, `src/sim/sim.zig`, `src/main.zig`). `zig build test` green.

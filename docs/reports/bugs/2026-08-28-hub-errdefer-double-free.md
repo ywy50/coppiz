@@ -8,7 +8,9 @@
 
 ## Status
 
-Open.
+Resolved — `connectFn`/`listen`/`dialer` perform every allocation before
+touching the container, so no errdefer can free what the hub owns;
+regression test drives every allocation with a failing allocator.
 
 ## Symptom and impact
 
@@ -37,7 +39,23 @@ Container insertion happens before the remaining allocations, and the errdefers 
 
 ## Resolution
 
-Not yet fixed. Suggested direction: perform all `create`/`dupe` allocations before touching the container (and keep the errdefers until the last one succeeds), or clear the errdefers once the container owns the object. A regression test should drive `connect`/`listen` with a failing allocator and then `Hub.deinit(tio)` under `std.testing.allocator` (GPA catches the double-free as a panic).
+Fixed as suggested (allocate first, then insert):
+
+- `connectFn`: the two `dupe`s and both `PipeConn` allocations happen
+  before `hub.pipes.append`; only after every allocation succeeded does
+  the hub own the pipe, so a failure anywhere earlier frees everything
+  exactly once.
+- `listen`: the endpoint, the map key and the `HubListener` (with its
+  address) are allocated before `endpoints.put`; a failure before the put
+  leaves the map untouched.
+- `dialer` (same family, exposed by the new test): `errdefer
+  allocator.destroy(d)` covers the `from` dupe.
+
+Regression test ("hub connect and listen never double-free on allocation
+failure"): runs one full hub lifecycle per failing allocation index
+(`std.testing.FailingAllocator` over GPA) until a round succeeds — any
+double-free or leak panics under the GPA. Verified to fail (double-free
+panic) on the pre-fix ordering.
 
 ## Verification
 
@@ -50,4 +68,4 @@ Related hub defects reported separately: duplicate-address `listen` overwrite/le
 ## References
 
 - Code: `src/net/transport.zig:562-605` (`connectFn`), `:463-480` (`listen`), `:438-458` (`Hub.deinit`)
-- Fix: none
+- Fix: `src/net/transport.zig` (`connectFn`, `listen`, `dialer`); regression test in the same file. `zig build test` green.

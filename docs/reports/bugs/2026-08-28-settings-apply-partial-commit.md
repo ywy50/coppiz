@@ -8,7 +8,10 @@
 
 ## Status
 
-Open.
+Resolved — the commit is a swap of the validated candidate, not a
+per-change re-apply; regression test fails the second change's clone and
+asserts the state is unchanged. A pre-existing leak in `Value.clone`'s
+partial-failure path surfaced under the same test and was fixed too.
 
 ## Symptom and impact
 
@@ -24,7 +27,21 @@ The candidate-clone validates the entry as a whole, but the commit re-applies ch
 
 ## Resolution
 
-Not yet fixed. Suggested direction: apply all changes to a fresh clone of `state`, and only swap the result in on success (the fold already clones for validation — reuse that). A regression test should fail the second `set` and assert the state is unchanged.
+Fixed. `applySettings` (and `applyGenesis`, which had the same
+re-apply shape) now deinit the old state and swap the validated
+candidate in with `state.* = candidate` — the commit is infallible, so
+an OOM can no longer leave the fold half-applied. The candidate clone
+still isolates every failing point (clone, `set`, `validateState`).
+
+Regression test ("applySettings commit is atomic: an OOM on the second
+change leaves the state untouched"): a `ttl.default_ms` change followed
+by an authority-list change, applied under one-failing-allocation-at-a-
+time; every failure must leave the state byte-identical (hash-compared),
+and the success case applies both changes. Verified to fail against the
+old re-apply loop (the state hash diverged after the injected OOM).
+The same sweep exposed a leak in `schema.Value.clone`'s string_list
+partial-failure path (a failed `dupe` mid-loop leaked the earlier
+items) — fixed with an errdefer over the filled prefix.
 
 ## Verification
 
@@ -37,4 +54,4 @@ None. Note the same replicated-fold path carries the u16 codec overflow (reporte
 ## References
 
 - Code: `src/settings/fold.zig:143-163` (`applySettings`), `src/settings/schema.zig:540-544` (`SettingsState.set` clone)
-- Fix: none
+- Fix: `src/settings/fold.zig` (`applySettings`, `applyGenesis`), `src/settings/schema.zig` (`Value.clone` leak); regression test in `fold.zig`. `zig build test` green.
