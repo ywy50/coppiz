@@ -1519,10 +1519,16 @@ test "an oversized payload is refused with too_large before anything is folded" 
     }
     const max_bytes = schema.keyIndex("journal.max_entry_bytes").?;
     try cluster.data.settings.set(max_bytes, .{ .u64 = 8 });
+    const head_before = cluster.data.head;
+    const head_hash_before = cluster.data.head_slot_hash;
+    const entry_count_before = cluster.data.entries.count();
     try std.testing.expectError(
         error.TooLarge,
         appendData(&fix, &cluster.control, &cluster.data, 0, "0123456789", 1002),
     );
+    try std.testing.expectEqual(head_before, cluster.data.head);
+    try std.testing.expectEqualSlices(u8, &head_hash_before, &cluster.data.head_slot_hash);
+    try std.testing.expectEqual(entry_count_before, cluster.data.entries.count());
 }
 
 test "chain continuity: bad prev, gapped seq, and backwards clocks are refused" {
