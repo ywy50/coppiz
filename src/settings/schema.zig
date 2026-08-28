@@ -340,7 +340,21 @@ pub const Value = union(enum) {
     }
 };
 
-pub fn keyIndex(name: []const u8) ?u16 {
+/// The index of the key named `name` (wire-format position, table order).
+/// The parameter is comptime so every call with a literal name resolves at
+/// compile time — the hot paths re-resolve key indices on every tick and
+/// every append, and the scan over the schema table would otherwise run
+/// again on each call. Runtime lookups (a TOML or CLI key name) use
+/// `keyIndexRuntime`.
+pub fn keyIndex(comptime name: []const u8) ?u16 {
+    inline for (keys, 0..) |key, i| {
+        if (std.mem.eql(u8, key.name, name)) return @intCast(i);
+    }
+    return null;
+}
+
+/// Runtime lookup for a name parsed from user input (config, CLI).
+pub fn keyIndexRuntime(name: []const u8) ?u16 {
     for (keys, 0..) |key, i| {
         if (std.mem.eql(u8, key.name, name)) return @intCast(i);
     }
@@ -557,6 +571,9 @@ pub const SettingsState = struct {
     /// The canonical encoding of the whole state, in table order: key index,
     /// encoded value, concatenated. Two states are equal iff their canonical
     /// encodings are equal, which is what the fold determinism hash checks.
+    /// Values are encoded in place into the output buffer (each value's
+    /// encoded size is known up front), so a hash costs no scratch
+    /// allocations per key.
     pub fn encodeCanonical(self: *const SettingsState, allocator: std.mem.Allocator) ![]u8 {
         var out = std.ArrayListUnmanaged(u8).empty;
         errdefer out.deinit(allocator);
@@ -565,10 +582,8 @@ pub const SettingsState = struct {
             std.mem.writeInt(u16, &key_buf, @intCast(i), .little);
             try out.appendSlice(allocator, &key_buf);
             const len = valueLen(value);
-            const scratch = try allocator.alloc(u8, len);
-            defer allocator.free(scratch);
-            try encodeValue(value, scratch);
-            try out.appendSlice(allocator, scratch);
+            try out.appendNTimes(allocator, 0, len);
+            try encodeValue(value, out.items[out.items.len - len ..]);
         }
         return out.toOwnedSlice(allocator);
     }

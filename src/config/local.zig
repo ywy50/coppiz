@@ -158,7 +158,7 @@ fn parseKeyValue(
     config: *Config,
 ) ParseError!void {
     // A journal-scoped schema key can never belong in local config.
-    if (schema.keyIndex(key)) |idx| {
+    if (schema.keyIndexRuntime(key)) |idx| {
         if (schema.keys[idx].scope == .journal) {
             // Named as the layer error: it belongs in the chain.
             return error.JournalKeyInLocalConfig;
@@ -223,7 +223,7 @@ fn parseGenesisKey(
     value: []const u8,
     config: *Config,
 ) ParseError!void {
-    const idx = schema.keyIndex(key) orelse return error.UnknownKey;
+    const idx = schema.keyIndexRuntime(key) orelse return error.UnknownKey;
     if (schema.keys[idx].scope != .cluster) return error.JournalKeyInLocalConfig;
     const parsed = try parseValue(allocator, idx, value);
     try config.genesis.append(allocator, .{ .key = idx, .value = parsed });

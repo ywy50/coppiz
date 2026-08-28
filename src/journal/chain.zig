@@ -704,6 +704,15 @@ pub const FoldState = struct {
             const settle = cluster.settings.getU64(schema.keyIndex("merge.settle_ms").?);
             if (sl.slot_ts_ms < merge.slot_ts_ms +| settle) return error.MergeSettling;
         }
+        // The default configuration removes nothing (ttl.enforce = off,
+        // stale.cleanup = keep): skip the O(entries) candidates pass, which
+        // would otherwise materialize the whole entries table for an empty
+        // set on every checkpoint of every journal.
+        if (!expiry.canRemoveAnything(&self.settings)) {
+            try self.checkpoints.append(self.allocator, sl.position());
+            try self.registerEntry(sl, en);
+            return;
+        }
         const candidates = try self.expiryCandidates(self.allocator);
         defer self.allocator.free(candidates);
         const set = try expiry.removalSet(
