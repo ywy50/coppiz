@@ -551,6 +551,15 @@ pub const ClusterNode = struct {
         }.cb);
         for (pending.items) |en| {
             if (self.entryKnown(en.journal, en.id())) {
+                // The slot landed while this member was backfilling or
+                // merging, so `onSlot` never ran for it: whoever is waiting
+                // on this entry is resolved here, before the queue drops it.
+                if (self.pending_clients.fetchRemove(en.id())) |kv| {
+                    self.ackClient(kv.value, en.id(), "") catch {};
+                }
+                if (self.pending_locals.fetchRemove(en.id())) |kv| {
+                    completeLocal(kv.value, self.io, en.id(), "");
+                }
                 self.node.queue.remove(en.journal, en.id()) catch {};
                 continue;
             }
@@ -955,8 +964,11 @@ pub const ClusterNode = struct {
                 return;
             }
         }
-        // Nothing left to sync: at head.
+        // Nothing left to sync: at head. Broadcasts were dropped while
+        // backfilling, so drain the queue now — entries the sync pages
+        // already carried are trimmed and their waiters completed.
         self.syncing = false;
+        try self.reforwardQueue();
     }
 
     /// The leader slots its own queued entries. The queue drains when a
@@ -1721,8 +1733,11 @@ pub const ClusterNode = struct {
     }
 
     fn leaderConnId(self: *ClusterNode) ?u64 {
-        const leader = self.node.control.epoch.?.leader;
-        const ms = self.members.get(leader) orelse return null;
+        // No epoch yet (a joiner before its first sync page): there is no
+        // leader to forward to, which is a "not reachable" answer, not a
+        // broken invariant — the caller keeps the entry queued.
+        const epoch_state = self.node.control.epoch orelse return null;
+        const ms = self.members.get(epoch_state.leader) orelse return null;
         return ms.conn_id;
     }
 

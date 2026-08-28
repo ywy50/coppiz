@@ -158,9 +158,11 @@ pub fn applySettings(
         try candidate.set(change.key, change.value);
     }
     try validate.validateState(&candidate, member_count);
-    for (payload.changes) |change| {
-        try state.set(change.key, change.value);
-    }
+    // Commit by swapping the validated candidate in. Re-applying the changes
+    // to `state` would clone again, and a failure part-way through would
+    // leave the entry half-applied *and* refused — a replicated fold that
+    // silently diverges from every member that did not fail there.
+    std.mem.swap(schema.SettingsState, state, &candidate);
 }
 
 /// Applies genesis initial settings. Genesis is the offline bootstrap, so
@@ -177,9 +179,8 @@ pub fn applyGenesis(
         try candidate.set(change.key, change.value);
     }
     try validate.validateState(&candidate, 1);
-    for (changes) |change| {
-        try state.set(change.key, change.value);
-    }
+    // Atomic commit, as in `applySettings`.
+    std.mem.swap(schema.SettingsState, state, &candidate);
 }
 
 // ---------------------------------------------------------------------------
