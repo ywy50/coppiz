@@ -254,7 +254,7 @@ pub const Node = struct {
 
         // 1. Durable local queue (bounded; refuses queue_full, OQ 55).
         try self.queue.append(&en);
-        errdefer self.queue.clear() catch {};
+        errdefer self.queue.remove(journal_id, en.id()) catch {};
 
         // 2. Slot as leader and append to the store.
         const sl = try self.slotFor(fold, &en);
@@ -403,14 +403,20 @@ pub const Node = struct {
         return ids.toOwnedSlice(self.allocator);
     }
 
-    /// Builds the next slot as the leader: current epoch, next seq, clamped
-    /// slot_ts_ms (a backwards clock never moves the chain backwards). The
-    /// cluster node's leader path slots forwarded entries with this.
+    /// Builds the next slot as the leader: current epoch, next seq (1 when
+    /// this journal's head is a previous epoch), clamped slot_ts_ms (a
+    /// backwards clock never moves the chain backwards). The cluster node's
+    /// leader path slots forwarded entries with this.
     pub fn slotFor(self: *Node, fold: *chain.FoldState, en: *const entry.Entry) !slot.Slot {
         const now_ms = @as(u64, @intCast(@max(@as(i64, 0), self.now(self.io))));
+        const now_epoch = self.epoch();
+        const seq: u64 = if (fold.head) |fold_head|
+            if (fold_head.epoch == now_epoch) fold_head.seq + 1 else 1
+        else
+            1;
         var sl = slot.Slot{
-            .epoch = self.epoch(),
-            .seq = (fold.head orelse slot.Position{ .epoch = self.epoch(), .seq = 0 }).seq + 1,
+            .epoch = now_epoch,
+            .seq = seq,
             .slot_ts_ms = @max(now_ms, fold.last_slot_ts_ms),
             .entry_hash = entry.entryHash(en),
             .prev_slot_hash = fold.head_slot_hash,
@@ -1320,6 +1326,43 @@ test "journal.max_entry_bytes and the queue bound trip at the node (G6)" {
     defer tiny.deinit();
     const main_id = tiny.journalIdByName("main").?;
     try std.testing.expectError(error.QueueFull, tiny.append(main_id, "fits? no", 0));
+}
+
+test "slotFor restarts seq at 1 when the cluster epoch advances" {
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    var node = try openNode(&env);
+    defer node.deinit();
+    const j = node.journalIdByName("main").?;
+    _ = try node.append(j, "one", 0);
+    try std.testing.expectEqual(@as(u64, 1), node.head(j).?.epoch);
+    try std.testing.expectEqual(@as(u64, 1), node.head(j).?.seq);
+
+    var ep = node.control.epoch.?;
+    ep.number += 1;
+    node.control.epoch = ep;
+    const js = node.journals.get(j).?;
+    var dummy = entry.Entry{
+        .kind = .data,
+        .journal = j,
+        .author = node.member_id,
+        .author_seq = 2,
+        .author_ts_ms = 0,
+        .ttl_ms = 0,
+        .payload_hash = entry.payloadHash("x"),
+        .payload_len = 1,
+        .payload_omitted = false,
+        .signature = [_]u8{0} ** 64,
+        .payload = "x",
+    };
+    const sl = try node.slotFor(&js.fold, &dummy);
+    try std.testing.expectEqual(@as(u64, 2), sl.epoch);
+    try std.testing.expectEqual(@as(u64, 1), sl.seq);
 }
 
 test "applyReplicated replays another member's whole store onto a fresh member" {

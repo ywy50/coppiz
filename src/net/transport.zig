@@ -399,8 +399,14 @@ pub const Hub = struct {
         fn pushConn(self: *Endpoint, io: std.Io, conn: Conn) void {
             self.mutex.lockUncancelable(io);
             defer self.mutex.unlock(io);
-            if (self.closed) return;
-            self.pending.append(self.allocator, conn) catch return;
+            if (self.closed) {
+                conn.close(io);
+                return;
+            }
+            self.pending.append(self.allocator, conn) catch {
+                conn.close(io);
+                return;
+            };
             self.sem.post(io);
         }
 

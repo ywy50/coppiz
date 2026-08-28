@@ -294,13 +294,13 @@ pub const Store = struct {
         const seg = jd.segments.items[where.segment];
         var prefix: [segment.record_prefix_len]u8 = undefined;
         const n = try seg.file.readPositionalAll(self.io, &prefix, where.offset);
-        if (n != prefix.len) return null;
+        if (n != prefix.len) return error.Truncated;
         const body_len = std.mem.readInt(u32, prefix[0..4], .little);
         const total = segment.record_prefix_len + body_len;
         if (buf.len < total) return error.BufferTooSmall;
         const m = try seg.file.readPositionalAll(self.io, buf[0..total], where.offset);
         if (m != total) return error.Truncated;
-        return segment.decodeRecord(buf[0..total]) catch return null;
+        return segment.decodeRecord(buf[0..total]) catch return error.Corrupt;
     }
 
     /// Iterates every record of a journal in chain order, for the open fold.
@@ -816,6 +816,33 @@ test "appends survive reopen, in order, and read by position" {
     const rec = (try store.read(journal_id, .{ .epoch = 1, .seq = 2 }, &buf)).?;
     try std.testing.expectEqual(@as(u64, 2), rec.slot.seq);
     try std.testing.expectEqualStrings("payload", rec.entry.?.payload);
+}
+
+test "an indexed record with a bad CRC is Corrupt, not missing" {
+    var env = TestEnv.init();
+    defer env.deinit();
+    const journal_id = "0123456789abcdef".*;
+    const store = try env.openStore();
+    defer store.deinit();
+    try store.createJournal(journal_id, [_]u8{0} ** 32);
+    try appendN(store, journal_id, 3);
+
+    const jd = store.journals.get(journal_id).?;
+    const where = jd.index.get(.{ .epoch = 1, .seq = 2 }).?;
+    const seg = jd.segments.items[where.segment];
+    // Flip a body byte (past the len/crc prefix) through the same fd `read` uses.
+    const flip_at = where.offset + segment.record_prefix_len + 4;
+    var one: [1]u8 = undefined;
+    const n = try seg.file.readPositionalAll(tio, &one, flip_at);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    one[0] ^= 0x40;
+    try seg.file.writePositionalAll(tio, &one, flip_at);
+
+    var buf: [512]u8 = undefined;
+    try std.testing.expectError(
+        error.Corrupt,
+        store.read(journal_id, .{ .epoch = 1, .seq = 2 }, &buf),
+    );
 }
 
 test "a torn tail is truncated at open and the verified head survives (G4 unit half)" {

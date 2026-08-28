@@ -7,6 +7,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A fatal error in the cluster loop now stops `coppiz serve` instead of
+  leaving it waiting forever. Failed dials are retried with backoff, a
+  leader drains its unslotted queue, and append/settings failures are
+  acked instead of leaving the client hanging. An indexed record whose CRC
+  fails is `Corrupt`, not silently missing; a `prompt` hello whose
+  `pending.admit` write fails is refused rather than reported as queued.
 - The cluster loop refuses operator and replication messages until hello
   completes, binds a hello's member id to the claimed public key (and to
   the key the chain already holds on reconnect), and ignores a heartbeat
