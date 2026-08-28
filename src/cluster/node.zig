@@ -1612,7 +1612,12 @@ pub const ClusterNode = struct {
         // The epoch's liveness half: a member that disagrees keeps its
         // previous view — a partition, resolved by the merge.
         if (en.kind == .epoch and !self.epochAccepted(&en, &m.sl)) {
-            const payload = epoch.decodeEpochPayload(en.payload) catch return;
+            const payload = epoch.decodeEpochPayload(en.payload) catch {
+                // A malformed epoch payload is a protocol violation: drop
+                // the connection rather than silently keeping a stale view.
+                self.closeConn(conn_id);
+                return;
+            };
             try self.onDivergence(conn_id, payload.leader, m.sl.epoch);
             return;
         }
@@ -1910,6 +1915,9 @@ pub const ClusterNode = struct {
         // Truncate the control branch and re-fold now; the data branches are
         // truncated only after the survivor fetches them (merge_ack), or the
         // fetch would find them gone.
+        // A failure here must surface: the merge_offer is already sent, so
+        // silently keeping the branch would leave the survivor merging a
+        // chain this side never truncated.
         try self.node.store.truncate(self.node.control.journal_id, self.common_tail.?);
         try self.node.refold();
         try self.resetMySeq();
@@ -2062,8 +2070,13 @@ pub const ClusterNode = struct {
         const buf = buf_ptr.*;
         var off: usize = 0;
         while (off < buf.items.len) {
-            const rec = segment.decodeRecord(buf.items[off..]) catch return;
-            const e = rec.entry orelse return;
+            // A record the peer sent that does not decode is a protocol
+            // violation; erroring out (the loop closes the conn, and
+            // peer-gone releases the merge) beats silently merging a
+            // truncated branch.
+            const rec = segment.decodeRecord(buf.items[off..]) catch
+                return error.CorruptMergeBranch;
+            const e = rec.entry orelse return error.CorruptMergeBranch;
             // The payload is copied: the buffer is freed when the merge
             // completes, but the re-slotted entries must survive it.
             try decoded.append(self.allocator, .{
@@ -2135,8 +2148,9 @@ pub const ClusterNode = struct {
         const buf = buf_ptr.*;
         var off: usize = 0;
         while (off < buf.items.len) {
-            const rec = segment.decodeRecord(buf.items[off..]) catch return;
-            const e = rec.entry orelse return;
+            const rec = segment.decodeRecord(buf.items[off..]) catch
+                return error.CorruptMergeBranch;
+            const e = rec.entry orelse return error.CorruptMergeBranch;
             const sl = try self.reslot(&e, prev_hash, seq);
             try self.node.applyReplicated(jid, &sl, &e, false);
             self.broadcastToMembers(.{ .slot = .{
