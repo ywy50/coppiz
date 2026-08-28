@@ -8,7 +8,8 @@
 
 ## Status
 
-Open.
+Resolved — the literal is replaced with `testAddr(7)` (the pid-derived
+scheme); one-line fix.
 
 ## Symptom and impact
 
@@ -24,7 +25,11 @@ The hardcoded port was introduced (likely as a shortcut) after the pid-derived d
 
 ## Resolution
 
-Not yet fixed. Suggested fix: replace the literal with `testAddr(6)` (or another unused offset). Trivial, one line.
+Fixed: `src/main.zig:1320` now uses `try testAddr(7)` (a previously
+unused offset) exactly like every other process-level test, so the test
+cannot collide on the fixed port `17431` with a stale serve from an
+aborted run or a parallel checkout. The address is freed like the
+others.
 
 ## Verification
 
@@ -37,4 +42,4 @@ None.
 ## References
 
 - Code: `src/main.zig:1320`, design note `:1040-1043`, helper `:1045-1049`
-- Fix: none
+- Fix: `src/main.zig:1320` (`testAddr(7)`). `zig build test` green (all 13 process-level tests pass).

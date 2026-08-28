@@ -29,6 +29,26 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   body bound.
 - `member.key` is created with owner-only permissions (0600).
 - Hub frame sends refuse an oversized body the same way TCP framing does.
+- The 2026-08-28 bug sweep's storage and replication defects are fixed: a
+  compaction no longer collides with the journal's own segment names
+  (`compact`/`sealHead` use fresh ordinals); the unslotted queue refuses
+  mid-file corruption instead of truncating acknowledged entries; a
+  settings value past the u16 codec cap is refused with `settings_too_large`
+  instead of panicking; a settings entry commits atomically (an OOM cannot
+  leave the fold half-applied); `ttl.retain = none` compactions reopen and
+  fold; the checkpoint settle rule reads the cluster's merge fact; a
+  re-slotted `create_journal` no longer stalls the merge; a redelivery no
+  longer lowers the author's high-water mark; an embedded host's append
+  completes during backfill instead of blocking forever; a follower that
+  misses a data broadcast catches up via sync instead of reading stale data
+  forever; and a join that would strand the cluster leaderless is refused.
+- The in-memory hub's allocation-failure paths no longer double-free, a
+  duplicate `listen` is refused with `address_in_use`, partial `readInto`
+  keeps every free on an allocation start, and closing a listener takes the
+  endpoint lock. The `coppiz.toml` parser is quote-aware (`#` and `,`
+  inside quoted values survive), and a peer `public_key` that is not 64 hex
+  chars is refused at parse time instead of silently dropped from the join
+  allowlist.
 - `zig build test` is green again — the suite had not compiled since the
   review-stack merges (a `Hub.deinit` arity drift at three test sites, and
   the CLI test root requiring libc for `std.c.getpid()`); the shipped binary

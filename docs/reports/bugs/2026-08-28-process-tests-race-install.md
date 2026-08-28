@@ -50,13 +50,27 @@ The run cannot start before the install step (compile + copy to
 alone — the suite never spawns the example executables, so they stay off the
 test path (the same change that removed the wasted example compiles).
 
+The original fix was incomplete for the G2 test: "the suite never spawns
+the example executables" stopped being true when `main.zig`'s G2 test
+began spawning `zig-out/bin/sidecar` (the installed binary was stale in
+the baseline run — built before the G2 feature — and the test failed on
+its stderr assertion). `addChecks` now installs the sidecar too (reusing
+the example compile step via `example_exes`) and the exe_tests run
+depends on that install as well, so the test always spawns a current
+binary.
+
 ## Verification
 
 `zig build test --summary all`: green (21/21 steps, 242/242 tests, exit 0,
 three consecutive runs). The race was never deterministically reproducible
 (previously blocked by the two compile errors), so verification is
 dependency-graph structure plus the green gate; repeated runs would be the
-regression check.
+regression check. The incomplete sidecar half was verified concretely: the
+stale `zig-out/bin/sidecar` (built 20:05, before the G2 commit at 20:32)
+made the G2 test fail on `main.zig:1402`; with the sidecar install wired
+in, the suite is green (`zig build test` exit 0, all 13 process-level
+tests pass) and a manual G2 repro against `zig-out/bin/sidecar` prints the
+TCP message.
 
 ## Follow-up
 
@@ -65,4 +79,5 @@ Related test-suite defect: the hardcoded port `17431` (reported separately). Bot
 ## References
 
 - Code: `build.zig:181-194`, `src/main.zig:856, 905`
-- Fix: working tree (see the investigation 2026-08-28 test-build speedup; not yet committed)
+- Fix: `build.zig` (`addChecks`: coppiz install + sidecar install as
+  dependencies of the exe_tests run). `zig build test` green.

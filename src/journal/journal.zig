@@ -286,7 +286,7 @@ pub const Node = struct {
             }),
         );
         defer self.allocator.free(payload);
-        chain.encodeCreateJournalPayload(
+        try chain.encodeCreateJournalPayload(
             .{ .journal_id = journal_id, .name = name, .changes = initial },
             payload,
         );
@@ -317,7 +317,7 @@ pub const Node = struct {
         };
         const buf = try self.allocator.alloc(u8, settings_fold.payloadLen(payload));
         defer self.allocator.free(buf);
-        settings_fold.encodePayload(payload, buf);
+        try settings_fold.encodePayload(payload, buf);
         const target: *chain.FoldState = if (is_control)
             &self.control
         else
@@ -668,7 +668,15 @@ pub const Node = struct {
         var ctx = Ctx{ .node = self, .fold = fold };
         try self.store.scan(journal_id, &ctx, struct {
             fn cb(c: *Ctx, sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
-                const e = en orelse return; // a retain=none removed record
+                const e = en orelse {
+                    // A retain=none removed record: the entry is gone, but
+                    // the slot is still part of the chain. Advance the fold
+                    // over it, or the next full record's prev_slot_hash
+                    // fails against the stale head and the node cannot open
+                    // (bug 2026-08-28-retain-none-reopen-badprevhash).
+                    try c.fold.advanceHead(sl);
+                    return;
+                };
                 if (c.fold.is_control) {
                     try c.fold.applyControl(sl, e);
                 } else {
@@ -988,7 +996,7 @@ pub fn init(
     chain.encodeGenesisPayload(
         .{ .founder_key = keypair.public_key.toBytes(), .changes = initial },
         payload,
-    );
+    ) catch |e| return e;
 
     var en = entry.Entry{
         .kind = .genesis,
@@ -1033,7 +1041,7 @@ pub fn init(
         chain.encodeCreateJournalPayload(
             .{ .journal_id = journal_id, .name = name, .changes = &.{} },
             cj_payload,
-        );
+        ) catch |e| return e;
         var cj_en = entry.Entry{
             .kind = .create_journal,
             .journal = control_id,
@@ -1346,6 +1354,71 @@ test "checkpoint removes expired entries and compaction keeps the chain verifiab
     try std.testing.expect(info2.removed);
     const fold_hash2 = try node2.journals.get(s.jid).?.fold.hash(test_alloc);
     try std.testing.expectEqualSlices(u8, &s.fold_hash, &fold_hash2);
+}
+
+test "retain = none compaction leaves a journal that folds on reopen" {
+    // Bug 2026-08-28-retain-none-reopen-badprevhash: with ttl.retain = none
+    // a removal is rewritten as a slot-only record, and the reopen fold
+    // skipped it without advancing the chain head — the next full record
+    // then failed the prev_slot_hash continuity check and the node could
+    // not open.
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    const jid: [16]u8 = blk: {
+        var node = try openNode(&env);
+        defer node.deinit();
+        const j = node.journalIdByName("main").?;
+        const enforce = schema.keyIndex("ttl.enforce").?;
+        const ttl_default = schema.keyIndex("ttl.default_ms").?;
+        const ttl_action = schema.keyIndex("ttl.action").?;
+        const ttl_retain = schema.keyIndex("ttl.retain").?;
+        const changes = [_]validate.Change{
+            .{ .key = enforce, .value = .{ .enum_value = schema.enumValue(enforce, "all").? } },
+            .{ .key = ttl_default, .value = .{ .u64 = 1000 } },
+            .{
+                .key = ttl_action,
+                .value = .{ .enum_value = schema.enumValue(ttl_action, "delete").? },
+            },
+            .{
+                .key = ttl_retain,
+                .value = .{ .enum_value = schema.enumValue(ttl_retain, "none").? },
+            },
+        };
+        test_now = 2_000;
+        try node.changeSettings(j, &changes);
+        _ = try node.append(j, "expiring", 0);
+        test_now = 3_500;
+        _ = try node.append(j, "staying", 0);
+        test_now = 4_000;
+        try node.checkpoint(j);
+        break :blk j;
+    };
+
+    // The reopened fold survives the slot-only record and the surviving
+    // entry reads back.
+    var node2 = try openNode(&env);
+    defer node2.deinit();
+    var seen: usize = 0;
+    _ = try node2.readById(
+        jid,
+        .{ .author = node2.member_id, .author_seq = 3 },
+        false,
+        false,
+        &seen,
+        struct {
+            fn cb(c: *usize, _: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
+                try std.testing.expectEqualStrings("staying", en.?.payload);
+                c.* += 1;
+            }
+        }.cb,
+    );
+    try std.testing.expectEqual(@as(usize, 1), seen);
 }
 
 test "a backwards clock is clamped to the previous slot (failure mode)" {

@@ -8,7 +8,8 @@
 
 ## Status
 
-Open (latent).
+Resolved — `closeFn` writes `endpoint.closed` under the endpoint mutex,
+matching the locking discipline of `pushConn`/`acceptConn`.
 
 ## Symptom and impact
 
@@ -37,7 +38,13 @@ Not reproduced; statically certain. A listener closed concurrently with an in-fl
 
 ## Resolution
 
-Not yet fixed. Suggested fix: take `self.endpoint.mutex` around the `closed = true` write (and re-check `closed` under it, like `push`). A regression test would need a concurrent close/accept loop — hard to make deterministic; a `zig build test` under ThreadSanitizer would flag it once reachable.
+Fixed as suggested: `closeFn` takes `self.endpoint.mutex` around the
+`closed = true` write and the semaphore post (the mutex pointer is
+captured before `self` is destroyed, so the deferred unlock stays
+valid). `pushConn`/`acceptConn` read `closed` under the same lock, so
+the race is gone. A deterministic regression test would need a
+concurrent close/accept loop, which is hard to make deterministic; the
+fix is the same locking discipline the sibling primitives already use.
 
 ## Verification
 
@@ -50,4 +57,4 @@ None. Low priority until a caller closes a listener while accepts/dials are in f
 ## References
 
 - Code: `src/net/transport.zig:547-555` (`HubListener.closeFn`), `:402-431` (`pushConn`/`acceptConn`)
-- Fix: none
+- Fix: `src/net/transport.zig` (`HubListener.closeFn`). `zig build test` green.

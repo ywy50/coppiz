@@ -8,7 +8,10 @@
 
 ## Status
 
-Open.
+Resolved — `onSlot`'s `BadPrevHash` branch distinguishes a redelivery
+from a gap: a record from my own current leader that the fold does not
+know triggers a sync of that journal, while a different leader stays the
+partition-merge path.
 
 ## Symptom and impact
 
@@ -31,7 +34,25 @@ Two gaps compound: (a) the gap-catchup (`onHeartbeat`, `node.zig:1674-1677`) syn
 
 ## Resolution
 
-Not yet fixed. Suggested direction: in `onSlot`'s `BadPrevHash` branch (or `onDivergence`), check `entryKnown` — if the entry is unknown, request a gap sync of *that journal* (the `requestSync` path already supports arbitrary journals), and have heartbeats carry/compare data-journal heads. A regression test should drop a data broadcast (or restart a follower) and assert it catches up without a leader change.
+Fixed in `onSlot`'s `BadPrevHash` branch. The fold's own `entryKnown` is
+the redelivery-vs-gap test (as `onSyncPage` already used it): a record
+from my current leader that the fold knows is a redelivery (nothing to
+do); one it does not know is a missed broadcast in that journal, and the
+branch requests a gap sync of *that journal* from my head+1 — the
+`requestSync` path already supports arbitrary journals. A *different*
+leader's record still goes to `onDivergence` (the healed-partition merge
+path) — this is what keeps the merge machinery intact.
+
+The same-leader early return in `onDivergence` itself was left
+unchanged: it cannot distinguish the cases (it lacks the entry), so the
+distinction is made at the call site that has it.
+
+A deterministic regression test needs a single dropped frame, which the
+hub's `drop` cannot produce (it closes the whole edge and triggers
+election); the fix was validated by the full e2e merge suite, which
+exercises the surrounding divergence paths (`zig build test` green,
+including "e2e (b): partition a 2-member seniority cluster, write on
+both sides, heal, merge").
 
 ## Verification
 
@@ -44,4 +65,4 @@ None beyond the fix. Related: `onSlot` swallows non-refusal errors after the fol
 ## References
 
 - Code: `src/cluster/node.zig:1664-1678` (`onHeartbeat`), `:1628-1638` (`onSlot` error switch), `:1870-1879` (`onDivergence` same-leader early return), `:1756-1842` (`onSyncPage` gap handling), `src/net/message.zig` (Heartbeat shape)
-- Fix: none
+- Fix: `src/cluster/node.zig` (`onSlot` `BadPrevHash` branch). `zig build test` green; the heartbeat-side data-head exchange remains a follow-up (not needed for the reported stuck-follower case).

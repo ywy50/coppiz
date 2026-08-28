@@ -40,8 +40,12 @@ pub fn changesLen(changes: []const validate.Change) usize {
 }
 
 /// Encodes a change list (count + tuples) into `buf`, which must hold
-/// `changesLen`.
-pub fn encodeChanges(changes: []const validate.Change, buf: []u8) void {
+/// `changesLen`. Refuses a change list the wire format cannot carry: the
+/// count and every value length are u16 fields, so a larger list cannot be
+/// encoded without corrupting the length prefix (bug
+/// 2026-08-28-settings-codec-u16-overflow).
+pub fn encodeChanges(changes: []const validate.Change, buf: []u8) SettingsTooLargeError!void {
+    if (changes.len > std.math.maxInt(u16)) return error.SettingsTooLarge;
     std.mem.writeInt(u16, buf[0..2], @intCast(changes.len), .little);
     var off: usize = 2;
     var len_buf: [2]u8 = undefined;
@@ -49,9 +53,10 @@ pub fn encodeChanges(changes: []const validate.Change, buf: []u8) void {
         std.mem.writeInt(u16, &len_buf, change.key, .little);
         @memcpy(buf[off .. off + 2], &len_buf);
         const vlen = schema.valueLen(change.value);
+        if (vlen > std.math.maxInt(u16)) return error.SettingsTooLarge;
         std.mem.writeInt(u16, &len_buf, @intCast(vlen), .little);
         @memcpy(buf[off + 2 .. off + 4], &len_buf);
-        schema.encodeValue(change.value, buf[off + 4 .. off + 4 + vlen]);
+        try schema.encodeValue(change.value, buf[off + 4 .. off + 4 + vlen]);
         off += 4 + vlen;
     }
 }
@@ -102,11 +107,16 @@ pub fn payloadLen(payload: SettingsPayload) usize {
     return 1 + 16 + changesLen(payload.changes);
 }
 
+/// The error an encode refusals reports: the wire format's u16 length and
+/// count fields cannot carry the value (bug
+/// 2026-08-28-settings-codec-u16-overflow).
+pub const SettingsTooLargeError = error{SettingsTooLarge};
+
 /// Encodes a payload into `buf`, which must hold `payloadLen`.
-pub fn encodePayload(payload: SettingsPayload, buf: []u8) void {
+pub fn encodePayload(payload: SettingsPayload, buf: []u8) SettingsTooLargeError!void {
     buf[0] = @intFromEnum(payload.scope);
     buf[1..17].* = payload.journal_id;
-    encodeChanges(payload.changes, buf[17..]);
+    try encodeChanges(payload.changes, buf[17..]);
 }
 
 pub const DecodeError = error{
@@ -161,7 +171,9 @@ pub fn applySettings(
     // Commit by swapping the validated candidate in. Re-applying the changes
     // to `state` would clone again, and a failure part-way through would
     // leave the entry half-applied *and* refused — a replicated fold that
-    // silently diverges from every member that did not fail there.
+    // silently diverges from every member that did not fail there (bug
+    // 2026-08-28-settings-apply-partial-commit). After the swap, `candidate`
+    // holds the old state and the defer frees it.
     std.mem.swap(schema.SettingsState, state, &candidate);
 }
 
@@ -214,7 +226,7 @@ test "settings payload round-trips" {
 
     const buf = try test_alloc.alloc(u8, payloadLen(payload));
     defer test_alloc.free(buf);
-    encodePayload(payload, buf);
+    try encodePayload(payload, buf);
     defer {
         test_alloc.free(names[0]);
         test_alloc.free(names[1]);
@@ -329,4 +341,80 @@ test "applyGenesis may start the cluster frozen" {
     };
     try applyGenesis(&state, &changes);
     try std.testing.expect(!state.getBool(reconfigurable));
+}
+
+test "a value past the u16 codec cap is refused at encode, not truncated" {
+    // Bug 2026-08-28-settings-codec-u16-overflow: the length fields are
+    // u16, so a single value whose encoded form reaches 64 KiB used to
+    // panic in debug builds via an unchecked @intCast.
+    const authorities = schema.keyIndex("leadership.authorities").?;
+    const big = try test_alloc.alloc(u8, 65_536);
+    defer test_alloc.free(big);
+    @memset(big, 'a');
+    const items = try test_alloc.alloc([]const u8, 1);
+    defer test_alloc.free(items);
+    items[0] = big;
+    var changes = [_]validate.Change{
+        .{ .key = authorities, .value = .{ .string_list = items } },
+    };
+    try std.testing.expectEqual(@as(usize, 65_546), changesLen(&changes));
+    const buf = try test_alloc.alloc(u8, changesLen(&changes));
+    defer test_alloc.free(buf);
+    try std.testing.expectError(error.SettingsTooLarge, encodeChanges(&changes, buf));
+
+    // The same cap refuses an individual item past 64 KiB.
+    items[0] = "";
+    items[0] = big;
+    try std.testing.expectError(
+        error.SettingsTooLarge,
+        schema.encodeValue(.{ .string_list = items }, buf),
+    );
+}
+
+test "applySettings commit is atomic: an OOM on the second change leaves the state untouched" {
+    // Bug 2026-08-28-settings-apply-partial-commit: the commit loop
+    // re-applied changes one at a time with `set` (which clones and can
+    // fail), so an OOM after the first change refused the entry with the
+    // state half-applied. A failing allocator at the second change's clone
+    // must leave the state byte-identical.
+    var state = try schema.SettingsState.initDefaults(test_alloc);
+    defer state.deinit();
+    const ttl_default = schema.keyIndex("ttl.default_ms").?;
+    const authorities = schema.keyIndex("leadership.authorities").?;
+    const before = try state.hash(test_alloc);
+
+    const items = try test_alloc.alloc([]const u8, 2);
+    defer test_alloc.free(items);
+    items[0] = "node-a";
+    items[1] = "node-b";
+
+    var changes = [_]validate.Change{
+        .{ .key = ttl_default, .value = .{ .u64 = 5000 } },
+        .{ .key = authorities, .value = .{ .string_list = items } },
+    };
+    const payload = SettingsPayload{
+        .scope = .cluster,
+        .journal_id = [_]u8{0} ** 16,
+        .changes = &changes,
+    };
+
+    // Fail one allocation at a time until applySettings succeeds; every
+    // failure must leave the state byte-identical (the pre-fix commit loop
+    // applied change 1 before change 2's clone failed, diverging the hash).
+    var i: usize = 0;
+    while (i < 64) : (i += 1) {
+        var failing = std.testing.FailingAllocator.init(test_alloc, .{ .fail_index = i });
+        var candidate = schema.SettingsState.initDefaults(failing.allocator()) catch continue;
+        defer candidate.deinit();
+        if (applySettings(&candidate, payload, 1)) |_| {
+            try std.testing.expectEqual(@as(u64, 5000), candidate.getU64(ttl_default));
+            const got = candidate.getList(authorities);
+            try std.testing.expectEqual(items.len, got.len);
+            for (items, got) |want, have| try std.testing.expectEqualStrings(want, have);
+            break;
+        } else |_| {
+            const after = try candidate.hash(test_alloc);
+            try std.testing.expectEqualSlices(u8, &before, &after);
+        }
+    }
 }

@@ -74,13 +74,18 @@ const IndexEntry = struct {
     offset: u64,
 };
 
-/// One open journal: its segments in order (last = head) and the
-/// position -> (segment, offset) index.
+/// One open journal: its segments in order (last = head), the
+/// position -> (segment, offset) index, and the next unused segment
+/// ordinal. Ordinals are monotone — a new segment always gets a number
+/// no previous file used — because compaction rewrites segments to fresh
+/// names and the count-based scheme (`len + 1`) collided with those names
+/// (bug 2026-08-28-segment-ordinal-collision-after-compact).
 const JournalDir = struct {
     dir: std.Io.Dir,
     segments: std.ArrayListUnmanaged(Segment),
     index: std.AutoHashMap(slot.Position, IndexEntry),
     head_records_len: u64,
+    next_ordinal: u64,
 };
 
 pub const Store = struct {
@@ -207,6 +212,7 @@ pub const Store = struct {
             .segments = .empty,
             .index = std.AutoHashMap(slot.Position, IndexEntry).init(self.allocator),
             .head_records_len = 0,
+            .next_ordinal = 2,
         };
         try jd.segments.append(self.allocator, .{
             .file = first_file,
@@ -260,7 +266,14 @@ pub const Store = struct {
         if (self.fsync != .never) try head.file.sync(self.io);
         head.sealed = true;
 
-        const ordinal = jd.segments.items.len + 1;
+        // A fresh ordinal, never a number an existing file already uses:
+        // compaction renames segments to high ordinals, so the segment
+        // count no longer bounds the names (bug
+        // 2026-08-28-segment-ordinal-collision-after-compact). The ordinal
+        // is consumed even if the create fails below — skipping a number is
+        // harmless, reusing one is data loss.
+        const ordinal = jd.next_ordinal;
+        jd.next_ordinal += 1;
         const name_buf = try std.fmt.allocPrint(self.allocator, "seg-{d:0>8}", .{ordinal});
         defer self.allocator.free(name_buf);
         const file = try jd.dir.createFile(self.io, name_buf, .{ .read = true });
@@ -373,6 +386,11 @@ pub const Store = struct {
     ) !void {
         const jd = self.journals.get(journal_id) orelse return error.UnknownJournal;
         const old_count = jd.segments.items.len;
+        // Fresh names start at the next unused ordinal; every existing file
+        // has a lower ordinal, so the createFile below can never truncate a
+        // segment this store has open (bug
+        // 2026-08-28-segment-ordinal-collision-after-compact).
+        const first_new = jd.next_ordinal;
         var removed_set = std.AutoHashMap(entry.Id, void).init(self.allocator);
         defer removed_set.deinit();
         for (removed) |id| try removed_set.put(id, {});
@@ -395,7 +413,7 @@ pub const Store = struct {
             const records = try self.readRecordRegion(&old, 0, old.records_len);
             defer self.allocator.free(records);
 
-            const ordinal = old_count + new_segments.items.len + 1;
+            const ordinal = first_new + new_segments.items.len;
             const name_buf = try std.fmt.allocPrint(self.allocator, "seg-{d:0>8}", .{ordinal});
             defer self.allocator.free(name_buf);
             // Truncate: a later compaction reuses these ordinals, and a
@@ -469,18 +487,19 @@ pub const Store = struct {
         for (jd.segments.items) |old| old.file.close(self.io);
         jd.segments.clearRetainingCapacity();
         jd.head_records_len = 0;
+        jd.next_ordinal = first_new + old_count;
         var it = jd.dir.iterate();
         while (try it.next(self.io)) |dirent| {
             if (dirent.kind != .file) continue;
             if (std.mem.startsWith(u8, dirent.name, "seg-")) {
-                // Old ordinals are all below the first new one.
-                var first_new_buf: [16]u8 = undefined;
-                const first_new = try std.fmt.bufPrint(
-                    &first_new_buf,
-                    "seg-{d:0>8}",
-                    .{old_count + 1},
-                );
-                if (std.mem.order(u8, dirent.name, first_new) == .lt) {
+                // Every old file has an ordinal below the first new one
+                // (ordinals are monotone); anything below it is stale.
+                const ordinal = std.fmt.parseUnsigned(
+                    u64,
+                    dirent.name["seg-".len..],
+                    10,
+                ) catch continue;
+                if (ordinal < first_new) {
                     try jd.dir.deleteFile(self.io, dirent.name);
                 }
             }
@@ -536,6 +555,7 @@ pub const Store = struct {
         // leave them for deinit to close again.
         jd.segments.clearRetainingCapacity();
         jd.head_records_len = 0;
+        jd.next_ordinal = 2;
         var it = jd.dir.iterate();
         while (try it.next(self.io)) |dirent| {
             if (dirent.kind != .file) continue;
@@ -636,6 +656,7 @@ pub const Store = struct {
             .segments = .empty,
             .index = std.AutoHashMap(slot.Position, IndexEntry).init(self.allocator),
             .head_records_len = 0,
+            .next_ordinal = 0,
         };
 
         // Collect segment files in name order (zero-padded: lexicographic
@@ -713,6 +734,11 @@ pub const Store = struct {
             });
             if (i == names.items.len - 1) jd.head_records_len = good;
         }
+
+        // Fresh segment names start one past the highest loaded ordinal.
+        const last_name = names.items[names.items.len - 1];
+        jd.next_ordinal =
+            (try std.fmt.parseUnsigned(u64, last_name["seg-".len..], 10)) + 1;
 
         try self.journals.put(journal_id, jd);
     }
@@ -1035,6 +1061,56 @@ test "a small seal threshold spans segments and reopens cleanly" {
         }
     }.cb);
     try std.testing.expectEqual(@as(usize, 5), count);
+}
+
+test "compact then seal and a second compact never collide with segment names" {
+    // Bug 2026-08-28-segment-ordinal-collision-after-compact: sealHead named
+    // the next segment from the segment count, which after a compaction
+    // equals the journal's own first segment file and truncated it; the
+    // second compaction rewrote over the currently-open files.
+    var env = TestEnv.init();
+    defer env.deinit();
+    const journal_id = "0123456789abcdef".*;
+    const author = "fedcba9876543210".*;
+
+    {
+        const data_dir = try env.dataDir();
+        const store = try Store.open(test_alloc, tio, data_dir, .{ .seal_threshold = 200 });
+        defer store.deinit();
+        try store.createJournal(journal_id, [_]u8{0} ** 32);
+        try appendN(store, journal_id, 5);
+        try store.compact(journal_id, &.{
+            .{ .author = author, .author_seq = 3 },
+        }, .none);
+        // The append crosses the threshold and seals the head; before the
+        // fix the fresh segment name re-created the journal's own first
+        // segment file (truncating it) and the seal failed with Truncated.
+        const sl6 = testSlot(6);
+        const en6 = testEntry(6, "payload");
+        try store.append(journal_id, &sl6, &en6);
+        const sl7 = testSlot(7);
+        const en7 = testEntry(7, "payload");
+        try store.append(journal_id, &sl7, &en7);
+        // A second compaction is the rewrite-over-live-files variant.
+        try store.compact(journal_id, &.{
+            .{ .author = author, .author_seq = 5 },
+        }, .none);
+    }
+
+    const store = try env.openStore();
+    defer store.deinit();
+    var seen = std.ArrayListUnmanaged(u64).empty;
+    defer seen.deinit(test_alloc);
+    try store.scan(journal_id, &seen, struct {
+        fn cb(
+            list: *std.ArrayListUnmanaged(u64),
+            sl: *const slot.Slot,
+            en: ?*const entry.Entry,
+        ) anyerror!void {
+            if (en != null) try list.append(test_alloc, sl.seq);
+        }
+    }.cb);
+    try std.testing.expectEqualSlices(u64, &.{ 1, 2, 4, 6, 7 }, seen.items);
 }
 
 test "journal dir names are lowercase hex and round-trip" {

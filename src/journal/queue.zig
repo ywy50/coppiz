@@ -12,7 +12,8 @@
 //! bytes, bounded by `sync.unslotted_max_bytes` (local config, provisional
 //! default in the node): an append past the bound refuses with
 //! `queue_full` rather than evicting anything (OQ 55 overflow behaviour
-//! choice). A torn tail is truncated at open — an unacknowledged entry.
+//! choice). A torn tail is truncated at open — an unacknowledged entry;
+//! mid-file corruption is refused (bug 2026-08-28-queue-open-truncates-on-corruption).
 
 const std = @import("std");
 const entry = @import("entry.zig");
@@ -78,7 +79,10 @@ pub const Queue = struct {
             }
         }
 
-        // Scan records; a torn tail is truncated.
+        // Scan records; a torn tail is truncated, mid-file corruption is
+        // refused (a valid record after the break means the damage is not a
+        // crash's partial tail, and truncating would drop acknowledged
+        // entries — bug 2026-08-28-queue-open-truncates-on-corruption).
         const records_len = len - header_len;
         const records = try allocator.alloc(u8, @intCast(records_len));
         defer allocator.free(records);
@@ -354,6 +358,37 @@ test "a torn tail in the queue is truncated at open" {
         }
     }.cb);
     try std.testing.expectEqual(@as(usize, 1), seen);
+}
+
+test "mid-file corruption is refused at open, not truncated away" {
+    var env = TestEnv.init();
+    defer env.deinit();
+    {
+        var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20);
+        const one = testEntry("one");
+        try queue.append(&one);
+        const two = testEntry("two");
+        try queue.append(&two);
+        queue.deinit();
+    }
+
+    // Flip one payload byte of the first record, leaving the second record
+    // intact after it. A torn tail can never have valid data after the
+    // break, so opening must refuse instead of silently dropping the
+    // acknowledged second entry.
+    const file = try env.tmp.dir.openFile(tio, "unslotted.queue", .{ .mode = .read_write });
+    defer file.close(tio);
+    const pos = header_len + record_prefix_len + entry.header_len + 1;
+    var one_byte: [1]u8 = undefined;
+    const n = try file.readPositionalAll(tio, &one_byte, pos);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    one_byte[0] ^= 0x40;
+    try file.writePositionalAll(tio, &one_byte, pos);
+
+    try std.testing.expectError(
+        error.Corrupt,
+        Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20),
+    );
 }
 
 test "an unknown queue version is refused" {

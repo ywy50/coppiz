@@ -8,7 +8,8 @@
 
 ## Status
 
-Open.
+Resolved — `applyJoin` re-validates the settings state at the new member
+count and rolls the member back on refusal; regression test added.
 
 ## Symptom and impact
 
@@ -34,7 +35,20 @@ The `EmptyAuthoritiesNeedsFallback` invariant is checked only when settings are 
 
 ## Resolution
 
-Not yet fixed. Suggested direction: re-validate the settings state in `applyJoin`/`applyLeave` against the new `member_count` (refusing the join or the state), or make the n=1 exception conditional on the cluster staying at n=1. A regression test should join a second member under the described genesis and assert the fold either refuses the join or the leader remains well-defined.
+Fixed. `applyJoin` (and `applyJoinReslotted`, which shares it) runs
+`validate.validateState(&fold.settings, fold.memberCount())` after
+appending the member; a refusal rolls the member back and the join is
+refused with `InvalidSettings` — the same name the fold gives a settings
+entry that would violate the rule. `applyLeave` needs no check: every
+whole-state rule is either count-independent or loosens as the count
+shrinks, so a leave cannot create a violation.
+
+Regression test (`membership.zig` "a join that would strand the cluster
+leaderless is refused"): genesis with `leadership.mode = configured`
+(empty authorities, `fallback = stall` — legal at n = 1), then a join —
+refused with `InvalidSettings` and the cluster stays at one member.
+Before the fix the join was accepted and `election.leader` returned
+`null` for every subsequent write.
 
 ## Verification
 
@@ -47,4 +61,4 @@ None. Medium confidence this is unintended rather than a known corner: the n=1 e
 ## References
 
 - Code: `src/settings/validate.zig:89-92`, `src/cluster/membership.zig:86-103`, `src/cluster/election.zig:157-181`
-- Fix: none
+- Fix: `src/cluster/membership.zig` (`applyJoin`); regression test in the same file. `zig build test` green.

@@ -8,7 +8,9 @@
 
 ## Status
 
-Open.
+Resolved — a second `listen` on the same address is refused with
+`AddressInUse`, matching the documented one-listener-per-address
+contract; regression test added.
 
 ## Symptom and impact
 
@@ -28,7 +30,15 @@ Not dynamically reproduced; statically certain. Two `hub.listen(test_alloc, "nod
 
 ## Resolution
 
-Not yet fixed. Suggested direction: `if (self.endpoints.contains(address)) return error.AddressInUse;` (or close the previous endpoint's accept loop and drop it) before `put`. A regression test should call `listen` twice on the same address and assert the second is refused and the first still accepts.
+Fixed: `listen` checks `self.endpoints.contains(address)` first and
+returns `error.AddressInUse` — first-wins, as the contract comment
+claimed — before any allocation, so a refused duplicate leaks nothing.
+(The alternative, deliberate last-writer-wins with the orphan closed, was
+not chosen: refusing is what the comment documents.)
+
+Regression test ("hub listen refuses a duplicate address"): a second
+`listen("node-a")` is refused and the first listener still accepts and
+echoes.
 
 ## Verification
 
@@ -41,4 +51,4 @@ None — contained. Related hub defects reported separately (errdefer double-fre
 ## References
 
 - Code: `src/net/transport.zig:460-480` (`listen`), `:438-458` (`Hub.deinit`), `:562-605` (`connectFn`)
-- Fix: none
+- Fix: `src/net/transport.zig` (`listen`); regression test in the same file. `zig build test` green.

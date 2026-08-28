@@ -374,7 +374,7 @@ pub const FoldState = struct {
         switch (en.kind) {
             .join => try membership.applyJoinReslotted(self, sl, en),
             .leave => try membership.applyLeaveReslotted(self, en),
-            .create_journal => try self.applyCreateJournal(sl, en),
+            .create_journal => try self.applyCreateJournalReslotted(sl, en),
             .settings, .stale, .checkpoint, .epoch, .merge => {},
             .data => return error.WrongJournalType,
             .genesis => return error.BadGenesis,
@@ -434,6 +434,19 @@ pub const FoldState = struct {
         } else if (sl.seq != 1) {
             return error.BadPosition;
         }
+    }
+
+    /// Advances the chain head over a slot-only record — the slot a
+    /// `retain = none` compaction keeps when it drops the entry (PRD 0002).
+    /// The fold cannot skip it: the next full record chains to this slot's
+    /// hash, and a head that never moved would refuse it with BadPrevHash on
+    /// reopen (bug 2026-08-28-retain-none-reopen-badprevhash). Only the head
+    /// facts move — there is no entry to register.
+    pub fn advanceHead(self: *FoldState, sl: *const slot.Slot) Refusal!void {
+        try self.checkChainContinuity(sl);
+        self.head = sl.position();
+        self.head_slot_hash = slot.slotHash(sl);
+        self.last_slot_ts_ms = sl.slot_ts_ms;
     }
 
     pub fn verifySlotSignature(member: Member, sl: *const slot.Slot) Refusal!void {
@@ -515,7 +528,16 @@ pub const FoldState = struct {
             .stale_position = stale_position,
             .removed = removed,
         });
-        try self.authors.put(en.author, .{ .last_seq = en.author_seq });
+        // The author's high-water mark is monotone: a redelivered entry
+        // below it must not lower it, or a conflicting entry between the
+        // lowered mark and the true last seq would pass the seq check
+        // without any dedup comparison (bug
+        // 2026-08-28-redelivery-lowers-author-seq).
+        const last_seq = if (self.authors.get(en.author)) |a|
+            @max(a.last_seq, en.author_seq)
+        else
+            en.author_seq;
+        try self.authors.put(en.author, .{ .last_seq = last_seq });
         self.head = sl.position();
         self.head_slot_hash = slot.slotHash(sl);
         self.last_slot_ts_ms = sl.slot_ts_ms;
@@ -561,8 +583,28 @@ pub const FoldState = struct {
         sl: *const slot.Slot,
         en: *const entry.Entry,
     ) ApplyError!void {
-        const leader = self.epoch.?.leader;
-        try checkAuthorIsLeader(en, leader);
+        try checkAuthorIsLeader(en, self.epoch.?.leader);
+        try self.applyCreateJournalValidated(sl, en);
+    }
+
+    /// The re-slotted variant: the entry's author is the losing branch's
+    /// leader, never the survivor's, so the author check cannot hold — but
+    /// the payload, name and max-journals rules still run, and the bytes
+    /// were already signature-checked against the member table (bug
+    /// 2026-08-28-reslotted-create-journal-refused).
+    fn applyCreateJournalReslotted(
+        self: *FoldState,
+        sl: *const slot.Slot,
+        en: *const entry.Entry,
+    ) ApplyError!void {
+        try self.applyCreateJournalValidated(sl, en);
+    }
+
+    fn applyCreateJournalValidated(
+        self: *FoldState,
+        sl: *const slot.Slot,
+        en: *const entry.Entry,
+    ) ApplyError!void {
         var payload = decodeCreateJournalPayload(self.allocator, en.payload) catch
             return error.BadControlPayload;
         defer payload.deinit(self.allocator);
@@ -655,8 +697,10 @@ pub const FoldState = struct {
         // passed — the conservative rule that keeps a just-healed cluster
         // from deleting the other side's fresh writes on a clock it did not
         // stamp (OQ 60). `merge.settle_ms` is cluster-scoped, so the value
-        // comes from the cluster's fold, not this journal's.
-        if (self.last_merge) |merge| {
+        // comes from the cluster's fold, not this journal's; the merge fact
+        // itself lives on the control fold too (a data fold never sees a
+        // merge entry — bug 2026-08-28-merge-settle-rule-dead).
+        if (cluster.last_merge) |merge| {
             const settle = cluster.settings.getU64(schema.keyIndex("merge.settle_ms").?);
             if (sl.slot_ts_ms < merge.slot_ts_ms +| settle) return error.MergeSettling;
         }
@@ -905,9 +949,9 @@ pub fn genesisPayloadLen(payload: GenesisPayload) usize {
     return 32 + settings_fold.changesLen(payload.changes);
 }
 
-pub fn encodeGenesisPayload(payload: GenesisPayload, buf: []u8) void {
+pub fn encodeGenesisPayload(payload: GenesisPayload, buf: []u8) error{SettingsTooLarge}!void {
     buf[0..32].* = payload.founder_key;
-    settings_fold.encodeChanges(payload.changes, buf[32..]);
+    try settings_fold.encodeChanges(payload.changes, buf[32..]);
 }
 
 pub fn decodeGenesisPayload(
@@ -936,11 +980,14 @@ pub fn createJournalPayloadLen(payload: CreateJournalPayload) usize {
     return 16 + 2 + payload.name.len + settings_fold.changesLen(payload.changes);
 }
 
-pub fn encodeCreateJournalPayload(payload: CreateJournalPayload, buf: []u8) void {
+pub fn encodeCreateJournalPayload(
+    payload: CreateJournalPayload,
+    buf: []u8,
+) error{SettingsTooLarge}!void {
     buf[0..16].* = payload.journal_id;
     std.mem.writeInt(u16, buf[16..18], @intCast(payload.name.len), .little);
     @memcpy(buf[18 .. 18 + payload.name.len], payload.name);
-    settings_fold.encodeChanges(payload.changes, buf[18 + payload.name.len ..]);
+    try settings_fold.encodeChanges(payload.changes, buf[18 + payload.name.len ..]);
 }
 
 pub fn decodeCreateJournalPayload(
@@ -1083,7 +1130,7 @@ const Fix = struct {
         encodeGenesisPayload(
             .{ .founder_key = self.founder.public_key.toBytes(), .changes = changes },
             payload,
-        );
+        ) catch |e| return e;
         const en = try self.entryFor(.genesis, self.control_id, 1, 0, payload);
         const sl = try self.slotFor(1, 1, entry.entryHash(&en), slot.genesis_prev, 1000);
         return .{ .en = en, .sl = sl, .payload = payload };
@@ -1115,7 +1162,7 @@ fn clusterWithDataJournal(fix: *const Fix) !struct { control: FoldState, data: F
     encodeCreateJournalPayload(
         .{ .journal_id = fix.data_id, .name = "main", .changes = &.{} },
         payload,
-    );
+    ) catch |e| return e;
     const en = try fix.entryFor(.create_journal, fix.control_id, 2, 0, payload);
     const sl = try fix.slotFor(1, 2, entry.entryHash(&en), slot.slotHash(&g.sl), 1001);
     try control.applyControl(&sl, &en);
@@ -1267,7 +1314,10 @@ test "create_journal registers the journal and enforces its rules" {
                 u8,
                 createJournalPayloadLen(.{ .journal_id = id, .name = name, .changes = &.{} }),
             );
-            encodeCreateJournalPayload(.{ .journal_id = id, .name = name, .changes = &.{} }, buf);
+            encodeCreateJournalPayload(
+                .{ .journal_id = id, .name = name, .changes = &.{} },
+                buf,
+            ) catch |e| return e;
             return buf;
         }
     }.of;
@@ -1308,7 +1358,7 @@ test "create_journal registers the journal and enforces its rules" {
         };
         const pl_buf = try test_alloc.alloc(u8, settings_fold.payloadLen(pl));
         defer test_alloc.free(pl_buf);
-        settings_fold.encodePayload(pl, pl_buf);
+        try settings_fold.encodePayload(pl, pl_buf);
         const en = try fix.entryFor(.settings, fix.control_id, 3, 0, pl_buf);
         const sl = try fix.slotFor(1, 3, entry.entryHash(&en), fold.head_slot_hash, 1002);
         try fold.applyControl(&sl, &en);
@@ -1338,7 +1388,7 @@ test "settings: cluster changes apply, frozen leadership refuses, bad keys name 
                 .changes = changes,
             };
             const buf = try test_alloc.alloc(u8, settings_fold.payloadLen(pl));
-            settings_fold.encodePayload(pl, buf);
+            try settings_fold.encodePayload(pl, buf);
             const en = try f.entryFor(.settings, f.control_id, seq, 0, buf);
             // The slot is built by the caller (it needs the fold's head).
             return .{ .payload = buf, .en = en, .sl = undefined };
@@ -1610,7 +1660,7 @@ test "stale: gated by enforce, author-only, idempotent (PRD 0002 G3, G7)" {
     const pl = SettingsPayload{ .scope = .journal, .journal_id = fix.data_id, .changes = &changes };
     const pl_buf = try test_alloc.alloc(u8, settings_fold.payloadLen(pl));
     defer test_alloc.free(pl_buf);
-    settings_fold.encodePayload(pl, pl_buf);
+    try settings_fold.encodePayload(pl, pl_buf);
     const en_s = try fix.entryFor(.settings, fix.data_id, 2, 0, pl_buf);
     const sl_s = try fix.slotFor(1, 2, entry.entryHash(&en_s), cluster.data.head_slot_hash, 1003);
     try cluster.data.applyData(&cluster.control, &sl_s, &en_s);
@@ -1684,7 +1734,7 @@ test "checkpoint: removes expired entries deterministically, and validates its r
     const pl = SettingsPayload{ .scope = .journal, .journal_id = fix.data_id, .changes = &changes };
     const pl_buf = try test_alloc.alloc(u8, settings_fold.payloadLen(pl));
     defer test_alloc.free(pl_buf);
-    settings_fold.encodePayload(pl, pl_buf);
+    try settings_fold.encodePayload(pl, pl_buf);
     try appendControl(&fix, &cluster.control, &cluster.data, .settings, pl_buf, 1000);
 
     // Entry slotted at ts 2000, expires at 3000; checkpoint at ts 4000
@@ -1736,7 +1786,7 @@ test "a settings change applies only to slots after it (PRD 0004 G4)" {
     const pl = SettingsPayload{ .scope = .journal, .journal_id = fix.data_id, .changes = &changes };
     const pl_buf = try test_alloc.alloc(u8, settings_fold.payloadLen(pl));
     defer test_alloc.free(pl_buf);
-    settings_fold.encodePayload(pl, pl_buf);
+    try settings_fold.encodePayload(pl, pl_buf);
     try appendControl(&fix, &cluster.control, &cluster.data, .settings, pl_buf, 2000);
 
     try appendData(&fix, &cluster.control, &cluster.data, 0, "after", 2000);
@@ -1837,7 +1887,7 @@ test "control payload codecs round-trip" {
     const g = GenesisPayload{ .founder_key = [_]u8{7} ** 32, .changes = &changes };
     const g_buf = try test_alloc.alloc(u8, genesisPayloadLen(g));
     defer test_alloc.free(g_buf);
-    encodeGenesisPayload(g, g_buf);
+    try encodeGenesisPayload(g, g_buf);
     var g2 = try decodeGenesisPayload(test_alloc, g_buf);
     defer g2.deinit(test_alloc);
     try std.testing.expectEqualSlices(u8, &g.founder_key, &g2.founder_key);
@@ -1854,7 +1904,7 @@ test "control payload codecs round-trip" {
     };
     const cj_buf = try test_alloc.alloc(u8, createJournalPayloadLen(cj));
     defer test_alloc.free(cj_buf);
-    encodeCreateJournalPayload(cj, cj_buf);
+    try encodeCreateJournalPayload(cj, cj_buf);
     var cj2 = try decodeCreateJournalPayload(test_alloc, cj_buf);
     defer cj2.deinit(test_alloc);
     try std.testing.expectEqualSlices(u8, &cj.journal_id, &cj2.journal_id);
@@ -1916,7 +1966,7 @@ test "a re-slotted control entry is inferred from its author and epoch (OQ 33 re
         }),
     );
     defer test_alloc.free(settings_payload);
-    settings_fold.encodePayload(
+    try settings_fold.encodePayload(
         .{
             .scope = .cluster,
             .journal_id = [_]u8{0} ** 16,
@@ -1942,7 +1992,7 @@ test "a re-slotted control entry is inferred from its author and epoch (OQ 33 re
         }),
     );
     defer test_alloc.free(other_payload);
-    settings_fold.encodePayload(
+    try settings_fold.encodePayload(
         .{
             .scope = .cluster,
             .journal_id = [_]u8{0} ** 16,
@@ -1995,4 +2045,161 @@ test "a re-slotted control entry is inferred from its author and epoch (OQ 33 re
     try fold.applyControl(&ep_sl, &ep_en);
     try std.testing.expectEqual(@as(u64, 1), fold.epoch.?.number);
     try std.testing.expectEqualSlices(u8, &fix.founder_id, &fold.epoch.?.leader);
+}
+
+test "a re-slotted create_journal is accepted and registers the journal" {
+    // Bug 2026-08-28-reslotted-create-journal-refused: the re-slot routing
+    // sent every non-leader-authored create_journal to the live rule, whose
+    // author check can never hold for a re-slot — the author is the losing
+    // branch's leader, not the survivor's — so the merge stalled whenever
+    // the losing branch had created a journal during the partition.
+    var fix = Fix.init();
+    var fold = try controlWithGenesis(&fix);
+    defer fold.deinit();
+
+    var io_state = std.Io.Threaded.init(test_alloc, .{});
+    const second = crypto.sign.Ed25519.KeyPair.generate(io_state.io());
+    const second_id = deriveMemberId(second.public_key.toBytes());
+
+    // The second member joins (admitted by the founder).
+    const join_payload = try test_alloc.alloc(
+        u8,
+        membership.joinPayloadLen(.{
+            .member_id = second_id,
+            .public_key = second.public_key.toBytes(),
+            .address = "node-2",
+        }),
+    );
+    defer test_alloc.free(join_payload);
+    membership.encodeJoinPayload(
+        .{
+            .member_id = second_id,
+            .public_key = second.public_key.toBytes(),
+            .address = "node-2",
+        },
+        join_payload,
+    );
+    const join_en = try fix.entryFor(.join, fix.control_id, 2, 0, join_payload);
+    const join_sl = try fix.slotFor(1, 2, entry.entryHash(&join_en), fold.head_slot_hash, 1001);
+    try fold.applyControl(&join_sl, &join_en);
+
+    // The losing branch's create_journal, re-slotted by the survivor. The
+    // payload, name and max-journals rules still run; only the author check
+    // is relaxed (the bytes are already signature-checked against the
+    // member table).
+    const new_journal_id = "fedcba9876543210".*;
+    const cj_payload = try test_alloc.alloc(
+        u8,
+        createJournalPayloadLen(.{ .journal_id = new_journal_id, .name = "side", .changes = &.{} }),
+    );
+    defer test_alloc.free(cj_payload);
+    try encodeCreateJournalPayload(
+        .{ .journal_id = new_journal_id, .name = "side", .changes = &.{} },
+        cj_payload,
+    );
+    var cj_en = entry.Entry{
+        .kind = .create_journal,
+        .journal = fix.control_id,
+        .author = second_id,
+        .author_seq = 1,
+        .author_ts_ms = 0,
+        .ttl_ms = 0,
+        .payload_hash = entry.payloadHash(cj_payload),
+        .payload_len = @intCast(cj_payload.len),
+        .payload_omitted = false,
+        .signature = undefined,
+        .payload = cj_payload,
+    };
+    cj_en.signature = (try entry.sign(second, &cj_en)).toBytes();
+    const cj_sl = try fix.slotFor(1, 3, entry.entryHash(&cj_en), fold.head_slot_hash, 1002);
+    try fold.applyControl(&cj_sl, &cj_en);
+    try std.testing.expect(fold.journals.contains(new_journal_id));
+    try std.testing.expect(fold.entries.get(cj_en.id()) != null);
+}
+
+test "a checkpoint inside merge.settle_ms of a real merge entry is refused" {
+    // Bug 2026-08-28-merge-settle-rule-dead: applyCheckpoint read the data
+    // fold's last_merge, which no code ever sets — the merge fact lives on
+    // the control fold. A real merge entry folds here, then a data
+    // checkpoint within settle_ms must be refused.
+    var fix = Fix.init();
+    var cluster = try clusterWithDataJournal(&fix);
+    defer {
+        cluster.control.deinit();
+        cluster.data.deinit();
+    }
+
+    var merge_buf: [16]u8 = undefined;
+    epoch.encodeMergePayload(.{ .branch_epoch = 1, .branch_seq = 2 }, &merge_buf);
+    const merge_en = try fix.entryFor(.merge, fix.control_id, 3, 0, &merge_buf);
+    const merge_sl = try fix.slotFor(
+        1,
+        3,
+        entry.entryHash(&merge_en),
+        cluster.control.head_slot_hash,
+        2000,
+    );
+    try cluster.control.applyControl(&merge_sl, &merge_en);
+    try std.testing.expect(cluster.control.last_merge != null);
+
+    var cp_buf: [16]u8 = undefined;
+    encodeCheckpointPayload(.{ .expire_through = .{ .epoch = 1, .seq = 1 } }, &cp_buf);
+    const cp_en = try fix.entryFor(
+        .checkpoint,
+        fix.data_id,
+        nextAuthorSeq(&cluster.data, fix.founder_id),
+        0,
+        &cp_buf,
+    );
+    // 3000 ms after the merge's slot: inside settle_ms (default 30000).
+    const cp_sl = try fix.slotFor(1, 1, entry.entryHash(&cp_en), slot.genesis_prev, 5000);
+    try std.testing.expectError(
+        error.MergeSettling,
+        cluster.data.applyData(&cluster.control, &cp_sl, &cp_en),
+    );
+
+    // Once settle_ms has passed, the same checkpoint is accepted.
+    const late_sl = try fix.slotFor(1, 1, entry.entryHash(&cp_en), slot.genesis_prev, 40_000);
+    try cluster.data.applyData(&cluster.control, &late_sl, &cp_en);
+}
+
+test "a redelivery below the author's last_seq does not lower it" {
+    // Bug 2026-08-28-redelivery-lowers-author-seq: registerEntry wrote
+    // last_seq unconditionally, so a redelivered old entry lowered the
+    // high-water mark and a *conflicting* entry between the lowered mark
+    // and the true last seq passed the seq check without any dedup
+    // comparison.
+    var fix = Fix.init();
+    var cluster = try clusterWithDataJournal(&fix);
+    defer {
+        cluster.control.deinit();
+        cluster.data.deinit();
+    }
+    const j = fix.data_id;
+
+    const e1 = try fix.entryFor(.data, j, 5, 0, "one");
+    const e2 = try fix.entryFor(.data, j, 6, 0, "two");
+    const sl1 = try fix.slotFor(1, 1, entry.entryHash(&e1), slot.genesis_prev, 1000);
+    const sl2 = try fix.slotFor(1, 2, entry.entryHash(&e2), slot.slotHash(&sl1), 1001);
+    try cluster.data.applyData(&cluster.control, &sl1, &e1);
+    try cluster.data.applyData(&cluster.control, &sl2, &e2);
+
+    // A re-slot redelivers E1 (byte-identical) at a new position.
+    const sl1r = try fix.slotFor(1, 3, entry.entryHash(&e1), slot.slotHash(&sl2), 1002);
+    try cluster.data.applyData(&cluster.control, &sl1r, &e1);
+
+    // A conflicting entry with E2's id must still be refused: the
+    // redelivery must not have lowered the high-water mark below 6.
+    const e2_conflict = try fix.entryFor(.data, j, 6, 0, "conflict");
+    const sl4 = try fix.slotFor(
+        1,
+        4,
+        entry.entryHash(&e2_conflict),
+        slot.slotHash(&sl1r),
+        1003,
+    );
+    try std.testing.expectError(
+        error.DuplicateConflict,
+        cluster.data.applyData(&cluster.control, &sl4, &e2_conflict),
+    );
 }

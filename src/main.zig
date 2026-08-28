@@ -682,7 +682,7 @@ fn cmdSettingsSet(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) 
     const changes_len = settings_fold.changesLen(&change);
     const changes_buf = try gpa.alloc(u8, changes_len);
     defer gpa.free(changes_buf);
-    settings_fold.encodeChanges(&change, changes_buf);
+    try settings_fold.encodeChanges(&change, changes_buf);
 
     var session = try wireHello(gpa, io, dir);
     defer session.client.deinit();
@@ -1329,7 +1329,9 @@ test "process-level: a chain from a different genesis is refused admission" {
 test "process-level: members and doctor reach a serving node over the wire" {
     var a = try BinTest.init();
     defer a.deinit();
-    try writeToml(&a, "127.0.0.1:17431", &.{}, "open");
+    const addr_a = try testAddr(7);
+    defer test_alloc.free(addr_a);
+    try writeToml(&a, addr_a, &.{}, "open");
     const init_out = try a.run(&.{ "init", "--dir", a.dir, "--journal", "main" });
     test_alloc.free(init_out);
     const pa = try a.spawn(&.{ "serve", "--dir", a.dir });

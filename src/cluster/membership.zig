@@ -22,6 +22,8 @@ const crypto = std.crypto;
 const entry = @import("../journal/entry.zig");
 const slot = @import("../journal/slot.zig");
 const chain = @import("../journal/chain.zig");
+const validate = @import("../settings/validate.zig");
+const schema = @import("../settings/schema.zig");
 const ApplyError = chain.ApplyError;
 
 /// `join` payload: newcomer id 16 | public key 32 | address len u16 |
@@ -100,6 +102,18 @@ pub fn applyJoin(
         .seniority = sl.position(),
         .address = try fold.allocator.dupe(u8, payload.address),
     });
+    // The empty-authorities rule is count-dependent (PRD 0004's n = 1
+    // exception): a join that grows the cluster past it would leave a
+    // state no leader can ever be elected under — and, since only the
+    // leader can author settings entries, one that can never self-heal
+    // (bug 2026-08-28-join-can-strand-cluster-leaderless). Refuse the
+    // join, rolling the member back, when the state would be invalid at
+    // the new count. A leave cannot create a violation (the rule only
+    // loosens as the count shrinks).
+    validate.validateState(&fold.settings, fold.memberCount()) catch {
+        removeMember(fold, payload.member_id);
+        return error.InvalidSettings;
+    };
 }
 
 /// Applies a re-slotted `join` after a merge — the same validation and the
@@ -255,7 +269,7 @@ const Fix = struct {
         chain.encodeGenesisPayload(
             .{ .founder_key = self.founder.public_key.toBytes(), .changes = &.{} },
             payload,
-        );
+        ) catch unreachable;
         const en = try self.entryFor(self.founder, .genesis, self.control_id, 1, payload);
         const sl = try self.slotFor(
             self.founder,
@@ -335,6 +349,74 @@ test "join admits a newcomer with seniority at its slot" {
         slot.Position{ .epoch = 1, .seq = 1 },
         fold.memberById(fix.founder_id).?.seniority,
     );
+}
+
+test "a join that would strand the cluster leaderless is refused" {
+    // Bug 2026-08-28-join-can-strand-cluster-leaderless: `configured` with
+    // an empty authority list is legal at n = 1 (the empty list means
+    // self, PRD 0003), but growing the cluster to n = 2 left a state
+    // `election.leader` returns null for under fallback = stall — and,
+    // since only the leader can author settings entries, one that could
+    // never be fixed. The join must be refused instead.
+    var fix = Fix.init();
+    var fold = try chain.FoldState.init(test_alloc, true, [_]u8{0} ** 16);
+    defer fold.deinit();
+
+    const mode = schema.keyIndex("leadership.mode").?;
+    const changes = [_]validate.Change{
+        .{ .key = mode, .value = .{ .enum_value = schema.enumValue(mode, "configured").? } },
+    };
+    const g_payload = try test_alloc.alloc(
+        u8,
+        chain.genesisPayloadLen(.{
+            .founder_key = fix.founder.public_key.toBytes(),
+            .changes = &changes,
+        }),
+    );
+    defer test_alloc.free(g_payload);
+    try chain.encodeGenesisPayload(
+        .{ .founder_key = fix.founder.public_key.toBytes(), .changes = &changes },
+        g_payload,
+    );
+    const g_en = try fix.entryFor(fix.founder, .genesis, fix.control_id, 1, g_payload);
+    const g_sl = try fix.slotFor(
+        fix.founder,
+        1,
+        1,
+        entry.entryHash(&g_en),
+        slot.genesis_prev,
+        1000,
+    );
+    try fold.applyControl(&g_sl, &g_en);
+
+    const payload = try test_alloc.alloc(
+        u8,
+        joinPayloadLen(.{
+            .member_id = fix.second_id,
+            .public_key = fix.second.public_key.toBytes(),
+            .address = "10.0.0.2:3939",
+        }),
+    );
+    defer test_alloc.free(payload);
+    encodeJoinPayload(
+        .{
+            .member_id = fix.second_id,
+            .public_key = fix.second.public_key.toBytes(),
+            .address = "10.0.0.2:3939",
+        },
+        payload,
+    );
+    const en = try fix.entryFor(
+        fix.founder,
+        .join,
+        fix.control_id,
+        nextAuthorSeq(&fold, fix.founder_id),
+        payload,
+    );
+    const sl = try fix.nextSlot(&fold, entry.entryHash(&en), 1001);
+    try std.testing.expectError(error.InvalidSettings, fold.applyControl(&sl, &en));
+    // The join was rolled back; the cluster stays at one member.
+    try std.testing.expectEqual(@as(usize, 1), fold.members.items.len);
 }
 
 test "join is refused when the id does not derive from the key, or already a member" {

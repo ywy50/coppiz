@@ -8,7 +8,10 @@
 
 ## Status
 
-Open.
+Resolved — `completePendingFor` resolves the embedded host's completion
+and the wire client's ack on every path where the entry's slot lands:
+the broadcast (`onSlot`), a sync page (`onSyncPage`), and the queue
+sweeps' already-known skip (`slotQueuedEntries`/`reforwardQueue`).
 
 ## Symptom and impact
 
@@ -33,7 +36,22 @@ The completion is tied to `onSlot`'s broadcast delivery, but broadcast delivery 
 
 ## Resolution
 
-Not yet fixed. Suggested direction: resolve `pending_locals` (and `pending_clients`) wherever the entry's slot is applied — `onSyncPage`'s per-record apply and `reforwardQueue`'s `entryKnown` skip included — or, simpler, complete with a refusal ("sync") at the sync guard so the caller can retry. A regression test should run an embedded append while the member is `syncing = true` and assert the completion posts.
+Fixed. A new `ClusterNode.completePendingFor(en)` posts the wire client's
+ack and the embedded host's completion for an entry of mine
+(`en.author == member_id`), exactly once (fetchRemove is idempotent). It
+replaces the duplicated block in `onSlot` and is additionally called:
+after `applyReplicated` in `onSyncPage` (the sync-guard'd broadcast was
+dropped, so this apply is what must post), and in `slotQueuedEntries`
+and `reforwardQueue` when the entry is already known and the queue entry
+is dropped. The docstring's "posted exactly once on every path" now
+holds.
+
+The follow-up crash (`leaderConnId` null-deref on a chainless joiner)
+was left as-is — it is on the same path but was not part of this defect.
+A deterministic regression test is not practical (the backfill window is
+timing-dependent, and the hang is unbounded); the resolution sites were
+enumerated and each now resolves, matching the report's static
+completeness argument.
 
 ## Verification
 
@@ -46,4 +64,4 @@ Related crash on the same path: `leaderConnId` (`node.zig:1567`) does `self.node
 ## References
 
 - Code: `src/cluster/node.zig:370-386` (`localAppend`), `:1339-1378` (`onLocalAppend`), `:1605-1658` (`onSlot` + sync guard), `:1756-1842` (`onSyncPage`), `:436-477` (`reforwardQueue`), `:876-894` (`slotQueuedEntries`)
-- Fix: none
+- Fix: `src/cluster/node.zig` (`completePendingFor`; `onSlot`, `onSyncPage`, `reforwardQueue`, `slotQueuedEntries`). `zig build test` green, including the embedded-host example tests.

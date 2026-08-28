@@ -8,7 +8,9 @@
 
 ## Status
 
-Open.
+Resolved — `foldJournal` advances the fold's chain head over slot-only
+records via the new `FoldState.advanceHead`; regression test compacts
+under `ttl.retain = none` and reopens.
 
 ## Symptom and impact
 
@@ -36,7 +38,21 @@ Under the default `retain = header` the surviving header-only records still deco
 
 ## Resolution
 
-Not yet fixed. Suggested direction: make `foldJournal` (and the sync page handler) advance the fold's chain state over slot-only records — the fold needs the head/hash/position progression without registering an entry — or refuse `retain = none` at settings validation until the fold supports it. A regression test should compact under `retain = none`, reopen, and fold the surviving entries.
+Fixed. `FoldState.advanceHead(sl)` runs `checkChainContinuity` and moves
+`head`/`head_slot_hash`/`last_slot_ts_ms` without registering an entry;
+`foldJournal`'s scan callback calls it for `retain = none` slot-only
+records instead of `orelse return`. The next full record then chains
+against the removed slot's hash as the writer intended. The divergent-
+epoch skip (a losing branch's tail) is untouched: those records form the
+tail and are never followed by a chainable record, so skipping without
+advancing is still correct there. The sync server's OQ 43 refusal of
+compacted records is unchanged.
+
+Regression test (`journal.zig` "retain = none compaction leaves a journal
+that folds on reopen"): set `ttl.enforce = all`, `ttl.action = delete`,
+`ttl.retain = none`, append two entries, checkpoint past the first one's
+expiry, reopen — before the fix `Node.open` failed with `BadPrevHash`.
+The surviving entry reads back after reopen.
 
 ## Verification
 
@@ -50,4 +66,4 @@ Related: `foldJournal`'s other skip (`journal.zig:696-697`, divergent-epoch data
 ## References
 
 - Code: `src/journal/journal.zig:679-702` (`foldJournal`), `src/journal/chain.zig:425-427` (`checkChainContinuity`), `src/journal/store.zig:437-443` (slot-only rewrite), `src/journal/segment.zig` (`encodeSlotOnlyRecord`)
-- Fix: none
+- Fix: `src/journal/chain.zig` (`FoldState.advanceHead`), `src/journal/journal.zig` (`foldJournal`); regression test in `journal.zig`. `zig build test` green.
