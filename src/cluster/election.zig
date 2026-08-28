@@ -114,6 +114,10 @@ pub fn isHexId(text: []const u8, id: [16]u8) bool {
 /// degradation; under `stall` a partition cannot produce two leaders, so the
 /// merge rule never needs the no-authority case.
 pub fn compareRank(inputs: Inputs, a: View, b: View) std.math.Order {
+    // seniority ignores the authority list, exactly as `leader` does — the
+    // merge survivor must use the same ranking election uses.
+    if (std.mem.eql(u8, inputs.mode, "seniority"))
+        return slot.Position.order(a.seniority, b.seniority);
     const a_idx = authorityIndex(inputs.authorities, a);
     const b_idx = authorityIndex(inputs.authorities, b);
     const configured = std.mem.eql(u8, inputs.mode, "configured");

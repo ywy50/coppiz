@@ -11,9 +11,9 @@
 //!   coppiz serve --dir DIR [--config FILE]
 //!   coppiz append --dir DIR --journal NAME [--ttl MS]
 //!                 (--payload TEXT | --payload-file PATH)
-//!   coppiz read --dir DIR [--journal NAME] [--from EPOCH:SEQ]
+//!   coppiz read --dir DIR --journal NAME [--from EPOCH:SEQ]
 //!               [--include-stale] [--include-expired]
-//!   coppiz head --dir DIR [--journal NAME]
+//!   coppiz head --dir DIR --journal NAME
 //!   coppiz status --dir DIR
 //!   coppiz members --dir DIR
 //!   coppiz doctor --dir DIR
@@ -74,9 +74,9 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  coppiz serve --dir DIR [--config FILE]
         \\  coppiz append --dir DIR --journal NAME [--ttl MS] --payload TEXT
         \\  coppiz append --dir DIR --journal NAME [--ttl MS] --payload-file PATH
-        \\  coppiz read --dir DIR [--journal NAME] [--from EPOCH:SEQ]
+        \\  coppiz read --dir DIR --journal NAME [--from EPOCH:SEQ]
         \\               [--include-stale] [--include-expired]
-        \\  coppiz head --dir DIR [--journal NAME]
+        \\  coppiz head --dir DIR --journal NAME
         \\  coppiz status --dir DIR
         \\  coppiz members --dir DIR
         \\  coppiz doctor --dir DIR
@@ -712,7 +712,7 @@ fn cmdAdmit(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void 
     // Lines: hex member id, hex public key, address.
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
-        if (line.len < 64) continue;
+        if (line.len < 98) continue;
         const id = parseHexId(line[0..32]) orelse continue;
         if (!std.mem.eql(u8, &id, &target)) continue;
         const key = hexKeyToBytes(line[33..97]) orelse continue;
@@ -953,8 +953,12 @@ test "acknowledged appends survive a crash-like truncation (G4, process level)" 
         "append", "--dir", bt.dir, "--journal", "main", "--payload", "two",
     });
     defer test_alloc.free(append2);
+    const append3 = try bt.run(&.{
+        "append", "--dir", bt.dir, "--journal", "main", "--payload", "three",
+    });
+    defer test_alloc.free(append3);
 
-    // Simulate a kill -9 mid-append of a third record: the head segment's
+    // Simulate a kill -9 mid-append of the third record: the head segment's
     // tail is a partial write. Locate the data journal's segment through
     // the library, then truncate it.
     {
@@ -972,11 +976,17 @@ test "acknowledged appends survive a crash-like truncation (G4, process level)" 
         try file.setLength(tio, len - 10);
     }
 
-    // Reopen: the acknowledged append "one" survives; the partial tail is
-    // truncated and the store still opens and reads.
+    // Reopen: the acknowledged appends "one" and "two" survive; the torn
+    // third record is truncated away and the head reflects exactly that.
     const read = try bt.run(&.{ "read", "--dir", bt.dir, "--journal", "main" });
     defer test_alloc.free(read);
     try std.testing.expect(std.mem.indexOf(u8, read, "one") != null);
+    try std.testing.expect(std.mem.indexOf(u8, read, "two") != null);
+    try std.testing.expect(std.mem.indexOf(u8, read, "three") == null);
+
+    const head = try bt.run(&.{ "head", "--dir", bt.dir, "--journal", "main" });
+    defer test_alloc.free(head);
+    try std.testing.expectEqualStrings("1:2\n", head);
 }
 
 test "members and doctor work locally on a single-member directory" {
@@ -1025,8 +1035,16 @@ test "doctor fails, naming the missing member key, on an empty directory" {
 //
 // These spawn the real binary as long-lived `serve` processes on loopback
 // TCP and drive them through the CLI (which falls back to the wire when the
-// data dir is locked). Ports are fixed per test; the suite runs the tests
-// sequentially.
+// data dir is locked). Ports are derived from the test process pid (with a
+// distinct offset per node) so an aborted earlier run — whose serve children
+// may outlive stop()'s wait — or a parallel checkout cannot collide on fixed
+// ports; the suite runs the tests sequentially.
+
+fn testAddr(offset: u16) ![]u8 {
+    const pid: u32 = @intCast(@as(i64, std.c.getpid()));
+    const port = 20000 + @as(u16, @intCast(pid % 40000)) + offset;
+    return std.fmt.allocPrint(test_alloc, "127.0.0.1:{d}", .{port});
+}
 
 const ServingProc = struct {
     child: std.process.Child,
@@ -1123,7 +1141,9 @@ test "process-level: a live cluster grows 1 → 2 → 3 members over TCP, founde
     // A founds the cluster with open admission.
     var a = try BinTest.init();
     defer a.deinit();
-    try writeToml(&a, "127.0.0.1:17401", &.{}, "open");
+    const addr_a = try testAddr(0);
+    defer test_alloc.free(addr_a);
+    try writeToml(&a, addr_a, &.{}, "open");
     _ = try a.run(&.{ "init", "--dir", a.dir, "--journal", "main" });
     const pa = try a.spawn(&.{ "serve", "--dir", a.dir });
     const pa_proc = ServingProc{ .child = pa };
@@ -1136,7 +1156,9 @@ test "process-level: a live cluster grows 1 → 2 → 3 members over TCP, founde
     // B joins, backfills, and reads what A wrote.
     var b = try BinTest.init();
     defer b.deinit();
-    try writeToml(&b, "127.0.0.1:17402", &.{"127.0.0.1:17401"}, null);
+    const addr_b = try testAddr(1);
+    defer test_alloc.free(addr_b);
+    try writeToml(&b, addr_b, &.{addr_a}, null);
     const pb = try b.spawn(&.{ "serve", "--dir", b.dir });
     const pb_proc = ServingProc{ .child = pb };
     defer pb_proc.stop();
@@ -1154,7 +1176,9 @@ test "process-level: a live cluster grows 1 → 2 → 3 members over TCP, founde
     // B (a follower) appends and C reads the replicated entry.
     var c = try BinTest.init();
     defer c.deinit();
-    try writeToml(&c, "127.0.0.1:17403", &.{"127.0.0.1:17401"}, null);
+    const addr_c = try testAddr(2);
+    defer test_alloc.free(addr_c);
+    try writeToml(&c, addr_c, &.{addr_a}, null);
     const pc = try c.spawn(&.{ "serve", "--dir", c.dir });
     const pc_proc = ServingProc{ .child = pc };
     defer pc_proc.stop();
@@ -1205,7 +1229,9 @@ fn pollRead(bt: *BinTest, needle: []const u8) ![]u8 {
 test "process-level: live reconfiguration freezes leadership.* and refuses to unfreeze live" {
     var a = try BinTest.init();
     defer a.deinit();
-    try writeToml(&a, "127.0.0.1:17411", &.{}, null);
+    const addr_a = try testAddr(3);
+    defer test_alloc.free(addr_a);
+    try writeToml(&a, addr_a, &.{}, null);
     _ = try a.run(&.{ "init", "--dir", a.dir, "--journal", "main" });
     const pa = try a.spawn(&.{ "serve", "--dir", a.dir });
     const pa_proc = ServingProc{ .child = pa };
@@ -1253,7 +1279,9 @@ test "process-level: live reconfiguration freezes leadership.* and refuses to un
 test "process-level: a chain from a different genesis is refused admission" {
     var a = try BinTest.init();
     defer a.deinit();
-    try writeToml(&a, "127.0.0.1:17421", &.{}, "open");
+    const addr_a = try testAddr(4);
+    defer test_alloc.free(addr_a);
+    try writeToml(&a, addr_a, &.{}, "open");
     _ = try a.run(&.{ "init", "--dir", a.dir, "--journal", "main" });
     const pa = try a.spawn(&.{ "serve", "--dir", a.dir });
     const pa_proc = ServingProc{ .child = pa };
@@ -1263,7 +1291,9 @@ test "process-level: a chain from a different genesis is refused admission" {
     // D founds its OWN chain, then dials A's cluster as a seed peer.
     var d = try BinTest.init();
     defer d.deinit();
-    try writeToml(&d, "127.0.0.1:17422", &.{"127.0.0.1:17421"}, "open");
+    const addr_d = try testAddr(5);
+    defer test_alloc.free(addr_d);
+    try writeToml(&d, addr_d, &.{addr_a}, "open");
     _ = try d.run(&.{ "init", "--dir", d.dir, "--journal", "main" });
     const pd = try d.spawn(&.{ "serve", "--dir", d.dir });
     const pd_proc = ServingProc{ .child = pd };

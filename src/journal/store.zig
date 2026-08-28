@@ -294,13 +294,15 @@ pub const Store = struct {
         const seg = jd.segments.items[where.segment];
         var prefix: [segment.record_prefix_len]u8 = undefined;
         const n = try seg.file.readPositionalAll(self.io, &prefix, where.offset);
-        if (n != prefix.len) return null;
+        if (n != prefix.len) return error.Truncated;
         const body_len = std.mem.readInt(u32, prefix[0..4], .little);
         const total = segment.record_prefix_len + body_len;
         if (buf.len < total) return error.BufferTooSmall;
         const m = try seg.file.readPositionalAll(self.io, buf[0..total], where.offset);
         if (m != total) return error.Truncated;
-        return segment.decodeRecord(buf[0..total]) catch return null;
+        // The position is indexed, so the record was intact at open; a
+        // record that no longer decodes is corruption, not absence.
+        return segment.decodeRecord(buf[0..total]) catch return error.Corrupt;
     }
 
     /// Iterates every record of a journal in chain order, for the open fold.
@@ -367,9 +369,12 @@ pub const Store = struct {
             const ordinal = old_count + new_segments.items.len + 1;
             const name_buf = try std.fmt.allocPrint(self.allocator, "seg-{d:0>8}", .{ordinal});
             defer self.allocator.free(name_buf);
+            // Truncate: a later compaction reuses these ordinals, and a
+            // shorter rewrite over the old bytes would leave a stale tail
+            // that the next open scans as records.
             const file = try jd.dir.createFile(self.io, name_buf, .{
                 .read = true,
-                .truncate = false,
+                .truncate = true,
             });
             // Adopt immediately: the shared errdefer above closes every
             // segment in the list once, whichever iteration errored (a
@@ -924,8 +929,11 @@ test "the directory lock excludes a second opener and releases on close" {
     var env = TestEnv.init();
     defer env.deinit();
     const store = try env.openStore();
-    defer store.deinit();
     try std.testing.expectError(error.AlreadyOpen, env.openStore());
+    store.deinit();
+
+    const reopened = try env.openStore();
+    defer reopened.deinit();
 }
 
 test "a small seal threshold spans segments and reopens cleanly" {
