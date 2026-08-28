@@ -302,6 +302,28 @@ Ordering inside each section is by what blocks implementation first.
     is consistent with the spin→sleep change having removed the trigger,
     but no root cause is established.
 
+    *2026-08-29 — first stack captured.* Reproduced twice in the same day
+    under `zig build test` on a machine running the suite twice concurrently
+    (an overlapping run duplicated the command): a lib_tests binary at
+    112–146% CPU for 8–18 minutes at `e2e (G4)`. SIGABRT + systemd-coredump
+    + gdb (no ptrace needed on the core) captured the spinning thread: an io
+    worker in `Store.rebuildIndex` → `jd.index.put` (the position→IndexEntry
+    AutoHashMap) inside `Store.compact` ← `compactRemoved` ←
+    `checkpointForBroadcast` ← `driveCheckpoints` ← `onTick` ← `loopMain`
+    (the G4 TTL-trio leader, teardown in progress: main thread in
+    `waitForStop`). `std.hash_map`'s probe loop is bounded by table
+    capacity, so a long `put` means an overfull table (every probe walks the
+    whole capacity) — the observed burn is consistent with the index map's
+    `available` accounting going wrong under repeated
+    `clearRetainingCapacity` + refill (compaction rebuilds the index on
+    every checkpoint), degrading each insert to O(capacity). The compact/
+    rebuildIndex path is unchanged by the 2026-08-29 speedup PRs; the
+    original 3/3 observations were also at G4. Next: a repro script that
+    runs the G4 test under doubled load, then a bisect of
+    `clearRetainingCapacity`/`available` accounting or a switch of the
+    store index to `ensureTotalCapacity`-pre-sized rebuilds with an
+    explicit assertion that `available` is never exhausted mid-rebuild.
+
 ## F. Transport and wire
 
 19. **Replication wire: own binary framing or HTTP?** clanker's spike used
