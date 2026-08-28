@@ -1456,7 +1456,7 @@ pub const ClusterNode = struct {
             .bytes = 0,
             .max_bytes = @min(r.max_bytes, net.framing.max_body_bytes),
         };
-        self.node.store.scan(journal_id, &ctx, struct {
+        self.node.store.scanFrom(journal_id, r.from, &ctx, struct {
             fn cb(c: *Ctx, sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
                 if (slot.Position.order(sl.position(), c.from) == .lt) return;
                 const e = en orelse return; // compacted records are not served (OQ 43)

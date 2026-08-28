@@ -325,6 +325,35 @@ pub const Store = struct {
         }
     }
 
+    /// Iterates from `from` when it names an indexed record. A sync cursor
+    /// always does after its first page, so later pages avoid rereading the
+    /// journal prefix. An arbitrary non-indexed cursor retains `scan`'s
+    /// full traversal semantics for callers that need to find the next slot.
+    pub fn scanFrom(
+        self: *const Store,
+        journal_id: [16]u8,
+        from: slot.Position,
+        ctx: anytype,
+        comptime on_record: fn (@TypeOf(ctx), *const slot.Slot, ?*const entry.Entry) anyerror!void,
+    ) !void {
+        const jd = self.journals.get(journal_id) orelse return error.UnknownJournal;
+        const start = jd.index.get(from) orelse return self.scan(journal_id, ctx, on_record);
+        for (jd.segments.items[start.segment..], start.segment..) |seg, seg_index| {
+            const offset = if (seg_index == start.segment)
+                start.offset - segment.header_len
+            else
+                0;
+            const records = try self.readRecordRegion(&seg, offset, seg.records_len - offset);
+            defer self.allocator.free(records);
+            var off: usize = 0;
+            while (off < records.len) {
+                const rec = try segment.decodeRecord(records[off..]);
+                try on_record(ctx, &rec.slot, if (rec.entry) |*en| en else null);
+                off += rec.next_offset;
+            }
+        }
+    }
+
     /// What a checkpoint compaction keeps for a removed entry (PRD 0002
     /// `ttl.retain`): the entry header (with payload hash) and its slot, or
     /// only the slot.
@@ -816,6 +845,29 @@ test "appends survive reopen, in order, and read by position" {
     const rec = (try store.read(journal_id, .{ .epoch = 1, .seq = 2 }, &buf)).?;
     try std.testing.expectEqual(@as(u64, 2), rec.slot.seq);
     try std.testing.expectEqualStrings("payload", rec.entry.?.payload);
+}
+
+test "scanFrom starts at an indexed position" {
+    var env = TestEnv.init();
+    defer env.deinit();
+    const journal_id = "0123456789abcdef".*;
+    const store = try env.openStore();
+    defer store.deinit();
+    try store.createJournal(journal_id, [_]u8{0} ** 32);
+    try appendN(store, journal_id, 3);
+
+    var seen = std.ArrayListUnmanaged(u64).empty;
+    defer seen.deinit(test_alloc);
+    try store.scanFrom(journal_id, .{ .epoch = 1, .seq = 2 }, &seen, struct {
+        fn cb(
+            list: *std.ArrayListUnmanaged(u64),
+            sl: *const slot.Slot,
+            _: ?*const entry.Entry,
+        ) !void {
+            try list.append(test_alloc, sl.seq);
+        }
+    }.cb);
+    try std.testing.expectEqualSlices(u64, &.{ 2, 3 }, seen.items);
 }
 
 test "an indexed record with a bad CRC is Corrupt, not missing" {
