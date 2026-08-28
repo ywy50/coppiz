@@ -202,6 +202,11 @@ const MemberState = struct {
     backoff_ms: u64 = 250,
 };
 
+/// Upper bound on an advertised address. A real `host:port` needs at most
+/// a 253-byte hostname plus ":65535"; the wire allows 65535 bytes, and the
+/// surplus only ever reaches a chain entry or an operator's terminal.
+const max_address_len = 300;
+
 /// How a live connection was authenticated. Operator and replication
 /// messages are refused until hello completes.
 const ConnRole = enum { unknown, operator, member };
@@ -1151,11 +1156,17 @@ pub const ClusterNode = struct {
         cs.conn.shutdown(self.io);
     }
 
-    /// True when `address` can be written as one `pending.admit` line: no
-    /// NUL/CR/LF that would inject extra records.
+    /// An advertised address is dialed, folded into the chain by a `join`,
+    /// written as one `pending.admit` line and printed by `coppiz members`.
+    /// It arrives from an un-admitted dialer, so it is held to the shape a
+    /// real `host:port` has: printable ASCII, bounded length. That rules
+    /// out the NUL/CR/LF that would inject extra `pending.admit` records
+    /// and the escape sequences that would drive an operator's terminal.
+    /// The founder advertises the empty string, which stays valid.
     fn addressSafe(address: []const u8) bool {
+        if (address.len > max_address_len) return false;
         for (address) |c| {
-            if (c == 0 or c == '\n' or c == '\r') return false;
+            if (c < 0x21 or c > 0x7e) return false;
         }
         return true;
     }
@@ -1220,6 +1231,17 @@ pub const ClusterNode = struct {
 
     fn onHello(self: *ClusterNode, conn_id: u64, h: message.Hello) !void {
         const is_self_client = self.isSelfClient(h);
+        // Admission first: until the hello is admitted it proves nothing
+        // about who sent it, so it must not be able to touch another
+        // member's state. A hello naming a member id the dialer does not
+        // own would otherwise drop that member's live connection, and
+        // `hello_ack` hands every dialer the leader's id to aim at.
+        const ack = self.admission(h);
+        if (!ack.admitted) {
+            self.sendMessage(conn_id, .{ .hello_ack = ack }) catch {};
+            self.closeConn(conn_id);
+            return;
+        }
         // A second connection for a member: replace the old one (a dead
         // conn whose peer_gone is still queued must not block the new dial).
         if (self.members.get(h.member_id)) |ms| {
@@ -1228,12 +1250,6 @@ pub const ClusterNode = struct {
             }
         }
 
-        const ack = self.admission(h);
-        if (!ack.admitted) {
-            self.sendMessage(conn_id, .{ .hello_ack = ack }) catch {};
-            self.closeConn(conn_id);
-            return;
-        }
         try self.sendMessage(conn_id, .{ .hello_ack = ack });
         if (self.conns.getPtr(conn_id)) |cs| {
             // The node's own operator channel is not a member peer.
@@ -1275,6 +1291,9 @@ pub const ClusterNode = struct {
         if (!std.mem.eql(u8, &h.member_id, &derived)) {
             return self.ackFor(false, .not_allowlisted);
         }
+        // The address is refused here, before it can reach a `join` entry,
+        // a dial or the operator's terminal.
+        if (!addressSafe(h.address)) return self.ackFor(false, .not_allowlisted);
         // The node's own operator channel (the CLI client dials with this
         // node's key): admit without a join, and never as a member peer.
         if (self.isSelfClient(h)) return self.ackFor(true, .none);
