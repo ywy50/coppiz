@@ -294,13 +294,15 @@ pub const Store = struct {
         const seg = jd.segments.items[where.segment];
         var prefix: [segment.record_prefix_len]u8 = undefined;
         const n = try seg.file.readPositionalAll(self.io, &prefix, where.offset);
-        if (n != prefix.len) return null;
+        if (n != prefix.len) return error.Truncated;
         const body_len = std.mem.readInt(u32, prefix[0..4], .little);
         const total = segment.record_prefix_len + body_len;
         if (buf.len < total) return error.BufferTooSmall;
         const m = try seg.file.readPositionalAll(self.io, buf[0..total], where.offset);
         if (m != total) return error.Truncated;
-        return segment.decodeRecord(buf[0..total]) catch return null;
+        // The position is indexed, so the record was intact at open; a
+        // record that no longer decodes is corruption, not absence.
+        return segment.decodeRecord(buf[0..total]) catch return error.Corrupt;
     }
 
     /// Iterates every record of a journal in chain order, for the open fold.
