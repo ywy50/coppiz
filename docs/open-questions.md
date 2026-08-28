@@ -190,7 +190,12 @@ Ordering inside each section is by what blocks implementation first.
     after a checkpoint never sees removed payloads; it has the full *chain*
     but not every byte that ever existed. PRD 0003's "definitely has the
     full state" should be defined as "at head of the chain", and the docs
-    should say so. *Blocks:* PRD 0003 phase 1 wording.
+    should say so. Reachable since the leader's checkpoint cadence landed
+    (PRD 0002 phases 4–5): the sync path refuses compacted records
+    (`onSyncPage` closes the connection on a record with no entry), so a
+    journal that has checkpointed cannot be joined or backfilled until this
+    is answered. *Blocks:* PRD 0003 phase 1 wording; the sync path's
+    refusal is the current behaviour.
 57. **Is author-marked staleness itself switchable per journal?** [ADR
     0002](adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md)
     records that *whether either cause is active … [is] a per-journal

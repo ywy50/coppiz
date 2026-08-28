@@ -7,6 +7,21 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- The embedded-host write path (PRD 0005): `cluster.ClusterNode.localAppend`
+  runs a host's append through its member's loop — durable queue, then the
+  leader slots or the follower forwards — and blocks until the slot folds
+  back, so a host on a follower writes without touching the wire. The
+  example hosts (`examples/embed-single`, `examples/embed-cluster`,
+  `examples/sidecar`) build with `zig build examples` and each is a test
+  run by `zig build test`; `build.zig.zon` gains no dependencies.
+- The leader's checkpoint cadence (PRD 0002 phases 4–5): the leader
+  checkpoints each journal on `checkpoint.every_ms`, or when
+  `checkpoint.pending_bytes` of removable payload has accumulated (probed as
+  data arrives), never with an empty removal set — and every member drops
+  the removed payloads at the same chain position when the checkpoint folds,
+  so the bytes, not just the fold marks, match. E2e: three members remove
+  the same set at the same checkpoint slot under both `ttl.retain` values
+  (G4), and a follower skewed ±1 h shows, not stores, differently (G6).
 - The replication wire (PRD 0003 phase 4, [OQ
   19](docs/open-questions.md) decided — own binary framing over one TCP
   connection): `src/net/` — length-prefixed frames with a versioned body,
@@ -102,6 +117,27 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 - Sync and read pages include a record that exceeds the page byte bound
   when it is the first on the page, so an entry larger than the bound is
   still replicated and readable.
+- Journal-scoped settings could not be set over the wire: `onSettings`
+  authored them into the control journal's chain, where every member
+  refused the non-cluster scope. Journal-scoped `settings` entries now land
+  in the journal's own chain (PRD 0004's rule).
+- A newly elected leader's own queued entries could sit in the durable
+  queue forever (its forwards had no leader connection to send to); the
+  leader now slots its own queue and acks the waiting client.
+- `store.compact` error paths could leave the journal's segment list owning
+  already-closed handles (a double close at `deinit`) or empty (an
+  overflow on the next append); the swap now mirrors `truncate`'s ownership
+  rule, and the rewrite adopts each new segment before writing so an error
+  closes it exactly once.
+- Node teardown cancelled the loop's in-flight store work (a cancelled
+  compaction could leave a journal unusable); `waitForStop` now waits for
+  the loop to exit on the stop event before cancelling the remaining tasks.
+- A new epoch's first data slot continued the old seq (`bad_position` on
+  any post-failover write to a journal with pre-failover slots); `slotFor`
+  now starts the seq at 1 when the epoch changes, matching the chain's
+  dense rule.
+- In-memory hub teardown leaked dial connections and unprocessed frames;
+  they are now closed and freed on deinit.
 
 
 - The product is named `coppiz` ([ADR 0004](docs/adrs/0004-the-product-is-named-coppiz.md)).

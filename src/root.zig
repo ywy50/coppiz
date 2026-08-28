@@ -1,10 +1,12 @@
 //! coppiz — a replicated, append-only store library.
 //!
-//! Only the package version lives here so far; the journal design itself is
-//! not started. It lives in docs/: start at docs/README.md, then docs/prds/
-//! for what each part is meant to be and docs/open-questions.md for what is
-//! still undecided. This file is also the library's test root: it gives
-//! `zig build test` its library half and claims the module name `coppiz`.
+//! The library's public surface: the journal core (entry/slot codecs, the
+//! fold, storage), the settings schema, the cluster node loop (election,
+//! replication, the embedded-host write path), and the wire. The design
+//! lives in docs/: start at docs/README.md, then docs/prds/ for what each
+//! part is meant to be and docs/open-questions.md for what is still
+//! undecided. This file is also the library's test root: it gives `zig
+//! build test` its library half and claims the module name `coppiz`.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -23,6 +25,9 @@ pub const version: std.SemanticVersion =
 /// config parser (PRD 0001 phase 4, PRD 0004 phase 4). The settings schema
 /// and the journal primitives are reachable through these modules.
 pub const journal = @import("journal/journal.zig");
+/// The chain fold — the pure validation/fold state hosts may need to type
+/// their read callbacks' contexts against (PRD 0005).
+pub const chain = @import("journal/chain.zig");
 pub const config = @import("config/local.zig");
 pub const render = @import("settings/render.zig");
 pub const schema = @import("settings/schema.zig");

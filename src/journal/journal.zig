@@ -334,9 +334,27 @@ pub const Node = struct {
     /// Appends a checkpoint, then compacts the store (PRD 0002). Refuses to
     /// emit an empty removal set (G7: no checkpoint spam on an idle journal).
     pub fn checkpoint(self: *Node, journal_id: [16]u8) !void {
+        if (try self.checkpointForBroadcast(journal_id)) |ckpt| {
+            self.allocator.free(ckpt.en.payload);
+        }
+    }
+
+    /// The leader's checkpoint in one step: builds the entry, refuses an
+    /// empty removal set (G7), applies it to the fold, drops the payloads it
+    /// names and notifies local followers. Returns the slot and entry so the
+    /// caller — the cluster node — can broadcast them to the group; the
+    /// single-member node drops the result. The entry's payload is
+    /// heap-owned and the caller frees it after the broadcast. The removal
+    /// set is computed against the checkpoint's own stamp — the slot's
+    /// timestamp, not the raw clock (PRD 0002: the leader's clock chose the
+    /// instant once, in the chain).
+    pub fn checkpointForBroadcast(self: *Node, journal_id: [16]u8) !?struct {
+        sl: slot.Slot,
+        en: entry.Entry,
+    } {
         const js = self.journals.get(journal_id) orelse return error.UnknownJournal;
         const fold = &js.fold;
-        const through = fold.head orelse return;
+        const through = fold.head orelse return null;
 
         var buf: [16]u8 = undefined;
         chain.encodeCheckpointPayload(.{ .expire_through = through }, &buf);
@@ -351,28 +369,52 @@ pub const Node = struct {
             .payload_len = @intCast(buf.len),
             .payload_omitted = false,
             .signature = undefined,
-            .payload = &buf,
+            .payload = undefined,
         };
+        en.payload = try self.allocator.dupe(u8, &buf);
+        errdefer self.allocator.free(en.payload);
         en.signature = (try entry.sign(self.keypair, &en)).toBytes();
         const sl = try self.slotFor(fold, &en);
 
-        // The removal set is computed against the checkpoint's own stamp —
-        // the slot's timestamp, not the raw clock (PRD 0002: the leader's
-        // clock chose the instant once, in the chain).
         const removed = try self.removalSet(fold, through, @intCast(sl.slot_ts_ms));
         defer self.allocator.free(removed);
-        if (removed.len == 0) return; // never emit an empty removal set (G7)
+        if (removed.len == 0) {
+            self.allocator.free(en.payload); // never emit an empty removal set (G7)
+            return null;
+        }
 
         try fold.applyData(&self.control, &sl, &en);
         try self.store.append(journal_id, &sl, &en);
         self.notifyFollowers(journal_id, &sl, &en);
+        try self.compactRemoved(fold, removed);
+        return .{ .sl = sl, .en = en };
+    }
 
+    /// Drops the payloads a checkpoint names, at the same chain position on
+    /// every member (PRD 0002 G4): the fold marks removals identically, and
+    /// this is what reclaims the bytes, honouring the journal's `ttl.retain`.
+    /// Idempotent — the set may name entries an earlier checkpoint already
+    /// compacted.
+    fn compactAfterCheckpoint(
+        self: *Node,
+        journal_id: [16]u8,
+        through: slot.Position,
+        now: i64,
+    ) !void {
+        const js = self.journals.get(journal_id) orelse return error.UnknownJournal;
+        const removed = try self.removalSet(&js.fold, through, now);
+        defer self.allocator.free(removed);
+        if (removed.len == 0) return;
+        try self.compactRemoved(&js.fold, removed);
+    }
+
+    fn compactRemoved(self: *Node, fold: *const chain.FoldState, removed: []const entry.Id) !void {
         const retain: store.Store.Retain = if (std.mem.eql(
             u8,
             fold.settings.getEnum(schema.keyIndex("ttl.retain").?),
             "none",
         )) .none else .header;
-        try self.store.compact(journal_id, removed, retain);
+        try self.store.compact(fold.journal_id, removed, retain);
     }
 
     /// The entries a checkpoint at `head` with stamp `now` would remove —
@@ -403,14 +445,36 @@ pub const Node = struct {
         return ids.toOwnedSlice(self.allocator);
     }
 
+    /// The entries a checkpoint at `through` with stamp `now` would remove —
+    /// public so the cluster leader can refuse an empty removal set (G7)
+    /// before the entry reaches the chain.
+    pub fn checkpointRemovalSet(
+        self: *Node,
+        journal_id: [16]u8,
+        through: slot.Position,
+        now: i64,
+    ) ![]const entry.Id {
+        const js = self.journals.get(journal_id) orelse return error.UnknownJournal;
+        return self.removalSet(&js.fold, through, now);
+    }
+
     /// Builds the next slot as the leader: current epoch, next seq, clamped
     /// slot_ts_ms (a backwards clock never moves the chain backwards). The
     /// cluster node's leader path slots forwarded entries with this.
     pub fn slotFor(self: *Node, fold: *chain.FoldState, en: *const entry.Entry) !slot.Slot {
         const now_ms = @as(u64, @intCast(@max(@as(i64, 0), self.now(self.io))));
+        const current_epoch = self.epoch();
+        // A new epoch's first slot starts a fresh seq: the chain's dense
+        // rule (chain.zig checkChainContinuity) demands seq == 1 when the
+        // epoch changes, so a post-failover write to a journal that holds
+        // pre-failover slots cannot continue the old seq.
+        const seq: u64 = if (fold.head) |h|
+            if (current_epoch == h.epoch) h.seq + 1 else 1
+        else
+            1;
         var sl = slot.Slot{
-            .epoch = self.epoch(),
-            .seq = (fold.head orelse slot.Position{ .epoch = self.epoch(), .seq = 0 }).seq + 1,
+            .epoch = current_epoch,
+            .seq = seq,
             .slot_ts_ms = @max(now_ms, fold.last_slot_ts_ms),
             .entry_hash = entry.entryHash(en),
             .prev_slot_hash = fold.head_slot_hash,
@@ -507,6 +571,19 @@ pub const Node = struct {
         } else {
             const js = self.journals.get(journal_id) orelse return error.UnknownJournal;
             try js.fold.applyData(&self.control, sl, en);
+            if (en.kind == .checkpoint) {
+                // The bytes a checkpoint removes drop here, at the same chain
+                // position as the fold mark, on every member (PRD 0002 G4).
+                // The fold already validated the payload, so the decode
+                // cannot fail in practice.
+                const payload = chain.decodeCheckpointPayload(en.payload) catch
+                    return error.BadControlPayload;
+                try self.compactAfterCheckpoint(
+                    journal_id,
+                    payload.expire_through,
+                    @intCast(sl.slot_ts_ms),
+                );
+            }
         }
         try self.store.append(journal_id, sl, en);
         if (std.mem.eql(u8, &en.author, &self.member_id)) {

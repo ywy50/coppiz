@@ -2,29 +2,36 @@
 
 ## Status
 
-Shipped (single-member core) — 2026-08-27. Draft 2026-08-21; phases 1–3
-are implemented and tested. Source of truth: `src/journal/expiry.zig` (the
+Shipped — 2026-08-27 (phases 1–3 with the single-member core, phases 4–5
+with the cluster node loop). Source of truth: `src/journal/expiry.zig` (the
 pure predicates and the deterministic removal set), the `stale` and
-`checkpoint` validation rules in `src/journal/chain.zig`, and the payload
-drop in `src/journal/store.zig` (`compact`, honouring `ttl.retain`), driven
-by `journal.Node.checkpoint` which never emits an empty removal set.
+`checkpoint` validation rules in `src/journal/chain.zig`, the payload drop
+in `src/journal/store.zig` (`compact`, honouring `ttl.retain`), and the
+leader's checkpoint cadence in `src/cluster/node.zig`
+(`driveCheckpoints`), which never emits an empty removal set.
 
-Acceptance criteria on one member: **G1/G2** (the enforce × action ×
-entry-ttl matrix and every state transition), **G3** (a hand-built `stale`
-for another member's entry is refused with `not_author`; the author's own
-is accepted), **G5** (default reads hide stale/expired; `include_*` shows
-them), **G7** (a `stale` entry is refused while `stale.enforce = off`; no
-checkpoint is emitted with an empty removal set). **G4** (three members
-remove the same set at the same checkpoint slot) and **G6** (a skewed
-follower shows, not stores, differently) need replication (PRD 0003); the
-single-member equivalents — the fold computes the same removal set from the
-same chain, and compaction keeps the chain verifiable under both `retain`
-values — are tested. The merge-settle half of phase 4 shipped with PRD 0003
-phases 1–3 (2026-08-27): a checkpoint inside `merge.settle_ms` of the last
-merge is refused `merge_settling`, and the fold hash covers the last merge.
-The leader's checkpoint cadence and the three-member e2e land with PRD
-0003's node loop; the merge-with-checkpoints determinism ([OQ
-44](../open-questions.md)) is next in the simulator's scenarios.
+Acceptance criteria: **G1/G2** (the enforce × action × entry-ttl matrix and
+every state transition), **G3** (a hand-built `stale` for another member's
+entry is refused with `not_author`; the author's own is accepted), **G5**
+(default reads hide stale/expired; `include_*` shows them), **G7** (a
+`stale` entry is refused while `stale.enforce = off`; no checkpoint is
+emitted with an empty removal set), **G4** (three members remove the same
+set at the same checkpoint slot — e2e under both `retain` values) and
+**G6** (a follower skewed ±1 h shows, not stores, differently; the folds
+hash equal). The merge-settle rule (a checkpoint inside `merge.settle_ms`
+of the last merge is refused `merge_settling`) shipped with PRD 0003
+phases 1–3.
+
+The leader checkpoints on `checkpoint.every_ms`, or when
+`checkpoint.pending_bytes` of removable payload has accumulated (probed as
+data arrives, never by a per-tick full scan); the defaults stay the
+placeholders of [OQ 10](../open-questions.md). Compaction runs at the same
+chain position on every member — the follower drops the payloads when the
+checkpoint folds — so the bytes, not just the fold marks, match. A journal
+that has been compacted cannot yet be joined or backfilled by a new member:
+the sync path refuses compacted records, an interaction now reachable
+([OQ 43](../open-questions.md)). The merge-with-checkpoints determinism
+([OQ 44](../open-questions.md)) is next in the simulator's scenarios.
 
 ## Problem
 

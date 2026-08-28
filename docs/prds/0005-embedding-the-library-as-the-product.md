@@ -2,15 +2,27 @@
 
 ## Status
 
-Draft — 2026-08-21, reframed the same day after the operator clarified that
-coppiz is for anyone with this class of problem, not for clanker specifically.
-Depends on every other PRD for what is being exposed, and on
-[RFC 0001](../rfcs/0001-library-first-or-service-first.md) for which surface
-leads; [ADR 0003](../adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)
-fixes that nothing outside the library is ever required. Source of truth
-once shipped: `src/root.zig` (library API), `src/main.zig` (node),
-`examples/` (one host per shape), `src/api/` (service API if RFC 0001 keeps
-one).
+Shipped (steps 1–3) — 2026-08-27. Draft 2026-08-21, reframed the same day
+after the operator clarified that coppiz is for anyone with this class of
+problem, not for clanker specifically. Source of truth: `src/root.zig`
+(library API), `src/main.zig` (node), `examples/` (one host per shape);
+`src/api/` (a service API) stays conditional on RFC 0001.
+
+The embedded write path shipped with the cluster loop:
+`cluster.ClusterNode.localAppend` runs a host's append through the loop —
+durable queue, then the leader slots or the follower forwards — so a host
+on a follower writes without touching the wire, and the entry replicates
+like any other. The host's synchronous *reads* (fold access, `readRange`
+from the host thread) race the loop while it runs; hosts read through the
+wire (a client to the local member) until reads are loop-routed, a
+follow-up. `examples/` carries one host per shape — `embed-single` (size 1,
+no network), `embed-cluster` (three embedded nodes in one process; a
+partition and heal, with the host's writes readable throughout), `sidecar`
+(a host speaking to a node over the wire) — built by `zig build examples`
+and each a test run by `zig build test`. A three-member partition that
+elects a second leader does not yet merge reliably in the node loop (its
+two-member merge is e2e-tested; the three-member case is reported in PRD
+0003's status).
 
 ## Problem
 
@@ -199,18 +211,22 @@ example: its RFC 0019 and stage-1 spike note.
 
 ## Acceptance criteria
 
-- [ ] (G1) `examples/embed-single/` opens, appends, reads and follows with no
+- [x] (G1) `examples/embed-single/` opens, appends, reads and follows with no
   config beyond a directory; builds from a fresh checkout with
   `zig build examples`.
 - [ ] (G2) The `coppiz` binary and `examples/sidecar/` replicate to each other
   (one embedded, one standalone) — proof that the two surfaces are one
-  library.
-- [ ] (G3) A fresh checkout's `build.zig.zon` declares no dependencies and
+  library. `examples/sidecar/` today speaks the wire to an embedded node
+  (the same protocol a `coppiz serve` exposes); the binary-half of the
+  pairing is the e2e in the node binary's own tests.
+- [x] (G3) A fresh checkout's `build.zig.zon` declares no dependencies and
   the examples run with no other process started (a test asserts the
   process table).
-- [ ] (G4) `follow` delivers a new slot to a callback without the host
+- [x] (G4) `follow` delivers a new slot to a callback without the host
   polling.
-- [ ] (G5) No thread exists before `run()`; a test counts them.
+- [ ] (G5) No thread exists before `run()`; a test counts them. The library
+  spawns nothing until a `ClusterNode.start()`; the size-1 path creates no
+  threads at all. A thread-count test is future work.
 - [ ] (G6) A host can reach every library call through one function it
   gates itself — the clanker branch's `ck_state` is the first proof, with
   no filesystem grant and no `network_allow` on the guest side.

@@ -42,8 +42,7 @@ and a node:
 const std = @import("std");
 const coppiz = @import("coppiz");
 
-var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
-const gpa = gpa_state.allocator();
+const gpa = std.heap.page_allocator;
 var io_state = std.Io.Threaded.init(gpa, .{});
 const io = io_state.io();
 const data_dir = try std.Io.Dir.cwd().openDir(io, "data/coppiz", .{ .iterate = true });
@@ -63,30 +62,39 @@ try node.readRange(events, null, null, false, false, &found, struct {
 }.on);
 ```
 
+In a cluster, a host writes through the loop of its own member —
+`cluster.ClusterNode.localAppend` queues, forwards to the leader and blocks
+until the slot folds back — and reads over the wire (a client to the local
+member) while the loop runs. The three host shapes are `examples/`, built
+and tested by `zig build examples`.
+
 `zig build docs` regenerates `docs/configuration.md` from the settings schema.
 Read the design, in order, with `cat docs/README.md`. Everything below is
 detail.
 
 ## Status
 
-**Shipped (2026-08-27): the single-member core, the pure cluster core, and
-the cluster node loop.** One process is a complete journal — append, read,
-follow, restart — with settings, TTL and checkpoint cleanup in the chain.
-On top of that sits the cluster core of [PRD
-0003](docs/prds/0003-membership-and-leadership.md): the pure membership
-fold, election and epoch/merge rules (driven by the deterministic simulator,
-[OQ 27](docs/open-questions.md)), and now the node loop over the wire —
-failure detection, election → epoch, admission (allowlist/open/prompt), and
-forward/broadcast/backfill, so real processes replicate: `coppiz serve`
-runs a node, members join live, appends through a follower replicate to the
-leader and back, and a healed partition merges deterministically. `coppiz
-append`/`read`/`head` talk to a serving node over the wire when the data
-directory is locked ([OQ 47](docs/open-questions.md)); `coppiz status`,
-`coppiz settings set` and `coppiz admit` round out the CLI. The embedded-host
-write API (a host calling `node.append` on a follower from its own process)
-is [PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)
-follow-up; the wire is the host interface today. The product is named
-`coppiz` ([ADR 0004](docs/adrs/0004-the-product-is-named-coppiz.md)).
+**Shipped (2026-08-27): the single-member core, the pure cluster core, the
+cluster node loop, TTL cleanup end to end, and the embedded-host write
+path.** One process is a complete journal — append, read, follow, restart —
+with settings, TTL and checkpoint cleanup in the chain. On top of that sits
+the cluster core of [PRD 0003](docs/prds/0003-membership-and-leadership.md):
+the pure membership fold, election and epoch/merge rules (driven by the
+deterministic simulator, [OQ 27](docs/open-questions.md)), and the node
+loop over the wire — failure detection, election → epoch, admission
+(allowlist/open/prompt), and forward/broadcast/backfill, so real processes
+replicate: `coppiz serve` runs a node, members join live, appends through a
+follower replicate to the leader and back, and a healed partition merges
+deterministically. The leader's checkpoint cadence ([PRD
+0002](docs/prds/0002-ttl-and-staleness.md) phases 4–5) keeps every member's
+payloads dropping at the same chain position. A host embeds the library and
+writes through its member's loop (`cluster.ClusterNode.localAppend`), and
+`examples/` — `embed-single`, `embed-cluster`, `sidecar` — builds and tests
+each host shape ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)).
+`coppiz append`/`read`/`head` talk to a serving node over the wire when the
+data directory is locked ([OQ 47](docs/open-questions.md)); `coppiz status`,
+`coppiz settings set` and `coppiz admit` round out the CLI. The product is
+named `coppiz` ([ADR 0004](docs/adrs/0004-the-product-is-named-coppiz.md)).
 
 ## Overview
 
@@ -213,6 +221,7 @@ the records, not here.
 | [CHANGELOG.md](CHANGELOG.md), [RELEASES.md](RELEASES.md) | consumer-visible changes; version and release policy |
 | `src/journal/`, `src/settings/`, `src/config/` | the single-member core: codecs, chain, segments, store, schema, local config |
 | `src/cluster/`, `src/sim/` | membership, election, epochs and merge (pure); the deterministic simulator |
+| `examples/` | one embedded host per shape (embed-single, embed-cluster, sidecar) — built by `zig build examples`, each a test |
 | `src/root.zig`, `src/main.zig` | the library; the node binary |
 
 ## Origin

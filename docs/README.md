@@ -37,7 +37,7 @@ shipped narrative (that is the roadmap).
 | how it gets to 1,000 or 100,000 instances | [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md) — groups, ownership, parity, and what the core must get right now |
 | what is not decided | [open-questions.md](open-questions.md) |
 
-## Architecture (implemented down to the node loop; federation is next)
+## Architecture (implemented down to the node loop and the embedded write path; federation is next)
 
 coppiz is a replicated, append-only store written in Zig 0.16 with the
 standard library only ([ADR 0001](adrs/0001-zig-0-16-standard-library-only-for-the-core.md)),
@@ -92,15 +92,16 @@ ids, chain per journal, self-describing segments, pure validation and
 election, a reserved federation settings scope
 ([PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md)).
 
-**Source layout (planned).** `src/journal/` entry/slot codecs, chain, storage;
-`src/cluster/` membership fold, election, epochs, merge, node loop;
+**Source layout.** `src/journal/` entry/slot codecs, chain, storage;
+`src/cluster/` membership fold, election, epochs, merge, node loop (with
+`cluster.ClusterNode.localAppend`, the embedded-host write path, PRD 0005);
 `src/settings/` schema, validation, fold; `src/net/` framing, heartbeats,
-backfill; `src/config/` local `coppiz.toml` parsing (PRD 0004); `src/cli/`
-the node CLI and `src/api/` the optional service API (PRD 0005);
-`src/root.zig` the library API; `src/main.zig` the node binary;
-`src/federation/` (later) group membership, ownership, routing, parity.
-Pure logic (codecs, fold, election, merge, expiry) is kept I/O-free so it
-can be unit-tested and driven by a deterministic simulator
+backfill; `src/config/` local `coppiz.toml` parsing (PRD 0004); the CLI
+lives in `src/main.zig` and `src/api/` (a service API) stays conditional on
+RFC 0001; `src/root.zig` the library API; `examples/` one host per shape
+(PRD 0005); `src/federation/` (later) group membership, ownership, routing,
+parity. Pure logic (codecs, fold, election, merge, expiry) is kept I/O-free
+so it can be unit-tested and driven by a deterministic simulator
 ([OQ 27](open-questions.md)).
 
 ## Hosts
