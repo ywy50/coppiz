@@ -995,6 +995,12 @@ test "members and doctor work locally on a single-member directory" {
     );
 
     // Doctor: every check passes; the chain and journal lines are present.
+    // Append first so the data journal has a head (a bare init leaves it
+    // empty, which doctor reports as a warning, not a head line).
+    const append_out = try bt.run(&.{
+        "append", "--dir", bt.dir, "--journal", "main", "--payload", "x",
+    });
+    defer test_alloc.free(append_out);
     const doctor_out = try bt.run(&.{ "doctor", "--dir", bt.dir });
     defer test_alloc.free(doctor_out);
     try std.testing.expect(std.mem.indexOf(
