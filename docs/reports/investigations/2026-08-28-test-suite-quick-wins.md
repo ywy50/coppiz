@@ -137,19 +137,29 @@ early (verified: e2e (b) ~5 s, e2e (c) ~5 s) plus fixed settle/expiry waits
 of 1.5–2.5 s. Hypothesis B holds: the waits encode the failure-detector and
 TTL semantics the tests exist to check.
 
-### Rejected: replacing the busy-spin settle waits with `io.sleep`
+### Busy-spin settle waits: initially rejected, then replaced (verified)
 
-Six test waits busy-spin the main thread for 1.5–2.5 s
-(`while (wallMs(tio) < deadline) {}` — node.zig:2703, 2952, 2972, 3107,
-3333, 3431) with a comment claiming an `io.sleep` from the test task starves
-the node loops' timers. The claim is load-bearing and correct on Linux:
-`std.Io.Threaded` sets `use_parking_sleep = false` there, so `io.sleep`
-becomes a whole-thread `clock_nanosleep`, and a test task sharing a worker
-with a node loop would block that loop for the sleep's full duration. The
-spins give the loops the CPU for the whole wait. Replacing them would make
-the e2e tests' correctness depend on the host's core count / thread-pool
-dynamics to save ~12 s (6%); not a good trade. Left as-is (including the
-doubled comment at node.zig:2697-2700, which is a leftover, not a hazard).
+Ten test waits busy-spin the main thread for 0.15–2.5 s
+(`while (wallMs(tio) < deadline) {}` — node.zig:2839, 3088, 3108, 3243,
+3396, 3407, 3469, 3567, 3652, 3733 in the current tree) with a comment
+claiming an `io.sleep` from the test task starves the node loops' timers.
+
+*First pass (rejected):* the claim looked load-bearing — on Linux
+`std.Io.Threaded` sets `use_parking_sleep = false`, so `io.sleep` becomes a
+whole-thread `clock_nanosleep`, and a test task sharing a worker with a node
+loop would block that loop for the sleep's full duration.
+
+*Correction (verified on the follow-up pass):* the premise is wrong. Both
+test-runner modes run `test_fn.func()` on the **main thread**
+(`mainTerminal` and the server mode's `.run_test` handler call it directly),
+never on an io worker. The node loops are io tasks on the io's worker
+threads, which keep running while the main thread sleeps. Replacing the ten
+spins with `std.Io.sleep(tio, duration, .awake)` is safe — the gate passed
+twice back-to-back (23/23 steps, 244/244 tests) with all ten replaced. The
+wall clock is unchanged (the waits are wall-clock by design — a 2 s spin and
+a 2 s sleep both wait 2 s); the win is that the main thread stops pegging a
+core for ~16 s per run, and on small-core hosts the loops no longer compete
+with the spin for CPU during the e2e convergence polls.
 
 ### Finding for follow-up: intermittent CPU spin in direct test-binary runs
 
@@ -162,6 +172,31 @@ transport are all semaphore-based (no busy-poll found by reading). Tracked
 as [OQ 62](../../open-questions.md) — before it is resolved, a direct
 `test`-binary run can peg a core indefinitely and a `zig build test` run
 could hit it intermittently.
+
+*Follow-up (verified on the follow-up pass):* two gdb-launched repro
+attempts (gdb as the parent, which can ptrace its child where attaching is
+blocked) ran the direct binary to completion without the spin — all 153
+tests passed both times, once even under gdb's slowdown. The spin has not
+reproduced in ~8 consecutive direct runs since the original 3/3
+observation; it remains open with the same evidence (three observed
+instances, no stack, no repro since).
+
+### Follow-up findings: the G2 regression and the corrected timing
+
+- PR #18 added the G2 process-level test, which spawns the *installed*
+  sidecar binary; PR #19's rec-1 wiring (install only `coppiz` for the test
+  step) predated it and did not re-check the spawn set, so the gate was red
+  on `main` from PR #19's merge. Fixed by installing the sidecar beside
+  coppiz — the suite's only two spawned binaries
+  ([bug 2026-08-28 — PR #19's install-only-coppiz wiring broke the G2 sidecar test](../bugs/2026-08-28-g2-sidecar-needs-install.md)).
+- The 196–212 s gate times recorded above were measured under concurrent
+  build load. On an idle machine the gate is ~75 s: `lib_tests` 153 tests in
+  30 s and `exe_tests` 13 tests in ~60 s run in parallel, everything else
+  under 2 s. `exe_tests` is now the critical path; its profile is dominated
+  by three process-level tests (grows 1→2→3: 31 s, different-genesis
+  refused: 22 s, live reconfiguration: 10 s) whose time is real TCP cluster
+  convergence in Debug plus ~55 ms per `coppiz status`/`read` poll spawn —
+  rec 3's "do not shrink the e2e timings" applies.
 
 ### Recommendations 2 and 3
 
@@ -177,7 +212,8 @@ could hit it intermittently.
 - Related bugs:
   [2026-08-28 — `zig build test` is red: `Hub.deinit(self, io)` arity](../bugs/2026-08-28-build-test-red-hub-deinit-arity.md),
   [2026-08-28 — the CLI test root uses `std.c.getpid()` without linking libc](../bugs/2026-08-28-build-test-red-libc-getpid.md),
-  [2026-08-28 — the process-level e2e tests race the install step](../bugs/2026-08-28-process-tests-race-install.md)
+  [2026-08-28 — the process-level e2e tests race the install step](../bugs/2026-08-28-process-tests-race-install.md),
+  [2026-08-28 — PR #19's install-only-coppiz wiring broke the G2 sidecar test](../bugs/2026-08-28-g2-sidecar-needs-install.md)
   (all Resolved by this work)
 - Follow-up: [OQ 62](../../open-questions.md) — the intermittent CPU spin
 - Code: `build.zig` (addChecks at build.zig:160-233; examples at

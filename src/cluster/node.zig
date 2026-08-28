@@ -2830,13 +2830,12 @@ test "e2e (b): partition a 2-member seniority cluster, write on both sides, heal
         }
         try std.testing.expect(joined);
     }
-    // Let B's backfill finish. A real OS sleep: an io.sleep from the test
-    // task starves the node loops' timers.
-    // A real wall-clock wait: an io.sleep from the test task starves the
-    // node loops' timers, so spin on the main thread instead.
+    // Let B's backfill finish: a fixed wall-clock wait. The wait is an
+    // io.sleep, not a busy spin — the test runs on the main thread and the
+    // node loops on the io's worker threads, so the loops keep running
+    // during the sleep (the spin it replaced was burning a core for nothing).
     {
-        const deadline = wallMs(tio) + 2000;
-        while (wallMs(tio) < deadline) {}
+        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(2000), .awake) catch {};
     }
     // Partition both ways.
     try hub.drop(test_alloc, tio, "a", "b");
@@ -3084,8 +3083,7 @@ test "e2e (c): configured leadership with a stall fallback never elects without 
         const reply = try a.client.settings("__cluster__", buf);
         try std.testing.expectEqual(@as(usize, 0), reply.refusal.len);
         // Let the broadcast land on B and C before partitioning.
-        const deadline = wallMs(tio) + 2000;
-        while (wallMs(tio) < deadline) {}
+        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(2000), .awake) catch {};
     }
 
     // A still leads (the only authority).
@@ -3104,8 +3102,7 @@ test "e2e (c): configured leadership with a stall fallback never elects without 
     // Past the suspect timeout, neither B nor C elects: with no live
     // authority the stall fallback leaves the fold's leader unchanged.
     {
-        const deadline = wallMs(tio) + 2500;
-        while (wallMs(tio) < deadline) {}
+        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(2500), .awake) catch {};
         const hb = b.client.hello() catch return error.NoView;
         const hc = c.client.hello() catch return error.NoView;
         try std.testing.expectEqual(@as(u64, 1), hb.epoch);
@@ -3239,8 +3236,7 @@ fn ttlTrioInit(
     }
     // Let the joins and backfills settle before appends race them.
     {
-        const deadline = wallMs(tio) + 1500;
-        while (wallMs(tio) < deadline) {}
+        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(1500), .awake) catch {};
     }
     return trio;
 }
@@ -3392,8 +3388,7 @@ test "e2e (G4): three members remove the same set at the same checkpoint slot, b
             // the new 600 s cadence; wait it out so the burst below cannot
             // ride an old due time.
             {
-                const dl = wallMs(tio) + 800;
-                while (wallMs(tio) < dl) {}
+                std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(800), .awake) catch {};
             }
             // A streaming burst: each append moves the head, which is what
             // the pending-bytes probe rescans on.
@@ -3403,8 +3398,7 @@ test "e2e (G4): three members remove the same set at the same checkpoint slot, b
                 const reply2 = try trio.b.client.append("main", p, 300);
                 try std.testing.expectEqual(@as(usize, 0), reply2.refusal.len);
                 burst[i] = reply2.id;
-                const dl = wallMs(tio) + 150;
-                while (wallMs(tio) < dl) {}
+                std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(150), .awake) catch {};
             }
             // Well before the 600 s cadence, the pending trigger emits a
             // checkpoint that removes the burst.
@@ -3465,8 +3459,7 @@ test "e2e (G6): a skewed follower's clock changes what it shows, not what it sto
     // Past the expiry instant on the leader's clock (slot_ts + 1000 ms):
     // every member's fold has the same bytes, and no checkpoint has fired.
     {
-        const deadline = wallMs(tio) + 2_500;
-        while (wallMs(tio) < deadline) {}
+        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(2500), .awake) catch {};
     }
 
     // The stored state is identical: all three folds hash the same.
@@ -3563,8 +3556,7 @@ test "e2e: a newly elected leader slots its own queued entries" {
     }
     // Let B's backfill settle before the partition.
     {
-        const deadline = wallMs(tio) + 1500;
-        while (wallMs(tio) < deadline) {}
+        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(1500), .awake) catch {};
     }
 
     try hub.drop(test_alloc, tio, "a", "b");
@@ -3648,8 +3640,7 @@ test "embedded host appends through the loop from its own thread (PRD 0005)" {
         const hb = b.client.hello() catch return error.NotJoined;
         const hc = c.client.hello() catch return error.NotJoined;
         if (hb.epoch < 1 or hc.epoch < 1) return error.NotJoined;
-        const settle = wallMs(tio) + 1500;
-        while (wallMs(tio) < settle) {}
+        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(1500), .awake) catch {};
     }
 
     // The host's own writes: through the follower (forwarded) and the
@@ -3729,8 +3720,7 @@ test "embedded host reads through the loop from its own thread (PRD 0005)" {
         }
         const hb = b.client.hello() catch return error.NotJoined;
         if (hb.epoch < 1) return error.NotJoined;
-        const settle = wallMs(tio) + 1500;
-        while (wallMs(tio) < settle) {}
+        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(1500), .awake) catch {};
     }
 
     // The host's own writes: on the follower (forwarded) and on the leader

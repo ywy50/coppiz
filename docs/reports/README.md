@@ -50,6 +50,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-28 — a re-slot redelivery lowers `authors.last_seq`, bypassing the `DuplicateConflict` rule](bugs/2026-08-28-redelivery-lowers-author-seq.md)
 - [2026-08-28 — `Direction.readInto` frees an interior pointer on a partial read (latent)](bugs/2026-08-28-direction-partial-read-free.md)
 - [2026-08-28 — `HubListener.closeFn` writes `endpoint.closed` without the endpoint mutex (latent)](bugs/2026-08-28-hub-listener-close-race.md)
+- [2026-08-28 — PR #19's install-only-coppiz wiring broke the G2 sidecar test; `zig build test` was red on `main` again](bugs/2026-08-28-g2-sidecar-needs-install.md)
 
 ### Investigations
 
