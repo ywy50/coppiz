@@ -14,9 +14,8 @@ const slot = @import("../journal/slot.zig");
 const entry = @import("../journal/entry.zig");
 const segment = @import("../journal/segment.zig");
 const chain = @import("../journal/chain.zig");
-const net = @import("net.zig");
-const message = net.message;
-const transport = net.transport;
+const message = @import("message.zig");
+const transport = @import("transport.zig");
 
 pub const Client = struct {
     allocator: std.mem.Allocator,
@@ -40,7 +39,7 @@ pub const Client = struct {
     pub fn connectTransport(
         allocator: std.mem.Allocator,
         io: std.Io,
-        transport_impl: net.transport.Transport,
+        transport_impl: transport.Transport,
         address: []const u8,
         member_id: [16]u8,
         public_key: [32]u8,
