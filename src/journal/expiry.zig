@@ -145,6 +145,16 @@ pub const SlottedEntry = struct {
     stale_position: ?slot.Position,
 };
 
+/// Whether any removal is possible at all under `settings`. With
+/// `stale.cleanup = keep` only TTL expiry can remove, and with
+/// `ttl.enforce = off` nothing ever expires, so the removal set is always
+/// empty and callers can skip the O(entries) `expiryCandidates` +
+/// `removalSet` computation entirely (the common default configuration).
+pub fn canRemoveAnything(settings: *const schema.SettingsState) bool {
+    if (std.mem.eql(u8, settings.getEnum(k_stale_cleanup), "delete")) return true;
+    return !std.mem.eql(u8, settings.getEnum(k_ttl_enforce), "off");
+}
+
 /// The deterministic removal set a checkpoint names (PRD 0002): every entry
 /// slotted at or before `expire_through` whose TTL action is `delete` and
 /// whose expiry instant is at or before the checkpoint's own stamp, plus

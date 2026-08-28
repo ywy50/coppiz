@@ -431,6 +431,11 @@ pub const Node = struct {
         through: slot.Position,
         now: i64,
     ) ![]const entry.Id {
+        // Same guard as the fold's applyCheckpoint: under the default
+        // settings nothing can ever be removed, so the O(entries) candidates
+        // pass is skipped here too (a checkpoint's removal set is computed
+        // on this path once per checkpoint per journal per node).
+        if (!expiry.canRemoveAnything(&fold.settings)) return &.{};
         const candidates = try fold.expiryCandidates(self.allocator);
         defer self.allocator.free(candidates);
         const set = try expiry.removalSet(

@@ -1198,17 +1198,17 @@ pub const ClusterNode = struct {
         return @intCast(@max(@as(i64, 0), self.node.now(self.io)));
     }
 
-    fn settingU64(self: *ClusterNode, name: []const u8, default: u64) u64 {
+    fn settingU64(self: *ClusterNode, comptime name: []const u8, default: u64) u64 {
         const key_index = schema.keyIndex(name) orelse return default;
         return self.node.control.settings.getU64(key_index);
     }
 
-    fn settingU16(self: *ClusterNode, name: []const u8, default: u16) u16 {
+    fn settingU16(self: *ClusterNode, comptime name: []const u8, default: u16) u16 {
         const key_index = schema.keyIndex(name) orelse return default;
         return self.node.control.settings.getU16(key_index);
     }
 
-    fn settingEnum(self: *ClusterNode, name: []const u8, default: []const u8) []const u8 {
+    fn settingEnum(self: *ClusterNode, comptime name: []const u8, default: []const u8) []const u8 {
         const key_index = schema.keyIndex(name) orelse return default;
         return self.node.control.settings.getEnum(key_index);
     }

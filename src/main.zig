@@ -675,7 +675,7 @@ fn cmdSettingsSet(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) 
     const value_text = getArg(argv, "--value") orelse return error.MissingValue;
     const name = getArg(argv, "--journal") orelse "__cluster__";
 
-    const key = schema.keyIndex(key_text) orelse return error.UnknownKey;
+    const key = schema.keyIndexRuntime(key_text) orelse return error.UnknownKey;
     const parsed = try config.parseValue(gpa, key, value_text);
     defer parsed.deinit(gpa);
     const change = [_]validate.Change{.{ .key = key, .value = parsed }};
