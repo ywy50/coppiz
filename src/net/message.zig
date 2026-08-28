@@ -703,6 +703,7 @@ pub fn decode(allocator: std.mem.Allocator, body: []const u8) DecodeError!Messag
     if (body.len < 2) return error.InvalidLength;
     if (body[0] != version) return error.BadVersion;
     const kind_int = body[1];
+    if (kind_int < @intFromEnum(Kind.hello)) return error.UnknownKind;
     if (kind_int > @intFromEnum(Kind.merge_ack)) return error.UnknownKind;
     const kind: Kind = @enumFromInt(kind_int);
     const payload = body[2..];
@@ -940,6 +941,11 @@ test "bad versions, kinds and lengths are refused by name" {
     defer test_alloc.free(bad_kind);
     bad_kind[1] = @intFromEnum(Kind.merge_ack) + 1;
     try std.testing.expectError(error.UnknownKind, decode(test_alloc, bad_kind));
+
+    var zero_kind = try test_alloc.dupe(u8, buf);
+    defer test_alloc.free(zero_kind);
+    zero_kind[1] = 0;
+    try std.testing.expectError(error.UnknownKind, decode(test_alloc, zero_kind));
 
     try std.testing.expectError(error.InvalidLength, decode(test_alloc, buf[0..1]));
 }

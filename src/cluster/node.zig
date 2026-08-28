@@ -190,7 +190,6 @@ pub const ClusterNode = struct {
     merging_from: ?u64 = null,
     merge_buffers: std.AutoHashMapUnmanaged([16]u8, std.ArrayListUnmanaged(u8)) = .empty,
     merge_pending: std.ArrayListUnmanaged([16]u8) = .empty,
-    merge_next: slot.Position = .{ .epoch = 0, .seq = 0 },
 
     /// Seed addresses not yet connected to any member, with the next
     /// retry time (the admitter may not be listening when a joiner starts).
@@ -818,11 +817,15 @@ pub const ClusterNode = struct {
 
     // -- admission -----------------------------------------------------------
 
-    fn onHello(self: *ClusterNode, conn_id: u64, h: message.Hello) !void {
-        // The node's own operator channel (the CLI client dials with this
-        // node's key): admit, and never as a member peer.
-        const is_self_client = std.mem.eql(u8, &h.member_id, &self.node.member_id) and
+    /// Whether a hello is the node's own operator channel (the CLI client
+    /// dials with this node's key): admitted, and never as a member peer.
+    fn isSelfClient(self: *ClusterNode, h: message.Hello) bool {
+        return std.mem.eql(u8, &h.member_id, &self.node.member_id) and
             std.mem.eql(u8, &h.public_key, &self.node.keypair.public_key.toBytes());
+    }
+
+    fn onHello(self: *ClusterNode, conn_id: u64, h: message.Hello) !void {
+        const is_self_client = self.isSelfClient(h);
         // A second connection for a member: replace the old one (a dead
         // conn whose peer_gone is still queued must not block the new dial).
         if (self.members.get(h.member_id)) |ms| {
@@ -844,34 +847,41 @@ pub const ClusterNode = struct {
         }
         if (is_self_client) return;
 
-        if (self.members.getPtr(h.member_id)) |ms| {
-            ms.conn_id = conn_id;
-            const updated = try self.allocator.dupe(u8, h.address);
+        const known = try self.noteMemberConnected(h.member_id, h.address, conn_id);
+        // A newcomer: the admitter appends its join, then it backfills.
+        if (!known) try self.admitNewcomer(h);
+    }
+
+    /// Records a member's live connection and advertised address, creating
+    /// the member when unknown; returns whether it was already known.
+    fn noteMemberConnected(
+        self: *ClusterNode,
+        member_id: [16]u8,
+        address: []const u8,
+        conn_id: u64,
+    ) !bool {
+        if (self.members.getPtr(member_id)) |ms| {
+            const updated = try self.allocator.dupe(u8, address);
             self.allocator.free(ms.address);
             ms.address = updated;
+            ms.conn_id = conn_id;
             ms.last_heard_ms = self.nowMs();
             ms.state = .member;
-        } else {
-            // A newcomer: the admitter appends its join, then it backfills.
-            try self.members.put(self.allocator, h.member_id, .{
-                .address = try self.allocator.dupe(u8, h.address),
-                .conn_id = conn_id,
-                .last_heard_ms = self.nowMs(),
-                .state = .member,
-            });
-            try self.admitNewcomer(h);
+            return true;
         }
+        try self.members.put(self.allocator, member_id, .{
+            .address = try self.allocator.dupe(u8, address),
+            .conn_id = conn_id,
+            .last_heard_ms = self.nowMs(),
+            .state = .member,
+        });
+        return false;
     }
 
     /// The admission verdict for a hello: cluster match, then the mode.
     fn admission(self: *ClusterNode, h: message.Hello) message.HelloAck {
-        // The node's own operator channel (the CLI client dials with this
-        // node's key): admit without a join, and never as a member peer.
-        if (std.mem.eql(u8, &h.member_id, &self.node.member_id) and
-            std.mem.eql(u8, &h.public_key, &self.node.keypair.public_key.toBytes()))
-        {
-            return self.ackFor(true, .none);
-        }
+        // The operator channel is admitted without a join.
+        if (self.isSelfClient(h)) return self.ackFor(true, .none);
         const my_genesis = self.node.group_hash;
         const have_chain = !std.mem.eql(u8, &my_genesis, &([_]u8{0} ** 32));
         const cluster_mismatch = have_chain and
@@ -957,21 +967,7 @@ pub const ClusterNode = struct {
                 self.closeDupConn(ms.conn_id.?);
             }
         }
-        if (self.members.getPtr(a.member_id)) |ms| {
-            const updated = try self.allocator.dupe(u8, a.address);
-            self.allocator.free(ms.address);
-            ms.address = updated;
-            ms.conn_id = conn_id;
-            ms.last_heard_ms = self.nowMs();
-            ms.state = .member;
-        } else {
-            try self.members.put(self.allocator, a.member_id, .{
-                .address = try self.allocator.dupe(u8, a.address),
-                .conn_id = conn_id,
-                .last_heard_ms = self.nowMs(),
-                .state = .member,
-            });
-        }
+        _ = try self.noteMemberConnected(a.member_id, a.address, conn_id);
         // A chainless member was admitted: backfill from the responder.
         if (self.syncing) {
             if (!self.sync_cursors.contains(self.node.control.journal_id)) {
@@ -1565,22 +1561,6 @@ pub const ClusterNode = struct {
         return null;
     }
 
-    /// Truncates every journal to the last slot of the common epoch (the
-    /// slot before my branch started), dropping my divergent tail.
-    fn truncateToCommonTail(self: *ClusterNode) !void {
-        const tail = self.common_tail orelse return;
-        try self.node.store.truncate(self.node.control.journal_id, tail);
-        var it = self.node.control.journals.iterator();
-        while (it.next()) |kv| {
-            const jid = kv.key_ptr.*;
-            // A journal with no pre-branch records (it was created, or first
-            // written, during the partition) truncates to empty.
-            const pos = (try self.lastEpochPosition(jid, tail.epoch)) orelse
-                slot.Position{ .epoch = 0, .seq = 0 };
-            try self.node.store.truncate(jid, pos);
-        }
-    }
-
     /// The last position of `epoch_no` in a journal's chain, if any.
     fn lastEpochPosition(self: *ClusterNode, journal_id: [16]u8, epoch_no: u64) !?slot.Position {
         const Ctx = struct {
@@ -1608,7 +1588,6 @@ pub const ClusterNode = struct {
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.appendSlice(self.allocator, p.records);
         if (p.records.len > 0) {
-            self.merge_next = p.next;
             try self.requestSync(conn_id, p.journal_id, p.next);
             return;
         }
