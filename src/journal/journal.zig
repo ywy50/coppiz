@@ -1,10 +1,12 @@
-//! The single-member node: the library API at tier 0 (PRD 0001 phase 4).
+//! The journal node: the library API at tier 0 and the state owned by a
+//! cluster member (PRD 0001 phase 4).
 //!
 //! One process is a complete journal and its own leader: `open` folds every
 //! chain from the store, `append` runs the PRD write path (durable
 //! unslotted queue, then slot as leader, then trim), and reads are always
-//! local. The node loop, replication and the leader *election* are PRD
-//! 0003's; here the epoch is 1 and the leader is this member.
+//! local. At that tier the epoch is 1 and the leader is this member. The
+//! cluster node uses the replicated-slot, control-entry, and re-fold seams
+//! below to apply the same journal state after election and replication.
 //!
 //! The clock is injectable (`now`), which is what makes slot-stamping and
 //! read visibility deterministic in tests; the default is the wall clock.
@@ -254,7 +256,7 @@ pub const Node = struct {
 
         // 1. Durable local queue (bounded; refuses queue_full, OQ 55).
         try self.queue.append(&en);
-        errdefer self.queue.clear() catch {};
+        errdefer self.queue.remove(journal_id, en.id()) catch {};
 
         // 2. Slot as leader and append to the store.
         const sl = try self.slotFor(fold, &en);
@@ -376,7 +378,10 @@ pub const Node = struct {
         en.signature = (try entry.sign(self.keypair, &en)).toBytes();
         const sl = try self.slotFor(fold, &en);
 
-        const removed = try self.removalSet(fold, through, @intCast(sl.slot_ts_ms));
+        // The removal set is computed against the checkpoint's own stamp —
+        // the slot's timestamp, not the raw clock (PRD 0002: the leader's
+        // clock chose the instant once, in the chain).
+        const removed = try self.removalIds(fold, through, @intCast(sl.slot_ts_ms));
         defer self.allocator.free(removed);
         if (removed.len == 0) {
             self.allocator.free(en.payload); // never emit an empty removal set (G7)
@@ -402,7 +407,7 @@ pub const Node = struct {
         now: i64,
     ) !void {
         const js = self.journals.get(journal_id) orelse return error.UnknownJournal;
-        const removed = try self.removalSet(&js.fold, through, now);
+        const removed = try self.removalIds(&js.fold, through, now);
         defer self.allocator.free(removed);
         if (removed.len == 0) return;
         try self.compactRemoved(&js.fold, removed);
@@ -418,31 +423,40 @@ pub const Node = struct {
     }
 
     /// The entries a checkpoint at `head` with stamp `now` would remove —
-    /// the fold's view of PRD 0002's deterministic removal set.
-    fn removalSet(
+    /// the same set `applyCheckpoint` will fold, so compaction cannot drop
+    /// a payload the fold still treats as present.
+    fn removalIds(
         self: *Node,
         fold: *chain.FoldState,
         through: slot.Position,
         now: i64,
     ) ![]const entry.Id {
-        var ids = std.ArrayListUnmanaged(entry.Id).empty;
-        errdefer ids.deinit(self.allocator);
+        var candidates = std.ArrayListUnmanaged(expiry.SlottedEntry).empty;
+        defer candidates.deinit(self.allocator);
         var it = fold.entries.iterator();
         while (it.next()) |kv| {
             const info = kv.value_ptr.*;
-            if (slot.Position.order(info.position, through) == .gt) continue;
-            const expired = info.expires_at_ms != null and
-                info.expires_at_ms.? <= @as(u64, @intCast(now));
-            const stale_removable = info.stale_marked and std.mem.eql(
-                u8,
-                fold.settings.getEnum(schema.keyIndex("stale.cleanup").?),
-                "delete",
-            );
-            if (expired or stale_removable) {
-                try ids.append(self.allocator, kv.key_ptr.*);
-            }
+            try candidates.append(self.allocator, .{
+                .id = kv.key_ptr.*,
+                .position = info.position,
+                .slot_ts_ms = info.slot_ts_ms,
+                .expires_at = info.expires_at_ms,
+                .ttl_action = info.ttl_action,
+                .stale_marked = info.stale_marked,
+                .stale_position = info.stale_position,
+            });
         }
-        return ids.toOwnedSlice(self.allocator);
+        const set = try expiry.removalSet(
+            self.allocator,
+            candidates.items,
+            through,
+            @intCast(now),
+            &fold.settings,
+        );
+        defer self.allocator.free(set);
+        const ids = try self.allocator.alloc(entry.Id, set.len);
+        for (set, 0..) |se, i| ids[i] = se.id;
+        return ids;
     }
 
     /// The entries a checkpoint at `through` with stamp `now` would remove —
@@ -455,7 +469,7 @@ pub const Node = struct {
         now: i64,
     ) ![]const entry.Id {
         const js = self.journals.get(journal_id) orelse return error.UnknownJournal;
-        return self.removalSet(&js.fold, through, now);
+        return self.removalIds(&js.fold, through, now);
     }
 
     /// Builds the next slot as the leader: current epoch, next seq, clamped
@@ -735,14 +749,14 @@ pub const Node = struct {
         ctx: anytype,
         comptime on_entry: fn (@TypeOf(ctx), *const slot.Slot, ?*const entry.Entry) anyerror!void,
     ) !bool {
-        const js = self.journals.get(journal_id) orelse return false;
-        const info = js.fold.entries.get(target) orelse return false;
+        const fold = self.foldOf(journal_id) orelse return false;
+        const info = fold.entries.get(target) orelse return false;
         const now_ms = self.now(self.io);
-        if (!visible(&js.fold, info, now_ms, include_stale, include_expired)) return false;
+        if (!visible(fold, info, now_ms, include_stale, include_expired)) return false;
         return self.readRecord(journal_id, info, ctx, on_entry);
     }
 
-    /// Reads slots in [from, to), in chain order. `from` defaults to the
+    /// Reads slots in `[from, to]`, in chain order. `from` defaults to the
     /// journal's genesis, `to` to its head (inclusive).
     pub fn readRange(
         self: *Node,
@@ -754,21 +768,30 @@ pub const Node = struct {
         ctx: anytype,
         comptime on_entry: fn (@TypeOf(ctx), *const slot.Slot, ?*const entry.Entry) anyerror!void,
     ) !void {
-        const js = self.journals.get(journal_id) orelse return;
+        const fold = self.foldOf(journal_id) orelse return;
         const start = from orelse slot.Position{ .epoch = 1, .seq = 1 };
-        const end = to orelse js.fold.head orelse return;
+        const end = to orelse fold.head orelse return;
 
-        // The fold's entries, sorted by position.
-        const ids = try self.sortedEntryIds(&js.fold);
+        // The fold's entries, sorted by slot position (chain order).
+        const ids = try self.sortedEntryIds(fold);
         defer self.allocator.free(ids);
         for (ids) |eid| {
-            const info = js.fold.entries.get(eid).?;
+            const info = fold.entries.get(eid).?;
             if (slot.Position.order(info.position, start) == .lt) continue;
             if (slot.Position.order(info.position, end) == .gt) break;
             const now_ms = self.now(self.io);
-            if (!visible(&js.fold, info, now_ms, include_stale, include_expired)) continue;
+            if (!visible(fold, info, now_ms, include_stale, include_expired)) continue;
             _ = try self.readRecord(journal_id, info, ctx, on_entry);
         }
+    }
+
+    /// The control journal, or a data journal this node has folded.
+    fn foldOf(self: *Node, journal_id: [16]u8) ?*chain.FoldState {
+        if (std.mem.eql(u8, &journal_id, &self.control.journal_id)) {
+            return &self.control;
+        }
+        const js = self.journals.get(journal_id) orelse return null;
+        return &js.fold;
     }
 
     fn readRecord(
@@ -794,9 +817,11 @@ pub const Node = struct {
             ids[i] = eid.*;
             i += 1;
         }
-        std.mem.sort(entry.Id, ids, {}, struct {
-            fn lt(_: void, a: entry.Id, b: entry.Id) bool {
-                return entry.Id.lessThan(a, b);
+        std.mem.sort(entry.Id, ids, fold, struct {
+            fn lt(f: *chain.FoldState, a: entry.Id, b: entry.Id) bool {
+                const pa = f.entries.get(a).?.position;
+                const pb = f.entries.get(b).?.position;
+                return slot.Position.order(pa, pb) == .lt;
             }
         }.lt);
         return ids;
@@ -912,6 +937,10 @@ fn loadMemberKey(
     return loadMemberKeyPublic(allocator, io, data_dir);
 }
 
+/// Owner-only mode for `member.key`. `default_file` is 0o666 masked by
+/// umask, which would leave the secret group- and world-readable.
+const member_key_perm: std.Io.File.Permissions = .fromMode(0o600);
+
 /// Writes a fresh member key to `member.key`. Used by `init`.
 pub fn writeMemberKey(
     _: std.mem.Allocator,
@@ -922,11 +951,13 @@ pub fn writeMemberKey(
     const file = data_dir.createFile(io, "member.key", .{
         .read = true,
         .truncate = false,
+        .permissions = member_key_perm,
     }) catch |err| blk: {
         if (err != error.PathAlreadyExists) return err;
         break :blk try data_dir.openFile(io, "member.key", .{ .mode = .read_write });
     };
     defer file.close(io);
+    try file.setPermissions(io, member_key_perm);
     const bytes = keypair.secret_key.toBytes();
     try file.writePositionalAll(io, &bytes, 0);
     try file.sync(io);
@@ -1080,6 +1111,22 @@ const TestEnv = struct {
 
 fn openNode(env: *TestEnv) !*Node {
     return Node.open(test_alloc, tio, try env.dataDir(), .{ .now = &fakeClock });
+}
+
+test "member.key is created owner-readable only" {
+    var env = TestEnv.init();
+    defer env.deinit();
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    const file = try env.tmp.dir.openFile(tio, "data/member.key", .{});
+    defer file.close(tio);
+    const st = try file.stat(tio);
+    try std.testing.expectEqual(
+        @as(std.posix.mode_t, 0o600),
+        st.permissions.toMode() & 0o777,
+    );
 }
 
 test "init, append, read, head, reopen (the single-member journal)" {
@@ -1375,6 +1422,43 @@ test "journal.max_entry_bytes and the queue bound trip at the node (G6)" {
     defer tiny.deinit();
     const main_id = tiny.journalIdByName("main").?;
     try std.testing.expectError(error.QueueFull, tiny.append(main_id, "fits? no", 0));
+}
+
+test "slotFor restarts seq at 1 when the cluster epoch advances" {
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    var node = try openNode(&env);
+    defer node.deinit();
+    const j = node.journalIdByName("main").?;
+    _ = try node.append(j, "one", 0);
+    try std.testing.expectEqual(@as(u64, 1), node.head(j).?.epoch);
+    try std.testing.expectEqual(@as(u64, 1), node.head(j).?.seq);
+
+    var ep = node.control.epoch.?;
+    ep.number += 1;
+    node.control.epoch = ep;
+    const js = node.journals.get(j).?;
+    var dummy = entry.Entry{
+        .kind = .data,
+        .journal = j,
+        .author = node.member_id,
+        .author_seq = 2,
+        .author_ts_ms = 0,
+        .ttl_ms = 0,
+        .payload_hash = entry.payloadHash("x"),
+        .payload_len = 1,
+        .payload_omitted = false,
+        .signature = [_]u8{0} ** 64,
+        .payload = "x",
+    };
+    const sl = try node.slotFor(&js.fold, &dummy);
+    try std.testing.expectEqual(@as(u64, 2), sl.epoch);
+    try std.testing.expectEqual(@as(u64, 1), sl.seq);
 }
 
 test "applyReplicated replays another member's whole store onto a fresh member" {
