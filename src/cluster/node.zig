@@ -67,6 +67,10 @@ const Event = union(enum) {
     /// 0005): the loop runs the same write path as a wire client's append,
     /// then completes the host's semaphore with the entry id.
     local_append: LocalAppend,
+    /// An embedded host's read, posted from the host's own thread (PRD
+    /// 0005): the loop runs the range over its own state and copies the
+    /// records into the host's completion, then posts it.
+    local_read: LocalRead,
     /// Shut the loop down.
     stop,
 };
@@ -94,6 +98,51 @@ fn completeLocal(completion: *LocalCompletion, io: std.Io, id: entry.Id, refusal
     completion.id = id;
     completion.refusal = refusal;
     completion.sem.post(io);
+}
+
+/// One embedded-host read in flight (PRD 0005). The host blocks on
+/// `completion.sem` until the loop has copied the requested range; the
+/// range bounds and flags are the host's, alive for as long as the host is
+/// blocked.
+const LocalRead = struct {
+    journal_id: [16]u8,
+    from: ?slot.Position,
+    to: ?slot.Position,
+    include_stale: bool,
+    include_expired: bool,
+    completion: *LocalReadCompletion,
+};
+
+/// What an embedded host's `localReadRange` waits on: the records the loop
+/// copied (slots in chain order, entries when the store still has them),
+/// or the error that aborted the read, posted exactly once. `records` is
+/// owned by the completion and freed by whoever waits on it.
+const LocalReadCompletion = struct {
+    allocator: std.mem.Allocator,
+    sem: std.Io.Semaphore = .{},
+    records: std.ArrayListUnmanaged(LocalRecord) = .empty,
+    err: ?anyerror = null,
+};
+
+/// A record as the loop hands it to a host: the slot, and the entry when
+/// present. `entry.payload` is owned by the completion.
+const LocalRecord = struct {
+    slot: slot.Slot,
+    entry: ?entry.Entry,
+};
+
+fn completeLocalRead(completion: *LocalReadCompletion, io: std.Io, err: ?anyerror) void {
+    if (err) |e| completion.err = e;
+    completion.sem.post(io);
+}
+
+/// Frees the records the loop copied (entry payloads included). Called by
+/// whoever waits on the completion — the host's `localReadRange`.
+fn deinitLocalRead(completion: *LocalReadCompletion, allocator: std.mem.Allocator) void {
+    for (completion.records.items) |rec| {
+        if (rec.entry) |en| allocator.free(en.payload);
+    }
+    completion.records.deinit(allocator);
 }
 
 const Frame = struct {
@@ -385,6 +434,46 @@ pub const ClusterNode = struct {
         return completion.id;
     }
 
+    /// The embedded-host read path (PRD 0005): reads `[from, to]` of a
+    /// journal from the host's own thread, and blocks until the loop has
+    /// copied the range — the same read path a wire client's `read` takes,
+    /// so a host thread never touches the folds while the loop runs. The
+    /// loop runs the range over its own state (atomic with respect to its
+    /// own mutations), copies every visible record into the completion, and
+    /// the caller's thread replays `on_entry` over the copies. The whole
+    /// range is buffered in memory; a host that wants to stream a large
+    /// journal page by page still reads through the wire client.
+    pub fn localReadRange(
+        self: *ClusterNode,
+        io: std.Io,
+        journal_id: [16]u8,
+        from: ?slot.Position,
+        to: ?slot.Position,
+        include_stale: bool,
+        include_expired: bool,
+        ctx: anytype,
+        comptime on_entry: fn (@TypeOf(ctx), *const slot.Slot, ?*const entry.Entry) anyerror!void,
+    ) !void {
+        var completion = LocalReadCompletion{ .allocator = self.allocator };
+        if (!self.mailbox.post(io, .{ .local_read = .{
+            .journal_id = journal_id,
+            .from = from,
+            .to = to,
+            .include_stale = include_stale,
+            .include_expired = include_expired,
+            .completion = &completion,
+        } })) {
+            completion.err = error.MailboxFull;
+        } else {
+            completion.sem.wait(io) catch return error.Canceled;
+        }
+        defer deinitLocalRead(&completion, self.allocator);
+        if (completion.err) |err| return err;
+        for (completion.records.items) |*rec| {
+            try on_entry(ctx, &rec.slot, if (rec.entry) |*en| en else null);
+        }
+    }
+
     // -- bootstrap helpers ---------------------------------------------------
 
     /// Reconciles the members map with the fold (new joins appear, addresses
@@ -508,6 +597,7 @@ pub const ClusterNode = struct {
                 .stop => return,
                 .tick => self.onTick() catch self.fatal(),
                 .local_append => |a| self.onLocalAppend(a),
+                .local_read => |r| self.onLocalRead(r),
                 .conn_ready => |ready| self.onConnReady(
                     ready.conn,
                     ready.outbound,
@@ -1376,6 +1466,52 @@ pub const ClusterNode = struct {
                 return;
             };
         }
+    }
+
+    /// Runs an embedded host's read over the loop's own state (no mutation
+    /// can interleave — the loop is one thread) and copies the visible
+    /// records into the host's completion. The host's callback never runs
+    /// on this thread; it replays the copies on its own.
+    fn onLocalRead(self: *ClusterNode, r: LocalRead) void {
+        const completion = r.completion;
+        self.node.readRange(
+            r.journal_id,
+            r.from,
+            r.to,
+            r.include_stale,
+            r.include_expired,
+            completion,
+            struct {
+                fn on(
+                    c: *LocalReadCompletion,
+                    sl: *const slot.Slot,
+                    en: ?*const entry.Entry,
+                ) anyerror!void {
+                    const rec = try c.records.addOne(c.allocator);
+                    rec.slot = sl.*;
+                    rec.entry = null;
+                    if (en) |e| {
+                        rec.entry = .{
+                            .kind = e.kind,
+                            .journal = e.journal,
+                            .author = e.author,
+                            .author_seq = e.author_seq,
+                            .author_ts_ms = e.author_ts_ms,
+                            .ttl_ms = e.ttl_ms,
+                            .payload_hash = e.payload_hash,
+                            .signature = e.signature,
+                            .payload_len = e.payload_len,
+                            .payload_omitted = e.payload_omitted,
+                            .payload = try c.allocator.dupe(u8, e.payload),
+                        };
+                    }
+                }
+            }.on,
+        ) catch |err| {
+            completeLocalRead(completion, self.io, err);
+            return;
+        };
+        completeLocalRead(completion, self.io, null);
     }
 
     fn onAppend(self: *ClusterNode, conn_id: u64, a: message.Append) !void {
@@ -2483,7 +2619,7 @@ test "append without hello is dropped and does not write" {
     const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
 
     var hub = net.transport.Hub.init(test_alloc);
-    defer hub.deinit();
+    defer hub.deinit(tio);
     const listener = try hub.listen(test_alloc, "node-a");
     const dialer = try hub.dialer(test_alloc, "node-a");
 
@@ -2532,7 +2668,7 @@ test "hello whose member id does not derive from the key is refused" {
     const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
 
     var hub = net.transport.Hub.init(test_alloc);
-    defer hub.deinit();
+    defer hub.deinit(tio);
     const listener = try hub.listen(test_alloc, "node-a");
     const dialer = try hub.dialer(test_alloc, "node-a");
 
@@ -3550,4 +3686,112 @@ test "embedded host appends through the loop from its own thread (PRD 0005)" {
     // And they read back over the wire from a follower.
     const have = try bothPayloads(c.client, "main", "via-follower", "via-leader");
     try std.testing.expect(have);
+}
+
+test "embedded host reads through the loop from its own thread (PRD 0005)" {
+    // A founds with open admission and fast failure detection; B joins. The
+    // host — the test thread — appends through the loop (leader and
+    // follower) exactly as the write-path test above, then reads the journal
+    // back through its own member's loop: `localReadRange` posts the read to
+    // the loop, which runs it over its own state and hands the host the
+    // copied records — the host thread never touches the folds while the
+    // loop runs.
+    const admission_key = schema.keyIndex("cluster.admission").?;
+    const heartbeat = schema.keyIndex("cluster.heartbeat_ms").?;
+    const suspect = schema.keyIndex("cluster.suspect_after_ms").?;
+    const genesis_changes = [_]validate.Change{
+        .{ .key = admission_key, .value = .{
+            .enum_value = schema.enumValue(admission_key, "open").?,
+        } },
+        .{ .key = heartbeat, .value = .{ .u64 = 50 } },
+        .{ .key = suspect, .value = .{ .u64 = 800 } },
+    };
+    var tmp_a = std.testing.tmpDir(.{});
+    tmp_a.dir.createDir(tio, "data", .default_dir) catch {};
+    {
+        const data_dir = try tmp_a.dir.openDir(tio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, tio, data_dir, &genesis_changes, "main", &journal.wallClock);
+    }
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(tio);
+    const a = try triNodeInit("a", null, &hub, null, tmp_a, null);
+    defer triNodeStop(&a);
+    const b_kp = crypto.sign.Ed25519.KeyPair.generate(tio);
+    const b = try triNodeInit("b", "a", &hub, b_kp, null, null);
+    defer triNodeStop(&b);
+
+    // The joiner reaches the founder's view, then settles.
+    {
+        const deadline = wallMs(tio) + 20_000;
+        while (wallMs(tio) < deadline) {
+            const hb = b.client.hello() catch continue;
+            if (hb.epoch >= 1) break;
+        }
+        const hb = b.client.hello() catch return error.NotJoined;
+        if (hb.epoch < 1) return error.NotJoined;
+        const settle = wallMs(tio) + 1500;
+        while (wallMs(tio) < settle) {}
+    }
+
+    // The host's own writes: on the follower (forwarded) and on the leader
+    // (slotted directly). Both block until the slot folds back.
+    _ = try b.cn.localAppend(tio, "main", "via-follower", 0);
+    _ = try a.cn.localAppend(tio, "main", "via-leader", 0);
+
+    // Read back through the loop, polling until the follower's forwarded
+    // entry replicates: the loop-routed read is the safe way to wait.
+    const main_id = b.node.journalIdByName("main").?;
+    const Seen = struct {
+        payloads: [2][]const u8 = .{ "via-follower", "via-leader" },
+        found: [2]bool = [_]bool{false} ** 2,
+        ids: [2]entry.Id = undefined,
+        count: usize = 0,
+    };
+    var seen = Seen{};
+    const deadline = wallMs(tio) + 15_000;
+    while (wallMs(tio) < deadline) {
+        seen = .{};
+        try b.cn.localReadRange(tio, main_id, null, null, false, false, &seen, struct {
+            fn on(s: *Seen, _: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
+                const e = en orelse return error.PayloadDropped;
+                for (s.payloads, 0..) |p, i| {
+                    if (std.mem.eql(u8, e.payload, p)) {
+                        s.found[i] = true;
+                        s.ids[i] = e.id();
+                    }
+                }
+                s.count += 1;
+            }
+        }.on);
+        if (seen.count == 2) break;
+        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 2), seen.count);
+    try std.testing.expect(seen.found[0] and seen.found[1]);
+    // Each write is authored by the member that appended it.
+    var saw_b = false;
+    var saw_a = false;
+    for (seen.ids[0..2]) |id| {
+        if (std.mem.eql(u8, &id.author, &b.node.member_id)) saw_b = true;
+        if (std.mem.eql(u8, &id.author, &a.node.member_id)) saw_a = true;
+    }
+    try std.testing.expect(saw_b and saw_a);
+
+    // An empty window reads nothing.
+    var empty: usize = 0;
+    try b.cn.localReadRange(
+        tio,
+        main_id,
+        .{ .epoch = 1, .seq = 1 },
+        .{ .epoch = 1, .seq = 0 },
+        false,
+        false,
+        &empty,
+        struct {
+            fn on(c: *usize, _: *const slot.Slot, _: ?*const entry.Entry) anyerror!void {
+                c.* += 1;
+            }
+        }.on,
+    );
+    try std.testing.expectEqual(@as(usize, 0), empty);
 }

@@ -12,17 +12,20 @@ The embedded write path shipped with the cluster loop:
 `cluster.ClusterNode.localAppend` runs a host's append through the loop —
 durable queue, then the leader slots or the follower forwards — so a host
 on a follower writes without touching the wire, and the entry replicates
-like any other. The host's synchronous *reads* (fold access, `readRange`
-from the host thread) race the loop while it runs; hosts read through the
-wire (a client to the local member) until reads are loop-routed, a
-follow-up. `examples/` carries one host per shape — `embed-single` (size 1,
-no network), `embed-cluster` (three embedded nodes in one process; a
-partition and heal, with the host's writes readable throughout), `sidecar`
-(a host speaking to a node over the wire) — built by `zig build examples`
-and each a test run by `zig build test`. A three-member partition that
-elects a second leader does not yet merge reliably in the node loop (its
-two-member merge is e2e-tested; the three-member case is reported in PRD
-0003's status).
+like any other. The embedded *read* path followed: `localReadRange` routes
+a host's synchronous read through the loop — the loop runs the range over
+its own state (atomic with respect to its own mutations) and copies the
+records, and the host's callback replays the copies on its own thread — so
+a host thread never touches the folds while the loop runs. `examples/`
+carries one host per shape — `embed-single` (size 1, no network),
+`embed-cluster` (three embedded nodes in one process; a partition and
+heal, with the host's writes readable throughout, read through the loop),
+`sidecar` (a host speaking to a node over the wire, embedded and, since
+the G2 pairing, against a real `coppiz serve` over TCP) — built by `zig
+build examples` and each a test run by `zig build test`. A three-member
+partition that elects a second leader does not yet merge reliably in the
+node loop (its two-member merge is e2e-tested; the three-member case is
+reported in PRD 0003's status).
 
 ## Problem
 
@@ -214,11 +217,12 @@ example: its RFC 0019 and stage-1 spike note.
 - [x] (G1) `examples/embed-single/` opens, appends, reads and follows with no
   config beyond a directory; builds from a fresh checkout with
   `zig build examples`.
-- [ ] (G2) The `coppiz` binary and `examples/sidecar/` replicate to each other
+- [x] (G2) The `coppiz` binary and `examples/sidecar/` replicate to each other
   (one embedded, one standalone) — proof that the two surfaces are one
-  library. `examples/sidecar/` today speaks the wire to an embedded node
-  (the same protocol a `coppiz serve` exposes); the binary-half of the
-  pairing is the e2e in the node binary's own tests.
+  library. `examples/sidecar/` speaks the wire to an embedded node behind
+  the hub (its own test) and, since 2026-08-28, to a real `coppiz serve`
+  over loopback TCP (`zig-out/bin/sidecar --address … --key-dir …`); the
+  TCP pairing is an e2e in the node binary's own tests.
 - [x] (G3) A fresh checkout's `build.zig.zon` declares no dependencies and
   the examples run with no other process started (a test asserts the
   process table).

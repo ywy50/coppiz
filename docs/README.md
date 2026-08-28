@@ -94,7 +94,8 @@ election, a reserved federation settings scope
 
 **Source layout.** `src/journal/` entry/slot codecs, chain, storage;
 `src/cluster/` membership fold, election, epochs, merge, node loop (with
-`cluster.ClusterNode.localAppend`, the embedded-host write path, PRD 0005);
+`cluster.ClusterNode.localAppend` and `localReadRange`, the embedded-host
+write and read paths, PRD 0005);
 `src/settings/` schema, validation, fold; `src/net/` framing, heartbeats,
 backfill; `src/config/` local `coppiz.toml` parsing (PRD 0004); the CLI
 lives in `src/main.zig` and `src/api/` (a service API) stays conditional on
