@@ -768,7 +768,7 @@ pub const ClusterNode = struct {
                     // the suspect timer marks `.lost`, so a redial blip
                     // cannot eject a live member from the election.
                     ms.conn_id = null;
-                    if (ms.dial_at_ms == 0) ms.dial_at_ms = self.nowMs() + ms.backoff_ms;
+                    if (ms.dial_at_ms == 0) ms.dial_at_ms = self.elapsedMs() + ms.backoff_ms;
                 }
             }
         }
@@ -782,7 +782,7 @@ pub const ClusterNode = struct {
         while (mit.next()) |ms| {
             if (std.mem.eql(u8, ms.address, address)) {
                 // Not `.lost`: the suspect timer owns that transition.
-                ms.dial_at_ms = self.nowMs() + ms.backoff_ms;
+                ms.dial_at_ms = self.elapsedMs() + ms.backoff_ms;
                 ms.backoff_ms = @min(ms.backoff_ms * 2, 8000);
             }
         }
@@ -837,7 +837,7 @@ pub const ClusterNode = struct {
     }
 
     fn onTick(self: *ClusterNode) !void {
-        const now = self.nowMs();
+        const now = self.elapsedMs();
         self.updateTick();
         const heartbeat_ms = self.settingU64("cluster.heartbeat_ms", 1000);
         const suspect_after = self.settingU64("cluster.suspect_after_ms", 5000);
@@ -1166,7 +1166,7 @@ pub const ClusterNode = struct {
                 // Not `.lost` here: the suspect timer owns that transition,
                 // so a quick redial cannot eject the member from elections.
                 ms.conn_id = null;
-                ms.dial_at_ms = self.nowMs() + ms.backoff_ms;
+                ms.dial_at_ms = self.elapsedMs() + ms.backoff_ms;
                 ms.backoff_ms = @min(ms.backoff_ms * 2, 8000);
             }
         }
@@ -1199,6 +1199,17 @@ pub const ClusterNode = struct {
 
     fn nowMs(self: *ClusterNode) u64 {
         return @intCast(@max(@as(i64, 0), self.node.now(self.io)));
+    }
+
+    /// Elapsed-time measurements (the failure-detection windows, the
+    /// heartbeat/dial/seed cadence): monotonic, so an NTP step or a manual
+    /// clock change cannot satisfy a suspect/evict window in one tick or
+    /// suspend the cadence until the clock catches up. Every reading here
+    /// compares against another local reading — no instant crosses members —
+    /// so the stamps and instants that do (slot, author, checkpoint) stay on
+    /// the real clock via `nowMs`.
+    fn elapsedMs(self: *ClusterNode) u64 {
+        return @intCast(std.Io.Timestamp.now(self.io, .awake).toMilliseconds());
     }
 
     fn settingU64(self: *ClusterNode, comptime name: []const u8, default: u64) u64 {
@@ -1285,7 +1296,7 @@ pub const ClusterNode = struct {
             const updated = try self.allocator.dupe(u8, h.address);
             self.allocator.free(ms.address);
             ms.address = updated;
-            ms.last_heard_ms = self.nowMs();
+            ms.last_heard_ms = self.elapsedMs();
             ms.state = .member;
         } else {
             // A newcomer: the admitter appends its join, then it backfills.
@@ -1293,7 +1304,7 @@ pub const ClusterNode = struct {
                 .address = try self.allocator.dupe(u8, h.address),
                 .public_key = h.public_key,
                 .conn_id = conn_id,
-                .last_heard_ms = self.nowMs(),
+                .last_heard_ms = self.elapsedMs(),
                 .state = .member,
             });
             try self.admitNewcomer(h);
@@ -1426,14 +1437,14 @@ pub const ClusterNode = struct {
             ms.address = updated;
             if (!std.mem.eql(u8, &known_key, &([_]u8{0} ** 32))) ms.public_key = known_key;
             ms.conn_id = conn_id;
-            ms.last_heard_ms = self.nowMs();
+            ms.last_heard_ms = self.elapsedMs();
             ms.state = .member;
         } else {
             try self.members.put(self.allocator, a.member_id, .{
                 .address = try self.allocator.dupe(u8, a.address),
                 .public_key = known_key,
                 .conn_id = conn_id,
-                .last_heard_ms = self.nowMs(),
+                .last_heard_ms = self.elapsedMs(),
                 .state = .member,
             });
         }
@@ -1875,7 +1886,7 @@ pub const ClusterNode = struct {
         const expected = cs.member_id orelse return;
         if (!std.mem.eql(u8, &hb.member_id, &expected)) return;
         const ms = self.members.getPtr(hb.member_id) orelse return;
-        ms.last_heard_ms = self.nowMs();
+        ms.last_heard_ms = self.elapsedMs();
         ms.head = hb.head;
         const my_head = self.node.control.head orelse slot.Position{ .epoch = 0, .seq = 0 };
         ms.state = if (slot.Position.order(hb.head, my_head) != .lt) .member else .syncing;
