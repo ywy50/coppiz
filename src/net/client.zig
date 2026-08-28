@@ -184,6 +184,7 @@ pub const Client = struct {
                 off += rec.next_offset;
             }
             if (page.next.epoch == 0 and page.next.seq == 0) return; // done
+            std.debug.assert(slot.Position.order(page.next, position) == .gt);
             position = page.next;
         }
     }

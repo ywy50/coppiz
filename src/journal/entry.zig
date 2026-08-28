@@ -79,6 +79,16 @@ pub const Kind = enum(u16) {
 pub const Id = struct {
     author: [16]u8,
     author_seq: u64,
+
+    /// Sort order: author bytes, then author_seq. Shared by every fold and
+    /// node that enumerates entries in a canonical order.
+    pub fn lessThan(a: Id, b: Id) bool {
+        return switch (std.mem.order(u8, &a.author, &b.author)) {
+            .lt => true,
+            .gt => false,
+            .eq => a.author_seq < b.author_seq,
+        };
+    }
 };
 
 /// A decoded entry. `payload` borrows from the bytes handed to `decode`; an

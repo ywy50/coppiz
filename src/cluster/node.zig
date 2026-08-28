@@ -26,6 +26,7 @@
 const std = @import("std");
 const crypto = std.crypto;
 const journal = @import("../journal/journal.zig");
+const chain = @import("../journal/chain.zig");
 const entry = @import("../journal/entry.zig");
 const slot = @import("../journal/slot.zig");
 const segment = @import("../journal/segment.zig");
@@ -89,6 +90,7 @@ const Mailbox = struct {
         try self.sem.wait(io);
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
+        std.debug.assert(self.events.items.len > 0);
         return self.events.orderedRemove(0);
     }
 };
@@ -347,15 +349,19 @@ pub const ClusterNode = struct {
         }
     }
 
+    fn foldFor(self: *ClusterNode, journal_id: [16]u8) ?*chain.FoldState {
+        if (std.mem.eql(u8, &journal_id, &self.node.control.journal_id)) {
+            return &self.node.control;
+        }
+        const journal_state = self.node.journals.get(journal_id) orelse return null;
+        return &journal_state.fold;
+    }
+
     /// My next author_seq for a journal: the fold's floor, raised by any
     /// entries I have built that are not slotted yet.
     fn nextAuthorSeq(self: *ClusterNode, journal_id: [16]u8) u64 {
-        const floor = if (std.mem.eql(u8, &journal_id, &self.node.control.journal_id))
-            self.node.nextAuthorSeq(&self.node.control)
-        else if (self.node.journals.get(journal_id)) |js|
-            self.node.nextAuthorSeq(&js.fold)
-        else
-            return 1;
+        const fold = self.foldFor(journal_id) orelse return 1;
+        const floor = self.node.nextAuthorSeq(fold);
         const mine = self.my_seq.get(journal_id) orelse 1;
         return @max(floor, mine);
     }
@@ -700,6 +706,26 @@ pub const ClusterNode = struct {
         try cs.conn.send(self.io, body);
     }
 
+    /// Encodes one record into a page. A record that does not fit is skipped
+    /// only after the page already holds something; the first record is
+    /// always encoded so an entry larger than `max_bytes` still moves.
+    fn encodeRecordIntoPage(
+        self: *ClusterNode,
+        records: *std.ArrayListUnmanaged(u8),
+        sl: *const slot.Slot,
+        en: *const entry.Entry,
+        bytes: *usize,
+        max_bytes: u32,
+    ) error{ StopServing, OutOfMemory }!void {
+        const size = segment.recordSize(sl, en);
+        if (bytes.* > 0 and bytes.* + size > @as(usize, max_bytes)) return error.StopServing;
+        const buf = try self.allocator.alloc(u8, size);
+        defer self.allocator.free(buf);
+        segment.encodeRecord(sl, en, buf);
+        try records.appendSlice(self.allocator, buf);
+        bytes.* += size;
+    }
+
     fn broadcastToMembers(self: *ClusterNode, m: message.Message) void {
         const body = self.allocator.alloc(u8, message.encodedLen(m)) catch return;
         defer self.allocator.free(body);
@@ -755,25 +781,25 @@ pub const ClusterNode = struct {
     }
 
     fn settingU64(self: *ClusterNode, name: []const u8, default: u64) u64 {
-        const idx = schema.keyIndex(name) orelse return default;
-        return self.node.control.settings.getU64(idx);
+        const key_index = schema.keyIndex(name) orelse return default;
+        return self.node.control.settings.getU64(key_index);
     }
 
     fn settingU16(self: *ClusterNode, name: []const u8, default: u16) u16 {
-        const idx = schema.keyIndex(name) orelse return default;
-        return self.node.control.settings.getU16(idx);
+        const key_index = schema.keyIndex(name) orelse return default;
+        return self.node.control.settings.getU16(key_index);
     }
 
     fn settingEnum(self: *ClusterNode, name: []const u8, default: []const u8) []const u8 {
-        const idx = schema.keyIndex(name) orelse return default;
-        return self.node.control.settings.getEnum(idx);
+        const key_index = schema.keyIndex(name) orelse return default;
+        return self.node.control.settings.getEnum(key_index);
     }
 
     fn updateTick(self: *ClusterNode) void {
         const heartbeat = self.settingU64("cluster.heartbeat_ms", 1000);
         const suspect = self.settingU64("cluster.suspect_after_ms", 5000);
         const min = @min(heartbeat, suspect);
-        const tick: u32 = @intCast(@max(@min(min / 4, 1000), 10));
+        const tick: u32 = @intCast(@max(@min(@divFloor(min, 4), 1000), 10));
         self.tick_ms.store(tick, .release);
     }
 
@@ -970,7 +996,7 @@ pub const ClusterNode = struct {
             try self.ackClient(conn_id, null, "too_large");
             return;
         }
-        const en = try self.buildEntry(jid, a.payload, a.ttl_ms);
+        const en = try self.signedEntry(.data, jid, a.payload, a.ttl_ms);
         try self.node.queue.append(&en);
         try self.noteBuilt(jid, en.author_seq);
         if (self.isLeader()) {
@@ -988,21 +1014,31 @@ pub const ClusterNode = struct {
             return;
         };
         if (self.isLeader()) {
-            if (self.node.control.entries.contains(en.id())) return; // already slotted
+            if (self.foldFor(en.journal) == null) {
+                self.closeConn(conn_id);
+                return;
+            }
+            if (self.entryKnown(en.journal, en.id())) return; // already slotted
             _ = try self.slotAndBroadcast(&en, false);
         } else if (self.leaderConnId()) |lid| {
             try self.sendMessage(lid, .{ .forward = f });
         }
     }
 
-    /// Builds a signed data entry as this member (the member you talk to is
+    /// Builds a signed entry as this member (the member you talk to is
     /// the author — the library API's shape, PRD 0005).
-    fn buildEntry(self: *ClusterNode, jid: [16]u8, payload: []const u8, ttl_ms: u64) !entry.Entry {
+    fn signedEntry(
+        self: *ClusterNode,
+        kind: entry.Kind,
+        journal_id: [16]u8,
+        payload: []const u8,
+        ttl_ms: u64,
+    ) !entry.Entry {
         var en = entry.Entry{
-            .kind = .data,
-            .journal = jid,
+            .kind = kind,
+            .journal = journal_id,
             .author = self.node.member_id,
-            .author_seq = self.nextAuthorSeq(jid),
+            .author_seq = self.nextAuthorSeq(journal_id),
             .author_ts_ms = self.nowMs(),
             .ttl_ms = ttl_ms,
             .payload_hash = entry.payloadHash(payload),
@@ -1022,10 +1058,7 @@ pub const ClusterNode = struct {
         en: *const entry.Entry,
         reslotted: bool,
     ) !slot.Slot {
-        const fold = if (std.mem.eql(u8, &en.journal, &self.node.control.journal_id))
-            &self.node.control
-        else
-            &self.node.journals.get(en.journal).?.fold;
+        const fold = self.foldFor(en.journal) orelse return error.UnknownJournal;
         const sl = try self.node.slotFor(fold, en);
         const prev_head = self.node.control.head;
         try self.node.applyReplicated(en.journal, &sl, en, reslotted);
@@ -1054,20 +1087,7 @@ pub const ClusterNode = struct {
         sl: slot.Slot,
     } {
         const fold = &self.node.control;
-        var en = entry.Entry{
-            .kind = kind,
-            .journal = fold.journal_id,
-            .author = self.node.member_id,
-            .author_seq = self.nextAuthorSeq(fold.journal_id),
-            .author_ts_ms = self.nowMs(),
-            .ttl_ms = 0,
-            .payload_hash = entry.payloadHash(payload),
-            .payload_len = @intCast(payload.len),
-            .payload_omitted = false,
-            .signature = undefined,
-            .payload = payload,
-        };
-        en.signature = (try entry.sign(self.node.keypair, &en)).toBytes();
+        const en = try self.signedEntry(kind, fold.journal_id, payload, 0);
         try self.noteBuilt(fold.journal_id, en.author_seq);
         const sl = try self.slotAndBroadcast(&en, false);
         return .{ .id = en.id(), .sl = sl };
@@ -1083,20 +1103,7 @@ pub const ClusterNode = struct {
             .{ .number = number, .reason = reason, .leader = self.node.member_id },
             &payload,
         );
-        var en = entry.Entry{
-            .kind = .epoch,
-            .journal = fold.journal_id,
-            .author = self.node.member_id,
-            .author_seq = self.nextAuthorSeq(fold.journal_id),
-            .author_ts_ms = self.nowMs(),
-            .ttl_ms = 0,
-            .payload_hash = entry.payloadHash(&payload),
-            .payload_len = epoch.epoch_payload_len,
-            .payload_omitted = false,
-            .signature = undefined,
-            .payload = &payload,
-        };
-        en.signature = (try entry.sign(self.node.keypair, &en)).toBytes();
+        const en = try self.signedEntry(.epoch, fold.journal_id, &payload, 0);
         try self.noteBuilt(fold.journal_id, en.author_seq);
         var sl = slot.Slot{
             .epoch = number,
@@ -1274,7 +1281,7 @@ pub const ClusterNode = struct {
             from: slot.Position,
             records: *std.ArrayListUnmanaged(u8),
             next: slot.Position,
-            bytes: u32,
+            bytes: usize,
             max_bytes: u32,
         };
         var ctx = Ctx{
@@ -1289,13 +1296,7 @@ pub const ClusterNode = struct {
             fn cb(c: *Ctx, sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
                 if (slot.Position.order(sl.position(), c.from) == .lt) return;
                 const e = en orelse return; // compacted records are not served (OQ 43)
-                const size = segment.recordSize(sl, e);
-                if (c.bytes + size > c.max_bytes) return error.StopServing;
-                const buf = try c.self.allocator.alloc(u8, size);
-                defer c.self.allocator.free(buf);
-                segment.encodeRecord(sl, e, buf);
-                try c.records.appendSlice(c.self.allocator, buf);
-                c.bytes += @intCast(size);
+                try c.self.encodeRecordIntoPage(c.records, sl, e, &c.bytes, c.max_bytes);
                 c.next = sl.position().next();
             }
         }.cb) catch |err| switch (err) {
@@ -1400,30 +1401,20 @@ pub const ClusterNode = struct {
     /// Whether the fold already knows an entry id (the dedup test for
     /// redelivery versus divergence).
     fn entryKnown(self: *ClusterNode, journal_id: [16]u8, id: entry.Id) bool {
-        if (std.mem.eql(u8, &journal_id, &self.node.control.journal_id)) {
-            return self.node.control.entries.contains(id);
-        }
-        if (self.node.journals.get(journal_id)) |js| return js.fold.entries.contains(id);
-        return false;
+        const fold = self.foldFor(journal_id) orelse return false;
+        return fold.entries.contains(id);
     }
 
     /// The current head of a journal's fold.
     fn headFor(self: *ClusterNode, journal_id: [16]u8) slot.Position {
-        if (std.mem.eql(u8, &journal_id, &self.node.control.journal_id)) {
-            return self.node.control.head orelse .{ .epoch = 0, .seq = 0 };
-        }
-        if (self.node.journals.get(journal_id)) |js|
-            return js.fold.head orelse .{ .epoch = 0, .seq = 0 };
-        return .{ .epoch = 0, .seq = 0 };
+        const fold = self.foldFor(journal_id) orelse return .{ .epoch = 0, .seq = 0 };
+        return fold.head orelse .{ .epoch = 0, .seq = 0 };
     }
 
     /// The current head hash of a journal's fold (for the divergence check).
     fn headHashFor(self: *ClusterNode, journal_id: [16]u8) [32]u8 {
-        if (std.mem.eql(u8, &journal_id, &self.node.control.journal_id)) {
-            return self.node.control.head_slot_hash;
-        }
-        if (self.node.journals.get(journal_id)) |js| return js.fold.head_slot_hash;
-        return [_]u8{0} ** 32;
+        const fold = self.foldFor(journal_id) orelse return [_]u8{0} ** 32;
+        return fold.head_slot_hash;
     }
 
     // -- partition and merge -------------------------------------------------
@@ -1796,7 +1787,7 @@ pub const ClusterNode = struct {
             self: *ClusterNode,
             records: *std.ArrayListUnmanaged(u8),
             next: slot.Position,
-            bytes: u32,
+            bytes: usize,
             stopped: bool,
             max_bytes: u32,
         };
@@ -1811,16 +1802,10 @@ pub const ClusterNode = struct {
         self.node.readRange(jid, from, null, r.include_stale, r.include_expired, &ctx, struct {
             fn cb(c: *Ctx, sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
                 const e = en orelse return;
-                const size = segment.recordSize(sl, e);
-                if (c.bytes + size > c.max_bytes) {
-                    c.stopped = true;
-                    return error.StopServing;
-                }
-                const buf = try c.self.allocator.alloc(u8, size);
-                defer c.self.allocator.free(buf);
-                segment.encodeRecord(sl, e, buf);
-                try c.records.appendSlice(c.self.allocator, buf);
-                c.bytes += @intCast(size);
+                c.self.encodeRecordIntoPage(c.records, sl, e, &c.bytes, c.max_bytes) catch |err| {
+                    if (err == error.StopServing) c.stopped = true;
+                    return err;
+                };
                 c.next = sl.position().next();
             }
         }.cb) catch |err| switch (err) {

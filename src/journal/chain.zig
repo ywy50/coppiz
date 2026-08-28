@@ -847,8 +847,7 @@ pub const FoldState = struct {
 };
 
 fn idLessThan(_: void, a: entry.Id, b: entry.Id) bool {
-    const c = std.mem.order(u8, &a.author, &b.author);
-    return if (c == .lt) true else if (c == .gt) false else a.author_seq < b.author_seq;
+    return entry.Id.lessThan(a, b);
 }
 
 fn id16LessThan(_: void, a: [16]u8, b: [16]u8) bool {
