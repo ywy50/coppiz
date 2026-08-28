@@ -11,9 +11,9 @@
 //!   coppiz serve --dir DIR [--config FILE]
 //!   coppiz append --dir DIR --journal NAME [--ttl MS]
 //!                 (--payload TEXT | --payload-file PATH)
-//!   coppiz read --dir DIR [--journal NAME] [--from EPOCH:SEQ]
+//!   coppiz read --dir DIR --journal NAME [--from EPOCH:SEQ]
 //!               [--include-stale] [--include-expired]
-//!   coppiz head --dir DIR [--journal NAME]
+//!   coppiz head --dir DIR --journal NAME
 //!   coppiz status --dir DIR
 //!   coppiz settings schema
 //!   coppiz settings set --dir DIR --key KEY --value VALUE [--journal NAME]
@@ -70,9 +70,9 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  coppiz serve --dir DIR [--config FILE]
         \\  coppiz append --dir DIR --journal NAME [--ttl MS] --payload TEXT
         \\  coppiz append --dir DIR --journal NAME [--ttl MS] --payload-file PATH
-        \\  coppiz read --dir DIR [--journal NAME] [--from EPOCH:SEQ]
+        \\  coppiz read --dir DIR --journal NAME [--from EPOCH:SEQ]
         \\               [--include-stale] [--include-expired]
-        \\  coppiz head --dir DIR [--journal NAME]
+        \\  coppiz head --dir DIR --journal NAME
         \\  coppiz status --dir DIR
         \\  coppiz settings schema
         \\  coppiz settings set --dir DIR --key KEY --value VALUE [--journal NAME]
@@ -536,7 +536,7 @@ fn cmdAdmit(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void 
     // Lines: hex member id, hex public key, address.
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
-        if (line.len < 64) continue;
+        if (line.len < 98) continue;
         const id = parseHexId(line[0..32]) orelse continue;
         if (!std.mem.eql(u8, &id, &target)) continue;
         const key = hexKeyToBytes(line[33..97]) orelse continue;
