@@ -285,6 +285,7 @@ pub const World = struct {
             if (j == index) continue;
             if (!self.nodes.items[j].alive) continue;
             if (!self.linkOpen(index, j)) continue;
+            std.debug.assert(sent_count < sent.len);
             sent[sent_count] = j;
             sent_count += 1;
         }

@@ -719,8 +719,7 @@ pub const Node = struct {
         }
         std.mem.sort(entry.Id, ids, {}, struct {
             fn lt(_: void, a: entry.Id, b: entry.Id) bool {
-                const c = std.mem.order(u8, &a.author, &b.author);
-                return if (c == .lt) true else if (c == .gt) false else a.author_seq < b.author_seq;
+                return entry.Id.lessThan(a, b);
             }
         }.lt);
         return ids;

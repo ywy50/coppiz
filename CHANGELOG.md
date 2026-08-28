@@ -97,6 +97,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   `merge_settling` (PRD 0002's settle rule was vacuous while merge entries
   could not exist).
 
+### Fixed
+
+- Sync and read pages include a record that exceeds the page byte bound
+  when it is the first on the page, so an entry larger than the bound is
+  still replicated and readable.
+
 
 - The product is named `coppiz` ([ADR 0004](docs/adrs/0004-the-product-is-named-coppiz.md)).
   The library module, the node binary, `build.zig.zon` `.name` and the
