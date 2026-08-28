@@ -7,6 +7,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Reads walk a journal in chain order (slot position), including the
+  control journal named `__cluster__`. A checkpoint no longer removes
+  TTL-reached entries while `ttl.action = mark_stale` and
+  `stale.cleanup = keep`. A live append over the wire honours the
+  journal's `journal.max_entry_bytes`. Epoch and wire decoders refuse a
+  zero reason/kind instead of trapping. Authority hex ids match either
+  letter case. `coppiz admit` skips a truncated `pending.admit` line; a
+  refused wire append flushes the reason to stderr.
 - A fatal error in the cluster loop now stops `coppiz serve` instead of
   leaving it waiting forever. Failed dials are retried with backoff, a
   leader drains its unslotted queue, and append/settings failures are

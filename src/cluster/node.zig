@@ -1123,7 +1123,11 @@ pub const ClusterNode = struct {
             try self.ackClient(conn_id, null, "unknown_journal");
             return;
         };
-        const max_bytes = self.settingU64("journal.max_entry_bytes", 16 * 1024 * 1024);
+        const fold = self.foldFor(jid) orelse {
+            try self.ackClient(conn_id, null, "unknown_journal");
+            return;
+        };
+        const max_bytes = fold.settings.getU64(schema.keyIndex("journal.max_entry_bytes").?);
         if (a.payload.len > max_bytes) {
             try self.ackClient(conn_id, null, "too_large");
             return;

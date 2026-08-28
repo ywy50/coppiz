@@ -146,9 +146,10 @@ pub const SlottedEntry = struct {
 };
 
 /// The deterministic removal set a checkpoint names (PRD 0002): every entry
-/// slotted at or before `expire_through` whose expiry instant is at or
-/// before the checkpoint's own stamp, plus every author-marked-stale entry
-/// at or before it when `stale.cleanup = delete`. The fold iterates its
+/// slotted at or before `expire_through` whose TTL action is `delete` and
+/// whose expiry instant is at or before the checkpoint's own stamp, plus
+/// every stale entry (author-marked, or TTL-reached under `mark_stale`) at
+/// or before it when `stale.cleanup = delete`. The fold iterates its
 /// entries and collects the matches; the caller owns the list.
 pub fn removalSet(
     allocator: std.mem.Allocator,
@@ -162,11 +163,13 @@ pub fn removalSet(
     errdefer out.deinit(allocator);
     for (entries) |se| {
         if (slot.Position.order(se.position, expire_through) == .gt) continue;
-        const expired = se.expires_at != null and se.expires_at.? <= checkpoint_ts_ms;
-        const stale_removable = se.stale_marked and cleanup_delete and
+        const past = se.expires_at != null and se.expires_at.? <= checkpoint_ts_ms;
+        const expired = se.ttl_action == .delete and past;
+        const ttl_stale = se.ttl_action == .mark_stale and past;
+        const author_stale = se.stale_marked and
             (se.stale_position == null or
                 slot.Position.order(se.stale_position.?, expire_through) != .gt);
-        if (expired or stale_removable) {
+        if (expired or (cleanup_delete and (author_stale or ttl_stale))) {
             try out.append(allocator, se);
         }
     }

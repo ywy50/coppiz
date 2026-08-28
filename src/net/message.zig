@@ -703,7 +703,11 @@ pub fn decode(allocator: std.mem.Allocator, body: []const u8) DecodeError!Messag
     if (body.len < 2) return error.InvalidLength;
     if (body[0] != version) return error.BadVersion;
     const kind_int = body[1];
-    if (kind_int > @intFromEnum(Kind.merge_ack)) return error.UnknownKind;
+    if (kind_int < @intFromEnum(Kind.hello) or
+        kind_int > @intFromEnum(Kind.merge_ack))
+    {
+        return error.UnknownKind;
+    }
     const kind: Kind = @enumFromInt(kind_int);
     const payload = body[2..];
     return switch (kind) {

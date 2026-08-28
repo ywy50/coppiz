@@ -359,7 +359,7 @@ pub const Node = struct {
         // The removal set is computed against the checkpoint's own stamp —
         // the slot's timestamp, not the raw clock (PRD 0002: the leader's
         // clock chose the instant once, in the chain).
-        const removed = try self.removalSet(fold, through, @intCast(sl.slot_ts_ms));
+        const removed = try self.removalIds(fold, through, @intCast(sl.slot_ts_ms));
         defer self.allocator.free(removed);
         if (removed.len == 0) return; // never emit an empty removal set (G7)
 
@@ -376,31 +376,40 @@ pub const Node = struct {
     }
 
     /// The entries a checkpoint at `head` with stamp `now` would remove —
-    /// the fold's view of PRD 0002's deterministic removal set.
-    fn removalSet(
+    /// the same set `applyCheckpoint` will fold, so compaction cannot drop
+    /// a payload the fold still treats as present.
+    fn removalIds(
         self: *Node,
         fold: *chain.FoldState,
         through: slot.Position,
         now: i64,
     ) ![]const entry.Id {
-        var ids = std.ArrayListUnmanaged(entry.Id).empty;
-        errdefer ids.deinit(self.allocator);
+        var candidates = std.ArrayListUnmanaged(expiry.SlottedEntry).empty;
+        defer candidates.deinit(self.allocator);
         var it = fold.entries.iterator();
         while (it.next()) |kv| {
             const info = kv.value_ptr.*;
-            if (slot.Position.order(info.position, through) == .gt) continue;
-            const expired = info.expires_at_ms != null and
-                info.expires_at_ms.? <= @as(u64, @intCast(now));
-            const stale_removable = info.stale_marked and std.mem.eql(
-                u8,
-                fold.settings.getEnum(schema.keyIndex("stale.cleanup").?),
-                "delete",
-            );
-            if (expired or stale_removable) {
-                try ids.append(self.allocator, kv.key_ptr.*);
-            }
+            try candidates.append(self.allocator, .{
+                .id = kv.key_ptr.*,
+                .position = info.position,
+                .slot_ts_ms = info.slot_ts_ms,
+                .expires_at = info.expires_at_ms,
+                .ttl_action = info.ttl_action,
+                .stale_marked = info.stale_marked,
+                .stale_position = info.stale_position,
+            });
         }
-        return ids.toOwnedSlice(self.allocator);
+        const set = try expiry.removalSet(
+            self.allocator,
+            candidates.items,
+            through,
+            @intCast(now),
+            &fold.settings,
+        );
+        defer self.allocator.free(set);
+        const ids = try self.allocator.alloc(entry.Id, set.len);
+        for (set, 0..) |se, i| ids[i] = se.id;
+        return ids;
     }
 
     /// Builds the next slot as the leader: current epoch, next seq (1 when
@@ -664,14 +673,14 @@ pub const Node = struct {
         ctx: anytype,
         comptime on_entry: fn (@TypeOf(ctx), *const slot.Slot, ?*const entry.Entry) anyerror!void,
     ) !bool {
-        const js = self.journals.get(journal_id) orelse return false;
-        const info = js.fold.entries.get(target) orelse return false;
+        const fold = self.foldOf(journal_id) orelse return false;
+        const info = fold.entries.get(target) orelse return false;
         const now_ms = self.now(self.io);
-        if (!visible(&js.fold, info, now_ms, include_stale, include_expired)) return false;
+        if (!visible(fold, info, now_ms, include_stale, include_expired)) return false;
         return self.readRecord(journal_id, info, ctx, on_entry);
     }
 
-    /// Reads slots in [from, to), in chain order. `from` defaults to the
+    /// Reads slots in `[from, to]`, in chain order. `from` defaults to the
     /// journal's genesis, `to` to its head (inclusive).
     pub fn readRange(
         self: *Node,
@@ -683,21 +692,30 @@ pub const Node = struct {
         ctx: anytype,
         comptime on_entry: fn (@TypeOf(ctx), *const slot.Slot, ?*const entry.Entry) anyerror!void,
     ) !void {
-        const js = self.journals.get(journal_id) orelse return;
+        const fold = self.foldOf(journal_id) orelse return;
         const start = from orelse slot.Position{ .epoch = 1, .seq = 1 };
-        const end = to orelse js.fold.head orelse return;
+        const end = to orelse fold.head orelse return;
 
-        // The fold's entries, sorted by position.
-        const ids = try self.sortedEntryIds(&js.fold);
+        // The fold's entries, sorted by slot position (chain order).
+        const ids = try self.sortedEntryIds(fold);
         defer self.allocator.free(ids);
         for (ids) |eid| {
-            const info = js.fold.entries.get(eid).?;
+            const info = fold.entries.get(eid).?;
             if (slot.Position.order(info.position, start) == .lt) continue;
             if (slot.Position.order(info.position, end) == .gt) break;
             const now_ms = self.now(self.io);
-            if (!visible(&js.fold, info, now_ms, include_stale, include_expired)) continue;
+            if (!visible(fold, info, now_ms, include_stale, include_expired)) continue;
             _ = try self.readRecord(journal_id, info, ctx, on_entry);
         }
+    }
+
+    /// The control journal, or a data journal this node has folded.
+    fn foldOf(self: *Node, journal_id: [16]u8) ?*chain.FoldState {
+        if (std.mem.eql(u8, &journal_id, &self.control.journal_id)) {
+            return &self.control;
+        }
+        const js = self.journals.get(journal_id) orelse return null;
+        return &js.fold;
     }
 
     fn readRecord(
@@ -723,9 +741,11 @@ pub const Node = struct {
             ids[i] = eid.*;
             i += 1;
         }
-        std.mem.sort(entry.Id, ids, {}, struct {
-            fn lt(_: void, a: entry.Id, b: entry.Id) bool {
-                return entry.Id.lessThan(a, b);
+        std.mem.sort(entry.Id, ids, fold, struct {
+            fn lt(f: *chain.FoldState, a: entry.Id, b: entry.Id) bool {
+                const pa = f.entries.get(a).?.position;
+                const pb = f.entries.get(b).?.position;
+                return slot.Position.order(pa, pb) == .lt;
             }
         }.lt);
         return ids;

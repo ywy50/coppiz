@@ -331,6 +331,7 @@ fn appendViaWire(
     if (reply.refusal.len > 0) {
         var stderr_writer = std.Io.File.stderr().writer(io, &stderr_buf);
         try stderr_writer.interface.print("coppiz: {s}\n", .{reply.refusal});
+        try stderr_writer.interface.flush();
         return error.Refused;
     }
     var buf: [128]u8 = undefined;
@@ -536,7 +537,8 @@ fn cmdAdmit(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void 
     // Lines: hex member id, hex public key, address.
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
-        if (line.len < 64) continue;
+        // id (32) + space + key (64) + space; address may be empty.
+        if (line.len < 98) continue;
         const id = parseHexId(line[0..32]) orelse continue;
         if (!std.mem.eql(u8, &id, &target)) continue;
         const key = hexKeyToBytes(line[33..97]) orelse continue;
