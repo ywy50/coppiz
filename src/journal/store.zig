@@ -341,29 +341,45 @@ pub const Store = struct {
         retain: Retain,
     ) !void {
         const jd = self.journals.get(journal_id) orelse return error.UnknownJournal;
+        const old_count = jd.segments.items.len;
         var removed_set = std.AutoHashMap(entry.Id, void).init(self.allocator);
         defer removed_set.deinit();
         for (removed) |id| try removed_set.put(id, {});
 
         const header = try self.readSegmentHeader(&jd.segments.items[0]);
         var new_segments = std.ArrayListUnmanaged(Segment).empty;
+        // The files are owned by `new_segments` until the swap adopts them
+        // into `jd.segments`; after that an error is this store's problem,
+        // not the errdefer's — it must not close (or free the backing of)
+        // segments `jd.segments` now owns.
+        var adopted = false;
         errdefer {
-            for (new_segments.items) |seg| seg.file.close(self.io);
-            new_segments.deinit(self.allocator);
+            if (!adopted) {
+                for (new_segments.items) |seg| seg.file.close(self.io);
+                new_segments.deinit(self.allocator);
+            }
         }
 
         for (jd.segments.items) |old| {
             const records = try self.readRecordRegion(&old, 0, old.records_len);
             defer self.allocator.free(records);
 
-            const ordinal = jd.segments.items.len + new_segments.items.len + 1;
+            const ordinal = old_count + new_segments.items.len + 1;
             const name_buf = try std.fmt.allocPrint(self.allocator, "seg-{d:0>8}", .{ordinal});
             defer self.allocator.free(name_buf);
             const file = try jd.dir.createFile(self.io, name_buf, .{
                 .read = true,
                 .truncate = false,
             });
-            errdefer file.close(self.io);
+            // Adopt immediately: the shared errdefer above closes every
+            // segment in the list once, whichever iteration errored (a
+            // per-iteration errdefer would close it a second time when a
+            // LATER iteration failed).
+            try new_segments.append(self.allocator, .{
+                .file = file,
+                .records_len = 0,
+                .sealed = old.sealed,
+            });
             var header_buf: [segment.header_len]u8 = undefined;
             segment.encodeHeader(header, &header_buf);
             try file.writePositionalAll(self.io, &header_buf, 0);
@@ -409,23 +425,27 @@ pub const Store = struct {
                 try file.writePositionalAll(self.io, &seal_buf, segment.header_len + records_len);
             }
             if (self.fsync != .never) try file.sync(self.io);
-            try new_segments.append(self.allocator, .{
-                .file = file,
-                .records_len = records_len,
-                .sealed = old.sealed,
-            });
+            new_segments.items[new_segments.items.len - 1].records_len = records_len;
         }
 
-        // Swap: close and delete the old files, adopt the new segments.
+        // Swap: close and delete the old files, adopt the new segments. The
+        // closed handles are no longer owned — an error later in this call
+        // (the delete walk, the index rebuild) must not leave them for
+        // deinit to close again; truncate follows the same rule.
         for (jd.segments.items) |old| old.file.close(self.io);
+        jd.segments.clearRetainingCapacity();
+        jd.head_records_len = 0;
         var it = jd.dir.iterate();
         while (try it.next(self.io)) |dirent| {
             if (dirent.kind != .file) continue;
             if (std.mem.startsWith(u8, dirent.name, "seg-")) {
                 // Old ordinals are all below the first new one.
-                const ordinal = jd.segments.items.len + 1;
-                const first_new = try std.fmt.allocPrint(self.allocator, "seg-{d:0>8}", .{ordinal});
-                defer self.allocator.free(first_new);
+                var first_new_buf: [16]u8 = undefined;
+                const first_new = try std.fmt.bufPrint(
+                    &first_new_buf,
+                    "seg-{d:0>8}",
+                    .{old_count + 1},
+                );
                 if (std.mem.order(u8, dirent.name, first_new) == .lt) {
                     try jd.dir.deleteFile(self.io, dirent.name);
                 }
@@ -434,6 +454,7 @@ pub const Store = struct {
         jd.segments.deinit(self.allocator);
         jd.segments = new_segments;
         jd.head_records_len = jd.segments.items[jd.segments.items.len - 1].records_len;
+        adopted = true;
         try self.rebuildIndex(jd);
     }
 

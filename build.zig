@@ -59,7 +59,39 @@ pub fn build(b: *std.Build) void {
     const docs_step = b.step("docs", "Regenerate docs/configuration.md from the settings schema");
     docs_step.dependOn(&docgen_run.step);
 
-    addChecks(b, lib_mod, exe);
+    // Examples (PRD 0005): `zig build examples` builds and runs each host.
+    // The same modules are each a test root in addChecks, so `zig build
+    // test` runs them too.
+    const examples_step = b.step(
+        "examples",
+        "Build and run the example hosts (embed-single, embed-cluster, sidecar)",
+    );
+    for (example_names) |name| {
+        const mod = exampleModule(b, lib_mod, target, optimize, name);
+        const example_exe = b.addExecutable(.{ .name = name, .root_module = mod });
+        b.installArtifact(example_exe);
+        examples_step.dependOn(&b.addRunArtifact(example_exe).step);
+    }
+
+    addChecks(b, lib_mod, exe, target, optimize);
+}
+
+/// One example host module: the example's main.zig importing the library
+/// exactly as a fetched host would (`coppiz` by name).
+fn exampleModule(
+    b: *std.Build,
+    lib_mod: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    name: []const u8,
+) *std.Build.Module {
+    const path = b.fmt("examples/{s}/main.zig", .{name});
+    return b.createModule(.{
+        .root_source_file = b.path(path),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "coppiz", .module = lib_mod }},
+    });
 }
 
 /// Fails the build when the toolchain executing it is older than the floor
@@ -125,7 +157,13 @@ test "meetsZigFloor accepts the floor itself and newer, rejects older" {
 /// tests for every test module plus the analysis gates. Split from `build`
 /// so the build script reads as two jobs — produce and check — with this
 /// one owning all of the checking.
-fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Compile) void {
+fn addChecks(
+    b: *std.Build,
+    lib_mod: *std.Build.Module,
+    exe: *std.Build.Step.Compile,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) void {
     // Zig 0.16 collects `test` blocks from a test module's root file and
     // from every module its analyzed imports reach, so every gated Zig file
     // must be reachable from a test-module root — src/root.zig's comptime
@@ -144,6 +182,14 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
     test_step.dependOn(&b.addRunArtifact(lib_tests).step);
     test_step.dependOn(&b.addRunArtifact(exe_tests).step);
     test_step.dependOn(&b.addRunArtifact(build_tests).step);
+    // The examples are each a test (PRD 0005), so their test binaries join
+    // the gate: a change that breaks an example breaks the build. They
+    // import the library by name, like a fetched host would.
+    for (example_names) |name| {
+        const mod = exampleModule(b, lib_mod, target, optimize, name);
+        const example_tests = b.addTest(.{ .root_module = mod });
+        test_step.dependOn(&b.addRunArtifact(example_tests).step);
+    }
     // The process-level e2e tests spawn the installed binary.
     test_step.dependOn(b.getInstallStep());
 
@@ -187,14 +233,21 @@ fn addChecks(b: *std.Build, lib_mod: *std.Build.Module, exe: *std.Build.Step.Com
 }
 
 /// The paths every analysis gate covers, relative to the build root: all
-/// Zig sources under `src/` plus the two build files at the top level.
-/// One list serves every file-covering surface — `zig fmt --check
-/// --ast-check` (via fmtArgs' expansion), the 100-column cap, the
-/// test-registration walk and the coverage-completeness walk — so they can
-/// never disagree about what is analyzed: a new source directory or file is
-/// added once and all of them pick it up. A path here that stops existing
-/// fails each of them loudly rather than silently checking nothing.
-const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon" };
+/// Zig sources under `src/`, the two build files at the top level, and the
+/// example hosts under `examples/` (PRD 0005 — each is built by `zig build
+/// examples` and each is a test). One list serves every file-covering
+/// surface — `zig fmt --check --ast-check` (via fmtArgs' expansion), the
+/// 100-column cap, the test-registration walk and the coverage-completeness
+/// walk — so they can never disagree about what is analyzed: a new source
+/// directory or file is added once and all of them pick it up. A path here
+/// that stops existing fails each of them loudly rather than silently
+/// checking nothing.
+const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon", "examples" };
+
+/// The example hosts (PRD 0005): one per host shape. Each is built by `zig
+/// build examples` and each is a test run by `zig build test` — a change
+/// that breaks an example breaks the build.
+const example_names = [_][]const u8{ "embed-single", "embed-cluster", "sidecar" };
 
 /// Every file a checking step covers, derived from its gate paths: a listed
 /// directory contributes its .zig descendants; any other entry is taken
@@ -628,7 +681,10 @@ test "fmtArgs hands zig fmt every covered file, links included" {
     // source, the shape zig fmt's directory walk skipped while the other
     // gates collected it. The expanded argv must name the link itself, which
     // zig fmt checks through to the target when given the path explicitly.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/real.zig", .data = "" });
     try symLinkOrSkip(tmp.dir, io, .{ .target = "real.zig", .link = "src/link.zig" }, .{});
     try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
@@ -919,7 +975,14 @@ test "column cap falls back to byte count on invalid UTF-8" {
 /// plain-module test binary (build_tests), so its test blocks run like
 /// theirs — and a build script importing a src/ module owes that module the
 /// same refAllDecls pairing any other root owes.
-const test_roots = [_][]const u8{ "src/root.zig", "src/main.zig", "build.zig" };
+const test_roots = [_][]const u8{
+    "src/root.zig",
+    "src/main.zig",
+    "build.zig",
+    "examples/embed-single/main.zig",
+    "examples/embed-cluster/main.zig",
+    "examples/sidecar/main.zig",
+};
 
 /// Fails the build when no chain of real @imports reaches a gated Zig
 /// module from a test-module root (src/root.zig, src/main.zig or
@@ -2219,7 +2282,10 @@ test "appendZigFilesUnder analyzes a symlinked .zig file like a real one" {
     // link as `.sym_link`, never the kind of its target, so filtering on
     // `entry.kind == .file` alone leaves a linked source file unchecked by
     // both gates while they stay green.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/real.zig", .data = "" });
     try symLinkOrSkip(tmp.dir, io, .{ .target = "real.zig", .link = "src/link.zig" }, .{});
 
@@ -2253,7 +2319,10 @@ test "classifyWalkedEntry resolves an unclassifiable entry through its real kind
     // filters on the raw kind drop wholesale. No walker-driven test can
     // synthesize one, so the classifier is driven directly with synthetic
     // entries whose targets really exist behind them.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     (try tmp.dir.createDirPathOpen(io, "src/sub", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/mystery.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/notes.md", .data = "" });
@@ -2762,7 +2831,10 @@ test "appendProjectZigFiles walks the tree minus tooling directories, links incl
     // in a project directory stays reportable (the depth guard) — and a
     // symlinked source file collected like a real one (the same policy the
     // two file-covering gates apply).
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     (try tmp.dir.createDirPathOpen(io, "tools", .{})).close(io);
     (try tmp.dir.createDirPathOpen(io, ".hidden", .{})).close(io);
     (try tmp.dir.createDirPathOpen(io, "zig-out/bin", .{})).close(io);
@@ -2813,7 +2885,10 @@ test "appendProjectZigFiles collects a near-miss .zig name as a candidate" {
     // on both sides: notes.md is a plain other and stays out, and a
     // *directory* named NotSources.ZIG is entered like any directory, never
     // appended, so only files can trigger the failure.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     (try tmp.dir.createDirPathOpen(io, "NotSources.ZIG", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/ok.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "Legacy.ZIG", .data = "" });
@@ -2895,7 +2970,10 @@ test "appendProjectZigFiles follows a linked directory the gate paths list" {
     // exactly as behind a listed real directory, so the widened collection
     // keeps it reportable — and an ordinary source outside the link.
     (try tmp.dir.createDirPathOpen(io, "vendor/nested", .{})).close(io);
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "vendor/nested/deep.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "vendor/Legacy.ZIG", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/ok.zig", .data = "" });
@@ -2958,7 +3036,10 @@ test "appendProjectZigFiles names a link that no longer resolves" {
     // (which follows links) fails — before failed_path existed, make()
     // printed only "cannot walk the project tree: FileNotFound", leaving
     // the operator to find which of every walked entry was dangling.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/real.zig", .data = "" });
     try symLinkOrSkip(tmp.dir, io, .{ .target = "nowhere.zig", .link = "src/dangling.zig" }, .{});
 
@@ -3197,7 +3278,10 @@ test "column-cap step fails over its build root naming the one offending line" {
     // The tree make() enumerates through checked_paths relative to the
     // build root: src/ plus stubs of the two top-level build files, so
     // enumeration succeeds and the step reaches the column check itself.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/ok.zig", .data = "" });
     try tmp.dir.writeFile(
         io,
@@ -3237,7 +3321,10 @@ test "test-registration step reports unreachable modules then analysis gaps" {
     // per section keeps the report independent of the walker's order.
     // build.zig and build.zig.zon are stubbed because make() enumerates the
     // whole allowlist.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(
         io,
         .{ .sub_path = "src/root.zig", .data = "_ = @import(\"a.zig\");\n" },
@@ -3283,7 +3370,10 @@ test "test-registration step reports unreachable modules alone, with no trailing
     // unconditionally — both single-section shapes are pinned separately.
     // build.zig and build.zig.zon are stubbed because make() enumerates the
     // whole allowlist.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/ghost.zig", .data = "" });
@@ -3319,7 +3409,10 @@ test "test-registration step owes build.zig's src imports the same refAllDecls p
     // that shape could not fail. While the walk enumerated src/ alone,
     // this bare import passed every gate while nothing analyzed helper's
     // decls.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/helper.zig", .data = "" });
@@ -3355,7 +3448,10 @@ test "test-registration step does not mistake build.zig.zon for an unregistered 
     // file rides checked_paths whole (the column cap caps it), so the walk
     // now hands it to the classifier beside the modules — dropping the .zig
     // filter reports it as unreachable and fails every conforming tree.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
@@ -3388,7 +3484,10 @@ test "test-registration step reports a wrong-case import beside its clean chain"
     // shape for the third report half.
     // build.zig and build.zig.zon are stubbed because make() enumerates the
     // whole allowlist.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(
         io,
         .{
@@ -3433,7 +3532,10 @@ test "test-registration step reports analysis gaps alone, with no leading sectio
     // split between the two sections this shape isolates.
     // build.zig and build.zig.zon are stubbed because make() enumerates the
     // whole allowlist.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(
         io,
         .{ .sub_path = "src/root.zig", .data = "_ = @import(\"a.zig\");\n" },
@@ -3478,7 +3580,10 @@ test "test-registration step reports all three sections in one failure" {
     // fixture cannot pass with one half silenced.
     // build.zig and build.zig.zon are stubbed because make() enumerates the
     // whole allowlist.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(
         io,
         .{
@@ -3547,7 +3652,10 @@ test "test-registration step joins the outer sections around a silent middle hal
     // and "Helper.zig" beside the wrapper is the case finding.
     // build.zig and build.zig.zon are stubbed because make() enumerates the
     // whole allowlist.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(
         io,
         .{
@@ -3601,7 +3709,10 @@ test "test-registration step joins the last two sections around a silent first h
     // order.
     // build.zig and build.zig.zon are stubbed because make() enumerates the
     // whole allowlist.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(
         io,
         .{
@@ -3650,7 +3761,10 @@ test "gate-coverage step fails naming a project file outside the checked paths" 
     // lies outside the allowlist — the complement this step exists to fail
     // loudly about. Its end-to-end header and tally are pinned here because
     // violationLines' tests stop at the bare report lines.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
@@ -3685,7 +3799,10 @@ test "gate-coverage step fails naming a wrong-case .zig file no gate sees" {
     // listing it would cover the name while zig fmt's directory walk still
     // skipped the file. One planted file per run: the report prints in walk
     // order, which no filesystem guarantees between siblings.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
@@ -3715,7 +3832,10 @@ test "gate-coverage step fails naming a backup-spelling .zig file no gate sees" 
     // keeps ".zig" mid-name ("root.zig~"; same for "x.zig.bak",
     // "x.zig.rej"), classifies as .other like the wrong-case suffix, and no
     // covering gate sees it. Deleting the backup is what ends the failure.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
@@ -3751,7 +3871,10 @@ test "gate-coverage step names the walked entry when the project walk fails" {
     // the step one branch earlier ("cannot enumerate"), which that gate's
     // own tests already pin.
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = "" });
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
     try symLinkOrSkip(tmp.dir, io, .{ .target = "nowhere.zig", .link = "dangling.zig" }, .{});
@@ -3782,7 +3905,10 @@ test "gate-coverage step names the checked path when its enumeration fails" {
     // the one shared reporter. The message can only come from this branch:
     // a project-walk failure prints "cannot walk", and a coverage violation
     // prints under the tally header, so a pass here proves the routing ran.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(io, .{ .sub_path = "src/root.zig", .data = "" });
     // build.zig is deliberately absent: checked_paths lists it, so the
     // covered expansion fails with that path named.
@@ -3814,7 +3940,10 @@ test "all three gate steps pass a conforming tree recording nothing" {
     // tree-today layout, conforming: both roots present, the helper
     // registered through its refAllDecls line, every file inside
     // checked_paths, no long lines.
+    // checked_paths covers src/ and examples/; both must exist in the
+    // fixture for the gates' enumeration to reach what the test exercises.
     (try tmp.dir.createDirPathOpen(io, "src", .{})).close(io);
+    (try tmp.dir.createDirPathOpen(io, "examples", .{})).close(io);
     try tmp.dir.writeFile(
         io,
         .{

@@ -32,10 +32,20 @@ locked, and the e2e matrix of *Acceptance criteria* below (process-level (a)
 (d) (e); (b) and (c) in-process over the hub transport with real stores and
 real loops). The fold infers a re-slot from its author and epoch
 (`chain.zig applyControl`), so a merged chain replays identically after a
-restart without a side channel. Remaining: the embedded-host write API
-(PRD 0005 phase 1 — the loop's host interaction is the wire today), the
+restart without a side channel. The embedded-host write API shipped with
+it (`cluster.ClusterNode.localAppend`, PRD 0005 step 1). Remaining: the
 simulator driving the loop itself (OQ 27's second half), and the open
 questions the matrix names.
+
+Known issue, found 2026-08-27 while exercising the loop from
+`examples/embed-cluster`: a **three-member partition that elects a second
+leader does not reliably converge on heal** — the survivor's branch fetch
+or the losers' re-sync can stall without retry (the two-member merge, e2e
+(b), converges; three members — two losers — surfaced a stall). The e2e
+matrix's (b) is two-member; the three-member merge needs the simulator over
+the loop (OQ 27's second half) and a deterministic scenario before it can
+be pinned. Reported rather than silently worked around: the embed-cluster
+example's partition stays short enough to avoid the election.
 
 One implementation note the simulator pinned down ([OQ 44](../open-questions.md)):
 a merge converges only if every node **re-folds from the last common slot** —

@@ -61,9 +61,38 @@ const Event = union(enum) {
     peer_gone: u64,
     /// A dial task could not connect; `address` is owned.
     dial_failed: []const u8,
+    /// An embedded host's append, posted from the host's own thread (PRD
+    /// 0005): the loop runs the same write path as a wire client's append,
+    /// then completes the host's semaphore with the entry id.
+    local_append: LocalAppend,
     /// Shut the loop down.
     stop,
 };
+
+/// One embedded-host append in flight (PRD 0005). The host blocks on
+/// `completion.sem` until the loop slots the entry (or refuses it); the
+/// journal name and payload are the host's, alive for as long as the host
+/// is blocked.
+const LocalAppend = struct {
+    journal: []const u8,
+    payload: []const u8,
+    ttl_ms: u64,
+    completion: *LocalCompletion,
+};
+
+/// What an embedded host's `localAppend` waits on: the slot folded (or a
+/// refusal), posted exactly once by the loop.
+const LocalCompletion = struct {
+    sem: std.Io.Semaphore = .{},
+    id: entry.Id = undefined,
+    refusal: []const u8 = "",
+};
+
+fn completeLocal(completion: *LocalCompletion, io: std.Io, id: entry.Id, refusal: []const u8) void {
+    completion.id = id;
+    completion.refusal = refusal;
+    completion.sem.post(io);
+}
 
 const Frame = struct {
     conn_id: u64,
@@ -146,6 +175,14 @@ pub const Options = struct {
 };
 
 pub const ClusterNode = struct {
+    /// What a leader-authored control entry returns: the id and the slot,
+    /// shared by authorControl and authorControlFold so callers can branch
+    /// on which chain the entry went to without two anonymous types.
+    const Authored = struct {
+        id: entry.Id,
+        sl: slot.Slot,
+    };
+
     allocator: std.mem.Allocator,
     io: std.Io,
     node: *journal.Node,
@@ -160,6 +197,9 @@ pub const ClusterNode = struct {
     members: std.AutoHashMapUnmanaged([16]u8, MemberState) = .empty,
     /// CLI clients awaiting their entry's slot: entry id -> conn_id.
     pending_clients: std.AutoHashMapUnmanaged(entry.Id, u64) = .empty,
+    /// Embedded hosts awaiting their entry's slot (PRD 0005): entry id ->
+    /// the completion the host's thread is blocked on.
+    pending_locals: std.AutoHashMapUnmanaged(entry.Id, *LocalCompletion) = .empty,
     /// The next position to request per journal during backfill.
     sync_cursors: std.AutoHashMapUnmanaged([16]u8, slot.Position) = .empty,
     /// Whether a sync request is in flight (one at a time).
@@ -174,10 +214,15 @@ pub const ClusterNode = struct {
     common_tail: ?slot.Position = null,
     /// The tick interval, recomputed from settings; read by the timer task.
     tick_ms: std.atomic.Value(u32) = std.atomic.Value(u32).init(100),
-    /// Set by `stop`; the loop exits on it, and `waitForStop` cancels the
-    /// remaining tasks once it is set (a group cannot cancel itself while an
-    /// awaiter exists — Io.Group asserts that).
+    /// Set by `stop`; the loop exits on the next event once it is set.
     stopped: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Set by the loop task itself when it returns. `waitForStop` waits for
+    /// this — not `stopped` — before cancelling the group: a cancel must
+    /// never land while the loop is mid-event (it runs the store and the
+    /// fold), or an in-flight compaction would abort with the journal's
+    /// segments half-swapped. The loop drains the `.stop` event first, then
+    /// the remaining tasks (timer, accept, readers, dials) are cancelled.
+    loop_exited: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     /// My own next author_seq per journal, counting entries I built but
     /// that have not slotted yet (the fold only advances when they do).
@@ -190,11 +235,16 @@ pub const ClusterNode = struct {
     merging_from: ?u64 = null,
     merge_buffers: std.AutoHashMapUnmanaged([16]u8, std.ArrayListUnmanaged(u8)) = .empty,
     merge_pending: std.ArrayListUnmanaged([16]u8) = .empty,
-    merge_next: slot.Position = .{ .epoch = 0, .seq = 0 },
 
     /// Seed addresses not yet connected to any member, with the next
     /// retry time (the admitter may not be listening when a joiner starts).
     seed_retry: std.StringHashMapUnmanaged(u64) = .empty,
+
+    /// The checkpoint cadence (PRD 0002 phase 4): when the leader may next
+    /// checkpoint each data journal, and the head it last scanned (the
+    /// pending-bytes early trigger rescans only when data arrived).
+    next_checkpoint_ms: std.AutoHashMapUnmanaged([16]u8, u64) = .empty,
+    last_scan_head: std.AutoHashMapUnmanaged([16]u8, slot.Position) = .empty,
 
     // -- lifecycle -----------------------------------------------------------
 
@@ -228,6 +278,7 @@ pub const ClusterNode = struct {
         while (mit.next()) |ms| self.allocator.free(ms.address);
         self.members.deinit(self.allocator);
         self.pending_clients.deinit(self.allocator);
+        self.pending_locals.deinit(self.allocator);
         self.sync_cursors.deinit(self.allocator);
         self.my_seq.deinit(self.allocator);
         var bit = self.merge_buffers.valueIterator();
@@ -237,6 +288,17 @@ pub const ClusterNode = struct {
         var sit = self.seed_retry.keyIterator();
         while (sit.next()) |addr| self.allocator.free(addr.*);
         self.seed_retry.deinit(self.allocator);
+        self.next_checkpoint_ms.deinit(self.allocator);
+        self.last_scan_head.deinit(self.allocator);
+        // Events the loop never processed (it exited on stop while readers
+        // and dials were still posting) own their payloads: frame bodies,
+        // accepted connections, and dial-failure addresses.
+        for (self.mailbox.events.items) |ev| switch (ev) {
+            .frame => |f| self.allocator.free(f.body),
+            .conn_ready => |conn| conn.close(self.io),
+            .dial_failed => |address| self.allocator.free(address),
+            else => {},
+        };
         self.mailbox.events.deinit(self.allocator);
         self.allocator.destroy(self);
     }
@@ -261,7 +323,7 @@ pub const ClusterNode = struct {
     /// (timer, accept, readers, dials). Must be called from a task that is
     /// not part of the node's group — the CLI's main, a test.
     pub fn waitForStop(self: *ClusterNode) void {
-        while (!self.stopped.load(.acquire)) {
+        while (!self.loop_exited.load(.acquire)) {
             std.Io.sleep(
                 self.io,
                 std.Io.Duration.fromMilliseconds(10),
@@ -275,6 +337,36 @@ pub const ClusterNode = struct {
     /// Cancels every task (the loop, readers, timers, dials).
     pub fn cancel(self: *ClusterNode) void {
         self.group.cancel(self.io);
+    }
+
+    /// The embedded-host write path (PRD 0005): appends as this member from
+    /// the host's own thread, and blocks until the entry's slot folds back
+    /// — the same write path as a wire client's append (queue durably, then
+    /// the leader slots, or the follower forwards), so the entry replicates
+    /// like any other. The caller's thread never touches the folds or the
+    /// store: the loop owns every mutation, and this posts an event for it.
+    /// `journal` and `payload` must stay alive for the call (the caller is
+    /// blocked, so its own slices do). Returns the entry id, or `Refused`
+    /// when the loop rejected the append (unknown journal, too large, full
+    /// queue); a `write.ack = local` variant that returns on the durable
+    /// queue instead of the slot is open question 3.
+    pub fn localAppend(
+        self: *ClusterNode,
+        io: std.Io,
+        journal_name: []const u8,
+        payload: []const u8,
+        ttl_ms: u64,
+    ) !entry.Id {
+        var completion = LocalCompletion{};
+        self.mailbox.post(io, .{ .local_append = .{
+            .journal = journal_name,
+            .payload = payload,
+            .ttl_ms = ttl_ms,
+            .completion = &completion,
+        } });
+        completion.sem.wait(io) catch return error.Canceled;
+        if (completion.refusal.len > 0) return error.Refused;
+        return completion.id;
     }
 
     // -- bootstrap helpers ---------------------------------------------------
@@ -373,12 +465,14 @@ pub const ClusterNode = struct {
     // -- tasks ---------------------------------------------------------------
 
     fn loopMain(self: *ClusterNode) error{Canceled}!void {
+        defer self.loop_exited.store(true, .release);
         self.bootstrapDial();
         while (true) {
             const ev = self.mailbox.wait(self.io) catch return;
             switch (ev) {
                 .stop => return,
                 .tick => self.onTick() catch self.fatal(),
+                .local_append => |a| self.onLocalAppend(a),
                 .conn_ready => |conn| self.onConnReady(conn) catch self.fatal(),
                 .frame => |f| {
                     self.onFrame(f.conn_id, f.body) catch {};
@@ -607,6 +701,12 @@ pub const ClusterNode = struct {
         }
 
         try self.runElection();
+        // A newly elected leader's own queue does not drain by itself: the
+        // slots it awaits come from the leader, and the leader is now this
+        // member (sendForward has no leader connection to send to). Slot
+        // what is queued before the checkpoint cadence measures anything.
+        if (self.isLeader()) try self.slotQueuedEntries();
+        try self.driveCheckpoints();
         try self.driveBackfill();
         // Seed dials retry until a peer at that address is connected.
         var sit = self.seed_retry.iterator();
@@ -676,6 +776,112 @@ pub const ClusterNode = struct {
         }
         // Nothing left to sync: at head.
         self.syncing = false;
+    }
+
+    /// The leader slots its own queued entries. The queue drains when a
+    /// slot folds back, and a follower's entries are forwarded to the
+    /// leader — but an entry queued when the old leader died is never
+    /// slotted by anyone once this member is elected (sendForward has no
+    /// leader connection to send to), so it would sit in the durable queue
+    /// until a later election elsewhere. Ids already in the fold are
+    /// skipped: a redelivery after a restart, not a re-slot. A client that
+    /// queued the entry through this member is acked exactly as onSlot
+    /// would have.
+    fn slotQueuedEntries(self: *ClusterNode) !void {
+        const Ctx = struct {
+            self: *ClusterNode,
+        };
+        var ctx = Ctx{ .self = self };
+        try self.node.queue.scan(&ctx, struct {
+            fn cb(c: *Ctx, en: *const entry.Entry) anyerror!void {
+                if (!std.mem.eql(u8, &en.author, &c.self.node.member_id)) return;
+                if (c.self.entryKnown(en.journal, en.id())) return;
+                _ = try c.self.slotAndBroadcast(en, false);
+                if (c.self.pending_clients.fetchRemove(en.id())) |kv| {
+                    c.self.ackClient(kv.value, en.id(), "") catch {};
+                }
+                if (c.self.pending_locals.fetchRemove(en.id())) |kv| {
+                    completeLocal(kv.value, c.self.io, en.id(), "");
+                }
+            }
+        }.cb);
+    }
+
+    /// The leader's checkpoint cadence (PRD 0002 phase 4): emits a
+    /// checkpoint for a journal when `checkpoint.every_ms` has passed since
+    /// the last one, or when `checkpoint.pending_bytes` of removable payload
+    /// has accumulated — the second is probed as data arrives (a head moved
+    /// since the last scan), never by a full scan every tick. A checkpoint
+    /// is never emitted with an empty removal set (G7). Journals with
+    /// neither removal cause enabled (`ttl.enforce = off` and
+    /// `stale.enforce = off` — the defaults) are skipped entirely.
+    fn driveCheckpoints(self: *ClusterNode) !void {
+        if (!self.isLeader()) return;
+        const now = self.nowMs();
+        var it = self.node.control.journals.iterator();
+        while (it.next()) |entry_kv| {
+            const jid = entry_kv.key_ptr.*;
+            const js = self.node.journals.get(jid) orelse continue;
+            const fold = &js.fold;
+            const enforce = fold.settings.getEnum(schema.keyIndex("ttl.enforce").?);
+            const stale_enforce = fold.settings.getEnum(schema.keyIndex("stale.enforce").?);
+            const cleanup_enabled = !std.mem.eql(u8, enforce, "off") or
+                !std.mem.eql(u8, stale_enforce, "off");
+            if (!cleanup_enabled) continue;
+            const head = fold.head orelse continue;
+
+            const every = fold.settings.getU64(schema.keyIndex("checkpoint.every_ms").?);
+            const pending_cap = fold.settings.getU64(schema.keyIndex("checkpoint.pending_bytes").?);
+            const prev_due = self.next_checkpoint_ms.get(jid);
+
+            // The first sight of a journal is due immediately (the cadence
+            // bounds the rate, not the initial check); afterwards the due
+            // time must live in the map, or every tick would recompute
+            // `now + every` and the cadence would never elapse.
+            var emit = prev_due == null or now >= prev_due.?;
+            if (!emit) {
+                // The pending-bytes early trigger: rescanned only when data
+                // arrived since the last scan, never by a per-tick full scan.
+                const prev_scan = self.last_scan_head.get(jid);
+                const dirty = if (prev_scan) |p|
+                    !(p.epoch == head.epoch and p.seq == head.seq)
+                else
+                    true;
+                if (!dirty) continue;
+                try self.last_scan_head.put(self.allocator, jid, head);
+                const removed =
+                    self.node.checkpointRemovalSet(jid, head, @intCast(now)) catch continue;
+                const pending = removableBytes(removed, fold);
+                self.allocator.free(removed);
+                emit = pending >= pending_cap;
+            }
+            if (!emit) continue;
+
+            if (try self.node.checkpointForBroadcast(jid)) |ckpt| {
+                defer self.allocator.free(ckpt.en.payload);
+                self.broadcastToMembers(.{ .slot = .{
+                    .reslotted = false,
+                    .record = &.{},
+                    .sl = ckpt.sl,
+                    .en = ckpt.en,
+                } });
+            }
+            try self.next_checkpoint_ms.put(self.allocator, jid, now +| every);
+            try self.last_scan_head.put(self.allocator, jid, head);
+        }
+    }
+
+    /// The payload bytes a removal set would reclaim (PRD 0002
+    /// `checkpoint.pending_bytes`).
+    fn removableBytes(
+        removed: []const entry.Id,
+        fold: *const chain.FoldState,
+    ) u64 {
+        var total: u64 = 0;
+        for (removed) |id| {
+            if (fold.entries.get(id)) |info| total +|= info.payload_len;
+        }
+        return total;
     }
 
     /// The connection to sync from: any connected member (the admitter
@@ -820,11 +1026,15 @@ pub const ClusterNode = struct {
 
     // -- admission -----------------------------------------------------------
 
-    fn onHello(self: *ClusterNode, conn_id: u64, h: message.Hello) !void {
-        // The node's own operator channel (the CLI client dials with this
-        // node's key): admit, and never as a member peer.
-        const is_self_client = std.mem.eql(u8, &h.member_id, &self.node.member_id) and
+    /// Whether a hello is the node's own operator channel (the CLI client
+    /// dials with this node's key): admitted, and never as a member peer.
+    fn isSelfClient(self: *ClusterNode, h: message.Hello) bool {
+        return std.mem.eql(u8, &h.member_id, &self.node.member_id) and
             std.mem.eql(u8, &h.public_key, &self.node.keypair.public_key.toBytes());
+    }
+
+    fn onHello(self: *ClusterNode, conn_id: u64, h: message.Hello) !void {
+        const is_self_client = self.isSelfClient(h);
         // A second connection for a member: replace the old one (a dead
         // conn whose peer_gone is still queued must not block the new dial).
         if (self.members.get(h.member_id)) |ms| {
@@ -846,34 +1056,41 @@ pub const ClusterNode = struct {
         }
         if (is_self_client) return;
 
-        if (self.members.getPtr(h.member_id)) |ms| {
-            ms.conn_id = conn_id;
-            const updated = try self.allocator.dupe(u8, h.address);
+        const known = try self.noteMemberConnected(h.member_id, h.address, conn_id);
+        // A newcomer: the admitter appends its join, then it backfills.
+        if (!known) try self.admitNewcomer(h);
+    }
+
+    /// Records a member's live connection and advertised address, creating
+    /// the member when unknown; returns whether it was already known.
+    fn noteMemberConnected(
+        self: *ClusterNode,
+        member_id: [16]u8,
+        address: []const u8,
+        conn_id: u64,
+    ) !bool {
+        if (self.members.getPtr(member_id)) |ms| {
+            const updated = try self.allocator.dupe(u8, address);
             self.allocator.free(ms.address);
             ms.address = updated;
+            ms.conn_id = conn_id;
             ms.last_heard_ms = self.nowMs();
             ms.state = .member;
-        } else {
-            // A newcomer: the admitter appends its join, then it backfills.
-            try self.members.put(self.allocator, h.member_id, .{
-                .address = try self.allocator.dupe(u8, h.address),
-                .conn_id = conn_id,
-                .last_heard_ms = self.nowMs(),
-                .state = .member,
-            });
-            try self.admitNewcomer(h);
+            return true;
         }
+        try self.members.put(self.allocator, member_id, .{
+            .address = try self.allocator.dupe(u8, address),
+            .conn_id = conn_id,
+            .last_heard_ms = self.nowMs(),
+            .state = .member,
+        });
+        return false;
     }
 
     /// The admission verdict for a hello: cluster match, then the mode.
     fn admission(self: *ClusterNode, h: message.Hello) message.HelloAck {
-        // The node's own operator channel (the CLI client dials with this
-        // node's key): admit without a join, and never as a member peer.
-        if (std.mem.eql(u8, &h.member_id, &self.node.member_id) and
-            std.mem.eql(u8, &h.public_key, &self.node.keypair.public_key.toBytes()))
-        {
-            return self.ackFor(true, .none);
-        }
+        // The operator channel is admitted without a join.
+        if (self.isSelfClient(h)) return self.ackFor(true, .none);
         const my_genesis = self.node.group_hash;
         const have_chain = !std.mem.eql(u8, &my_genesis, &([_]u8{0} ** 32));
         const cluster_mismatch = have_chain and
@@ -959,21 +1176,7 @@ pub const ClusterNode = struct {
                 self.closeDupConn(ms.conn_id.?);
             }
         }
-        if (self.members.getPtr(a.member_id)) |ms| {
-            const updated = try self.allocator.dupe(u8, a.address);
-            self.allocator.free(ms.address);
-            ms.address = updated;
-            ms.conn_id = conn_id;
-            ms.last_heard_ms = self.nowMs();
-            ms.state = .member;
-        } else {
-            try self.members.put(self.allocator, a.member_id, .{
-                .address = try self.allocator.dupe(u8, a.address),
-                .conn_id = conn_id,
-                .last_heard_ms = self.nowMs(),
-                .state = .member,
-            });
-        }
+        _ = try self.noteMemberConnected(a.member_id, a.address, conn_id);
         // A chainless member was admitted: backfill from the responder.
         if (self.syncing) {
             if (!self.sync_cursors.contains(self.node.control.journal_id)) {
@@ -987,6 +1190,52 @@ pub const ClusterNode = struct {
     }
 
     // -- the write path ------------------------------------------------------
+
+    /// An embedded host's append (PRD 0005), processed in the loop exactly
+    /// like a wire client's: build the entry as this member, queue it
+    /// durably, then slot as leader or forward. The completion is posted
+    /// exactly once on every path — a refusal or the slotted entry id.
+    fn onLocalAppend(self: *ClusterNode, a: LocalAppend) void {
+        const refuse = struct {
+            fn go(c: *ClusterNode, completion: *LocalCompletion, refusal: []const u8) void {
+                completeLocal(completion, c.io, undefined, refusal);
+            }
+        }.go;
+        const jid = self.node.journalIdByName(a.journal) orelse {
+            refuse(self, a.completion, "unknown_journal");
+            return;
+        };
+        const max_bytes = self.settingU64("journal.max_entry_bytes", 16 * 1024 * 1024);
+        if (a.payload.len > max_bytes) {
+            refuse(self, a.completion, "too_large");
+            return;
+        }
+        const en = self.signedEntry(.data, jid, a.payload, a.ttl_ms) catch {
+            refuse(self, a.completion, "internal");
+            return;
+        };
+        self.node.queue.append(&en) catch {
+            refuse(self, a.completion, "queue_full");
+            return;
+        };
+        self.noteBuilt(jid, en.author_seq) catch {
+            refuse(self, a.completion, "internal");
+            return;
+        };
+        if (self.isLeader()) {
+            _ = self.slotAndBroadcast(&en, false) catch {
+                refuse(self, a.completion, "internal");
+                return;
+            };
+            completeLocal(a.completion, self.io, en.id(), "");
+        } else {
+            self.sendForward(&en) catch {};
+            self.pending_locals.put(self.allocator, en.id(), a.completion) catch {
+                refuse(self, a.completion, "internal");
+                return;
+            };
+        }
+    }
 
     fn onAppend(self: *ClusterNode, conn_id: u64, a: message.Append) !void {
         const jid = self.node.journalIdByName(a.journal) orelse {
@@ -1081,14 +1330,24 @@ pub const ClusterNode = struct {
         return sl;
     }
 
-    /// The leader's control-entry step (join, merge, settings, leave):
-    /// build, fold, store, broadcast. Returns the entry id and the slot
-    /// (the merge needs the slot's seq and hash to chain its re-slots).
-    fn authorControl(self: *ClusterNode, kind: entry.Kind, payload: []const u8) !struct {
-        id: entry.Id,
-        sl: slot.Slot,
-    } {
-        const fold = &self.node.control;
+    /// The leader's control-entry step for the control journal (join, merge,
+    /// settings, leave): build, fold, store, broadcast. Returns the entry id
+    /// and the slot (the merge needs the slot's seq and hash to chain its
+    /// re-slots).
+    fn authorControl(self: *ClusterNode, kind: entry.Kind, payload: []const u8) !Authored {
+        return self.authorControlFold(&self.node.control, kind, payload);
+    }
+
+    /// authorControl for any chain: the control journal's, or a data
+    /// journal's — journal-scoped control entries (`settings`, `stale`,
+    /// `checkpoint`) live in the journal's own chain (PRD 0004), not the
+    /// control journal's, where every member would refuse the scope.
+    fn authorControlFold(
+        self: *ClusterNode,
+        fold: *chain.FoldState,
+        kind: entry.Kind,
+        payload: []const u8,
+    ) !Authored {
         const en = try self.signedEntry(kind, fold.journal_id, payload, 0);
         try self.noteBuilt(fold.journal_id, en.author_seq);
         const sl = try self.slotAndBroadcast(&en, false);
@@ -1210,10 +1469,14 @@ pub const ClusterNode = struct {
                 self.common_tail = prev_head;
             }
         }
-        // A client awaiting this entry's slot.
+        // A client awaiting this entry's slot — the wire client or an
+        // embedded host (PRD 0005).
         if (std.mem.eql(u8, &en.author, &self.node.member_id)) {
             if (self.pending_clients.fetchRemove(en.id())) |kv| {
                 self.ackClient(kv.value, en.id(), "") catch {};
+            }
+            if (self.pending_locals.fetchRemove(en.id())) |kv| {
+                completeLocal(kv.value, self.io, en.id(), "");
             }
         }
     }
@@ -1567,22 +1830,6 @@ pub const ClusterNode = struct {
         return null;
     }
 
-    /// Truncates every journal to the last slot of the common epoch (the
-    /// slot before my branch started), dropping my divergent tail.
-    fn truncateToCommonTail(self: *ClusterNode) !void {
-        const tail = self.common_tail orelse return;
-        try self.node.store.truncate(self.node.control.journal_id, tail);
-        var it = self.node.control.journals.iterator();
-        while (it.next()) |kv| {
-            const jid = kv.key_ptr.*;
-            // A journal with no pre-branch records (it was created, or first
-            // written, during the partition) truncates to empty.
-            const pos = (try self.lastEpochPosition(jid, tail.epoch)) orelse
-                slot.Position{ .epoch = 0, .seq = 0 };
-            try self.node.store.truncate(jid, pos);
-        }
-    }
-
     /// The last position of `epoch_no` in a journal's chain, if any.
     fn lastEpochPosition(self: *ClusterNode, journal_id: [16]u8, epoch_no: u64) !?slot.Position {
         const Ctx = struct {
@@ -1610,7 +1857,6 @@ pub const ClusterNode = struct {
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.appendSlice(self.allocator, p.records);
         if (p.records.len > 0) {
-            self.merge_next = p.next;
             try self.requestSync(conn_id, p.journal_id, p.next);
             return;
         }
@@ -1869,20 +2115,30 @@ pub const ClusterNode = struct {
         const buf = try self.allocator.alloc(u8, settings_fold.payloadLen(payload));
         defer self.allocator.free(buf);
         settings_fold.encodePayload(payload, buf);
-        const authored = self.authorControl(.settings, buf) catch |err| switch (err) {
-            // A refused change must reach the caller as an ack, not leave
-            // it waiting for a slot that never comes (a frozen leadership
-            // key, an invalid value, a scope mismatch).
-            error.NotLiveChangeable => {
-                try self.ackClient(conn_id, null, "not_live_changeable");
-                return;
-            },
-            error.InvalidSettings, error.ScopeMismatch => {
-                try self.ackClient(conn_id, null, "invalid_settings");
-                return;
-            },
-            else => return err,
-        };
+        // Journal-scoped changes are entries in the journal's own chain
+        // (PRD 0004); cluster-scoped ones live in the control journal's.
+        const authored =
+            (if (is_control)
+                self.authorControl(.settings, buf)
+            else
+                self.authorControlFold(
+                    &self.node.journals.get(jid).?.fold,
+                    .settings,
+                    buf,
+                )) catch |err| switch (err) {
+                // A refused change must reach the caller as an ack, not leave
+                // it waiting for a slot that never comes (a frozen leadership
+                // key, an invalid value, a scope mismatch).
+                error.NotLiveChangeable => {
+                    try self.ackClient(conn_id, null, "not_live_changeable");
+                    return;
+                },
+                error.InvalidSettings, error.ScopeMismatch => {
+                    try self.ackClient(conn_id, null, "invalid_settings");
+                    return;
+                },
+                else => return err,
+            };
         try self.ackClient(conn_id, authored.id, "");
     }
 
@@ -1962,7 +2218,7 @@ test "the loop serves a wire client over the hub: hello, append, read" {
     const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
 
     var hub = net.transport.Hub.init(test_alloc);
-    defer hub.deinit();
+    defer hub.deinit(tio);
     const listener = try hub.listen(test_alloc, "node-a");
     const dialer = try hub.dialer(test_alloc, "node-a");
 
@@ -2071,7 +2327,7 @@ test "e2e (b): partition a 2-member seniority cluster, write on both sides, heal
     }
 
     var hub = net.transport.Hub.init(test_alloc);
-    defer hub.deinit();
+    defer hub.deinit(tio);
     const listener_a = try hub.listen(test_alloc, "a");
     const dialer_a = try hub.dialer(test_alloc, "a");
     const listener_b = try hub.listen(test_alloc, "b");
@@ -2292,12 +2548,16 @@ fn triNodeInit(
     hub: *net.transport.Hub,
     keypair: ?crypto.sign.Ed25519.KeyPair,
     founded: ?std.testing.TmpDir,
+    now: ?*const fn (std.Io) i64,
 ) !TriNode {
     var tmp = if (founded) |ft| ft else std.testing.tmpDir(.{});
     tmp.dir.createDir(tio, "data", .default_dir) catch {};
     const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
     if (keypair) |kp| try journal.writeMemberKey(test_alloc, tio, data_dir, kp);
-    var node = try journal.Node.open(test_alloc, tio, data_dir, .{ .replay_forward = true });
+    var node = try journal.Node.open(test_alloc, tio, data_dir, .{
+        .replay_forward = true,
+        .now = now orelse &journal.wallClock,
+    });
     const listener = try hub.listen(test_alloc, listen_addr);
     const dialer = try hub.dialer(test_alloc, listen_addr);
     var cn = try ClusterNode.init(test_alloc, tio, node, .{
@@ -2356,16 +2616,16 @@ test "e2e (c): configured leadership with a stall fallback never elects without 
         try journal.init(test_alloc, tio, data_dir, &genesis_changes, "main", &journal.wallClock);
     }
     var hub = net.transport.Hub.init(test_alloc);
-    defer hub.deinit();
+    defer hub.deinit(tio);
     const dialer_a = try hub.dialer(test_alloc, "a");
     defer dialer_a.deinit();
-    const a = try triNodeInit("a", null, &hub, null, tmp_a);
+    const a = try triNodeInit("a", null, &hub, null, tmp_a, null);
     defer triNodeStop(&a);
     const b_kp = crypto.sign.Ed25519.KeyPair.generate(tio);
-    const b = try triNodeInit("b", "a", &hub, b_kp, null);
+    const b = try triNodeInit("b", "a", &hub, b_kp, null, null);
     defer triNodeStop(&b);
     const c_kp = crypto.sign.Ed25519.KeyPair.generate(tio);
-    const c = try triNodeInit("c", "a", &hub, c_kp, null);
+    const c = try triNodeInit("c", "a", &hub, c_kp, null, null);
     defer triNodeStop(&c);
 
     // Both joiners reach the founder's view.
@@ -2451,4 +2711,555 @@ test "e2e (c): configured leadership with a stall fallback never elects without 
         }
         try std.testing.expect(converged);
     }
+}
+
+/// A wall-clock offset for the skew e2e (G6): the `now` the node's clock
+/// function reports is shifted by a fixed offset, so the follower reads
+/// through a different clock while its rate is unchanged.
+fn skewedNow(comptime offset_ms: i64) *const fn (std.Io) i64 {
+    return struct {
+        fn now(io: std.Io) i64 {
+            return journal.wallClock(io) + offset_ms;
+        }
+    }.now;
+}
+
+// ---------------------------------------------------------------------------
+// PRD 0002 phases 4-5 e2e: the leader's checkpoint cadence
+// ---------------------------------------------------------------------------
+
+const TtlTrio = struct {
+    a: TriNode,
+    b: TriNode,
+    c: TriNode,
+};
+
+/// A three-member TTL cluster for the checkpoint e2e: A founds with open
+/// admission and fast failure detection, "main" gets journal-scoped TTL
+/// settings (per_entry expiry, delete action, a 150 ms cadence, the retain
+/// value under test), and B and C join and settle. B's and C's clocks may be
+/// skewed for the G6 case.
+fn ttlTrioInit(
+    hub: *net.transport.Hub,
+    comptime retain: []const u8,
+    b_now: ?*const fn (std.Io) i64,
+    c_now: ?*const fn (std.Io) i64,
+) !TtlTrio {
+    const admission_key = schema.keyIndex("cluster.admission").?;
+    const heartbeat = schema.keyIndex("cluster.heartbeat_ms").?;
+    const suspect = schema.keyIndex("cluster.suspect_after_ms").?;
+    const genesis_changes = [_]validate.Change{
+        .{ .key = admission_key, .value = .{
+            .enum_value = schema.enumValue(admission_key, "open").?,
+        } },
+        .{ .key = heartbeat, .value = .{ .u64 = 50 } },
+        .{ .key = suspect, .value = .{ .u64 = 800 } },
+    };
+    var tmp_a = std.testing.tmpDir(.{});
+    tmp_a.dir.createDir(tio, "data", .default_dir) catch {};
+    {
+        const data_dir = try tmp_a.dir.openDir(tio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, tio, data_dir, &genesis_changes, "main", &journal.wallClock);
+    }
+    var trio = TtlTrio{
+        .a = try triNodeInit("a", null, hub, null, tmp_a, null),
+        .b = undefined,
+        .c = undefined,
+    };
+    errdefer triNodeStop(&trio.a);
+    const b_kp = crypto.sign.Ed25519.KeyPair.generate(tio);
+    trio.b = try triNodeInit("b", "a", hub, b_kp, null, b_now);
+    errdefer triNodeStop(&trio.b);
+    const c_kp = crypto.sign.Ed25519.KeyPair.generate(tio);
+    trio.c = try triNodeInit("c", "a", hub, c_kp, null, c_now);
+    errdefer triNodeStop(&trio.c);
+
+    // Journal-scoped TTL settings on "main": per_entry expiry, delete
+    // action, a fast cadence, and the retain value under test. (This is the
+    // wire path for journal-scoped settings — the authoring side of the
+    // fix that puts them in the journal's own chain.)
+    const enforce = schema.keyIndex("ttl.enforce").?;
+    const action = schema.keyIndex("ttl.action").?;
+    const every = schema.keyIndex("checkpoint.every_ms").?;
+    const retain_idx = schema.keyIndex("ttl.retain").?;
+    const changes = [_]validate.Change{
+        .{ .key = enforce, .value = .{
+            .enum_value = schema.enumValue(enforce, "per_entry").?,
+        } },
+        .{ .key = action, .value = .{
+            .enum_value = schema.enumValue(action, "delete").?,
+        } },
+        .{ .key = every, .value = .{ .u64 = 150 } },
+        .{ .key = retain_idx, .value = .{
+            .enum_value = schema.enumValue(retain_idx, retain).?,
+        } },
+    };
+    const len = settings_fold.changesLen(&changes);
+    const buf = try test_alloc.alloc(u8, len);
+    defer test_alloc.free(buf);
+    settings_fold.encodeChanges(&changes, buf);
+    const reply = try trio.a.client.settings("main", buf);
+    if (reply.refusal.len != 0) return error.SettingsRefused;
+
+    // Both joiners reach the founder's view.
+    {
+        const deadline = wallMs(tio) + 20_000;
+        while (wallMs(tio) < deadline) {
+            const hb = trio.b.client.hello() catch continue;
+            const hc = trio.c.client.hello() catch continue;
+            if (hb.epoch >= 1 and hc.epoch >= 1) break;
+        }
+        const hb = trio.b.client.hello() catch return error.NotJoined;
+        const hc = trio.c.client.hello() catch return error.NotJoined;
+        if (hb.epoch < 1 or hc.epoch < 1) return error.NotJoined;
+    }
+    // Let the joins and backfills settle before appends race them.
+    {
+        const deadline = wallMs(tio) + 1500;
+        while (wallMs(tio) < deadline) {}
+    }
+    return trio;
+}
+
+fn ttlTrioStop(t: *const TtlTrio) void {
+    triNodeStop(&t.a);
+    triNodeStop(&t.b);
+    triNodeStop(&t.c);
+}
+
+test "e2e (G4): three members remove the same set at the same checkpoint slot, both retain values" {
+    const retains = [_][]const u8{ "header", "none" };
+    inline for (retains) |retain| {
+        var hub = net.transport.Hub.init(test_alloc);
+        defer hub.deinit(tio);
+        var trio = try ttlTrioInit(&hub, retain, null, null);
+        defer ttlTrioStop(&trio);
+
+        const main_id = trio.a.node.journalIdByName("main").?;
+        // Three entries with 500 ms TTLs, appended through the leader and a
+        // follower (forward + broadcast), so both write paths are covered.
+        const payloads = [_][]const u8{ "t1", "t2", "t3" };
+        var ids: [3]entry.Id = undefined;
+        for (payloads, 0..) |p, i| {
+            const client = if (i % 2 == 0) trio.a.client else trio.b.client;
+            const reply = try client.append("main", p, 500);
+            try std.testing.expectEqual(@as(usize, 0), reply.refusal.len);
+            ids[i] = reply.id;
+        }
+
+        // Wait until every member's fold has removed all three entries.
+        const deadline = wallMs(tio) + 20_000;
+        var converged = false;
+        while (wallMs(tio) < deadline) {
+            const folds = [_]*chain.FoldState{
+                &trio.a.node.journals.get(main_id).?.fold,
+                &trio.b.node.journals.get(main_id).?.fold,
+                &trio.c.node.journals.get(main_id).?.fold,
+            };
+            var all_removed = true;
+            for (ids) |id| {
+                for (folds) |f| {
+                    const info = f.entries.get(id) orelse {
+                        all_removed = false;
+                        break;
+                    };
+                    if (!info.removed) all_removed = false;
+                }
+            }
+            if (all_removed) {
+                converged = true;
+                break;
+            }
+            std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
+        }
+        try std.testing.expect(converged);
+
+        const folds = [_]*chain.FoldState{
+            &trio.a.node.journals.get(main_id).?.fold,
+            &trio.b.node.journals.get(main_id).?.fold,
+            &trio.c.node.journals.get(main_id).?.fold,
+        };
+        // The checkpoint that removed them is the same position on all
+        // three — removal happened at the same chain position, not on each
+        // member's clock.
+        for (folds) |f| {
+            try std.testing.expect(f.checkpoints.items.len >= 1);
+        }
+        const last_ckpt = folds[0].checkpoints.items[folds[0].checkpoints.items.len - 1];
+        for (folds) |f| {
+            try std.testing.expectEqual(
+                last_ckpt,
+                f.checkpoints.items[f.checkpoints.items.len - 1],
+            );
+        }
+
+        // The payloads are gone from every member's store, per the retain
+        // value: header-only (decodes with the payload omitted) or
+        // slot-only (decodes with no entry at all). The fold marks removals
+        // an instant before the member's own compaction runs, so this is a
+        // poll, not a single read.
+        const nodes = [_]*journal.Node{ trio.a.node, trio.b.node, trio.c.node };
+        const compacted = struct {
+            fn all(
+                nodes_list: []const *journal.Node,
+                jid: [16]u8,
+                ids_list: []const entry.Id,
+                comptime retain_val: []const u8,
+            ) bool {
+                for (nodes_list) |node| {
+                    for (ids_list) |id| {
+                        const info = node.journals.get(jid).?.fold.entries.get(id).?;
+                        const size = 8 + slot.encoded_len + entry.header_len + info.payload_len;
+                        const buf = node.allocator.alloc(u8, size) catch return false;
+                        defer node.allocator.free(buf);
+                        const rec =
+                            (node.store.read(jid, info.position, buf) catch return false) orelse
+                            return false;
+                        if (std.mem.eql(u8, retain_val, "header")) {
+                            const en = rec.entry orelse return false;
+                            if (!en.payload_omitted or en.payload.len != 0) return false;
+                        } else {
+                            if (rec.entry != null) return false;
+                        }
+                    }
+                }
+                return true;
+            }
+        }.all;
+        {
+            const dl = wallMs(tio) + 10_000;
+            var done = false;
+            while (wallMs(tio) < dl) {
+                if (compacted(&nodes, main_id, &ids, retain)) {
+                    done = true;
+                    break;
+                }
+                std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+            }
+            try std.testing.expect(done);
+        }
+
+        // Identical folded state on all three (the same removal decisions).
+        const hash_a = try folds[0].hash(test_alloc);
+        const hash_b = try folds[1].hash(test_alloc);
+        const hash_c = try folds[2].hash(test_alloc);
+        try std.testing.expectEqualSlices(u8, &hash_a, &hash_b);
+        try std.testing.expectEqualSlices(u8, &hash_a, &hash_c);
+
+        // The pending-bytes early trigger: raise the cadence to "essentially
+        // never" and lower the threshold to 1 byte. A fresh burst of TTL
+        // entries must still produce a checkpoint well before the cadence
+        // could — the trigger fires on the data it saw arrive.
+        {
+            const every_idx = schema.keyIndex("checkpoint.every_ms").?;
+            const pending_idx = schema.keyIndex("checkpoint.pending_bytes").?;
+            const changes = [_]validate.Change{
+                .{ .key = every_idx, .value = .{ .u64 = 600_000 } },
+                .{ .key = pending_idx, .value = .{ .u64 = 1 } },
+            };
+            const len = settings_fold.changesLen(&changes);
+            const buf = try test_alloc.alloc(u8, len);
+            defer test_alloc.free(buf);
+            settings_fold.encodeChanges(&changes, buf);
+            const reply = try trio.a.client.settings("main", buf);
+            try std.testing.expectEqual(@as(usize, 0), reply.refusal.len);
+            // The leftover fast cadence fires once more with an empty set
+            // (everything is already removed) and re-arms the next due to
+            // the new 600 s cadence; wait it out so the burst below cannot
+            // ride an old due time.
+            {
+                const dl = wallMs(tio) + 800;
+                while (wallMs(tio) < dl) {}
+            }
+            // A streaming burst: each append moves the head, which is what
+            // the pending-bytes probe rescans on.
+            const burst_payloads = [_][]const u8{ "p1", "p2", "p3", "p4" };
+            var burst: [4]entry.Id = undefined;
+            for (burst_payloads, 0..) |p, i| {
+                const reply2 = try trio.b.client.append("main", p, 300);
+                try std.testing.expectEqual(@as(usize, 0), reply2.refusal.len);
+                burst[i] = reply2.id;
+                const dl = wallMs(tio) + 150;
+                while (wallMs(tio) < dl) {}
+            }
+            // Well before the 600 s cadence, the pending trigger emits a
+            // checkpoint that removes the burst.
+            const dl2 = wallMs(tio) + 10_000;
+            var pending_removed = false;
+            while (wallMs(tio) < dl2) {
+                const f = &trio.a.node.journals.get(main_id).?.fold;
+                var ok = true;
+                for (burst) |id| {
+                    const info = f.entries.get(id) orelse {
+                        ok = false;
+                        break;
+                    };
+                    if (!info.removed) ok = false;
+                }
+                if (ok) {
+                    pending_removed = true;
+                    break;
+                }
+                std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
+            }
+            try std.testing.expect(pending_removed);
+        }
+    }
+}
+
+test "e2e (G6): a skewed follower's clock changes what it shows, not what it stores" {
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(tio);
+    var trio = try ttlTrioInit(&hub, "header", skewedNow(3_600_000), skewedNow(-3_600_000));
+    defer ttlTrioStop(&trio);
+
+    // No cadence removal during the observation window: the checkpoint
+    // cadence is raised to "essentially never", so the entries expire on the
+    // reader's clock but are not yet removed — the soft-visibility window a
+    // checkpoint would close on every member alike (PRD 0002 failure modes).
+    {
+        const every_idx = schema.keyIndex("checkpoint.every_ms").?;
+        const changes = [_]validate.Change{
+            .{ .key = every_idx, .value = .{ .u64 = 600_000 } },
+        };
+        const len = settings_fold.changesLen(&changes);
+        const buf = try test_alloc.alloc(u8, len);
+        defer test_alloc.free(buf);
+        settings_fold.encodeChanges(&changes, buf);
+        const reply = try trio.a.client.settings("main", buf);
+        try std.testing.expectEqual(@as(usize, 0), reply.refusal.len);
+    }
+
+    const main_id = trio.a.node.journalIdByName("main").?;
+    const payloads = [_][]const u8{ "s1", "s2", "s3" };
+    for (payloads, 0..) |p, i| {
+        const client = if (i % 2 == 0) trio.a.client else trio.b.client;
+        const reply = try client.append("main", p, 1000);
+        try std.testing.expectEqual(@as(usize, 0), reply.refusal.len);
+    }
+
+    // Past the expiry instant on the leader's clock (slot_ts + 1000 ms):
+    // every member's fold has the same bytes, and no checkpoint has fired.
+    {
+        const deadline = wallMs(tio) + 2_500;
+        while (wallMs(tio) < deadline) {}
+    }
+
+    // The stored state is identical: all three folds hash the same.
+    const folds = [_]*chain.FoldState{
+        &trio.a.node.journals.get(main_id).?.fold,
+        &trio.b.node.journals.get(main_id).?.fold,
+        &trio.c.node.journals.get(main_id).?.fold,
+    };
+    const hash_a = try folds[0].hash(test_alloc);
+    const hash_b = try folds[1].hash(test_alloc);
+    const hash_c = try folds[2].hash(test_alloc);
+    try std.testing.expectEqualSlices(u8, &hash_a, &hash_b);
+    try std.testing.expectEqualSlices(u8, &hash_a, &hash_c);
+
+    // What a default read shows differs with the reader's clock: A (real
+    // time) and B (one hour ahead) hide the expired entries; C (one hour
+    // behind) still shows them as live.
+    const seen_a = try countMatchingPayloads(trio.a.client, "main", &payloads);
+    const seen_b = try countMatchingPayloads(trio.b.client, "main", &payloads);
+    const seen_c = try countMatchingPayloads(trio.c.client, "main", &payloads);
+    try std.testing.expectEqual(@as(usize, 0), seen_a);
+    try std.testing.expectEqual(@as(usize, 0), seen_b);
+    try std.testing.expectEqual(@as(usize, 3), seen_c);
+}
+
+fn countMatchingPayloads(
+    client: *net.client.Client,
+    name: []const u8,
+    wanted: []const []const u8,
+) !usize {
+    const Ctx = struct {
+        wanted: []const []const u8,
+        count: usize = 0,
+    };
+    var ctx = Ctx{ .wanted = wanted };
+    try client.read(name, null, false, false, &ctx, struct {
+        fn cb(c: *Ctx, _: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
+            const e = en orelse return;
+            for (c.wanted) |w| {
+                if (std.mem.eql(u8, e.payload, w)) {
+                    c.count += 1;
+                    return;
+                }
+            }
+        }
+    }.cb);
+    return ctx.count;
+}
+
+test "e2e: a newly elected leader slots its own queued entries" {
+    // A founds with open admission and fast failure detection; B joins. The
+    // partition is left unhealed on purpose: the merge path re-forwards the
+    // loser's queue (becomeLoser -> resetMySeq), so only the leader path is
+    // being asserted here.
+    const admission_key = schema.keyIndex("cluster.admission").?;
+    const heartbeat = schema.keyIndex("cluster.heartbeat_ms").?;
+    const suspect = schema.keyIndex("cluster.suspect_after_ms").?;
+    const genesis_changes = [_]validate.Change{
+        .{ .key = admission_key, .value = .{
+            .enum_value = schema.enumValue(admission_key, "open").?,
+        } },
+        .{ .key = heartbeat, .value = .{ .u64 = 50 } },
+        .{ .key = suspect, .value = .{ .u64 = 800 } },
+    };
+    var tmp_a = std.testing.tmpDir(.{});
+    tmp_a.dir.createDir(tio, "data", .default_dir) catch {};
+    {
+        const data_dir = try tmp_a.dir.openDir(tio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, tio, data_dir, &genesis_changes, "main", &journal.wallClock);
+    }
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(tio);
+    const a = try triNodeInit("a", null, &hub, null, tmp_a, null);
+    defer triNodeStop(&a);
+    const b_kp = crypto.sign.Ed25519.KeyPair.generate(tio);
+    const b = try triNodeInit("b", "a", &hub, b_kp, null, null);
+    defer triNodeStop(&b);
+
+    // B reaches the founder's view.
+    {
+        const deadline = wallMs(tio) + 20_000;
+        var joined = false;
+        while (wallMs(tio) < deadline) {
+            const hb = b.client.hello() catch {
+                std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+                continue;
+            };
+            if (hb.epoch >= 1) {
+                joined = true;
+                break;
+            }
+        }
+        try std.testing.expect(joined);
+    }
+    // Let B's backfill settle before the partition.
+    {
+        const deadline = wallMs(tio) + 1500;
+        while (wallMs(tio) < deadline) {}
+    }
+
+    try hub.drop(test_alloc, tio, "a", "b");
+    try hub.drop(test_alloc, tio, "b", "a");
+
+    // B is still a follower with A as the fold leader: the append is queued
+    // durably and the forward cannot reach A. The ack only arrives once the
+    // entry slots — which, on B's own election, is the leader's queue slot.
+    const reply = try b.client.append("main", "b1", 0);
+    try std.testing.expectEqual(@as(usize, 0), reply.refusal.len);
+
+    // B elects itself (the failure detector passes the suspect timeout).
+    {
+        const deadline = wallMs(tio) + 15_000;
+        var elected = false;
+        while (wallMs(tio) < deadline) {
+            const hb = b.client.hello() catch {
+                std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+                continue;
+            };
+            if (hb.epoch >= 2) {
+                elected = true;
+                break;
+            }
+        }
+        try std.testing.expect(elected);
+    }
+
+    // The queued entry is on B's own branch, slotted by the leader path.
+    // "main" had no records before the partition, so its first slot in B's
+    // branch is seq 1 — the branch itself (epoch 2) is the proof that B
+    // slotted it as the elected leader.
+    const main_id = b.node.journalIdByName("main").?;
+    const fold = &b.node.journals.get(main_id).?.fold;
+    const info = fold.entries.get(reply.id) orelse return error.QueueNeverSlotted;
+    try std.testing.expectEqual(@as(u64, 2), info.position.epoch);
+    try std.testing.expectEqual(@as(u64, 1), info.position.seq);
+}
+
+test "embedded host appends through the loop from its own thread (PRD 0005)" {
+    // A founds with open admission and fast failure detection; B and C join.
+    // The host — the test thread — appends through the loop of a follower
+    // (B: queued, forwarded, slotted by A) and of the leader (A: slotted
+    // directly), then both entries must be in every member's fold and read
+    // back over the wire.
+    const admission_key = schema.keyIndex("cluster.admission").?;
+    const heartbeat = schema.keyIndex("cluster.heartbeat_ms").?;
+    const suspect = schema.keyIndex("cluster.suspect_after_ms").?;
+    const genesis_changes = [_]validate.Change{
+        .{ .key = admission_key, .value = .{
+            .enum_value = schema.enumValue(admission_key, "open").?,
+        } },
+        .{ .key = heartbeat, .value = .{ .u64 = 50 } },
+        .{ .key = suspect, .value = .{ .u64 = 800 } },
+    };
+    var tmp_a = std.testing.tmpDir(.{});
+    tmp_a.dir.createDir(tio, "data", .default_dir) catch {};
+    {
+        const data_dir = try tmp_a.dir.openDir(tio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, tio, data_dir, &genesis_changes, "main", &journal.wallClock);
+    }
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(tio);
+    const a = try triNodeInit("a", null, &hub, null, tmp_a, null);
+    defer triNodeStop(&a);
+    const b_kp = crypto.sign.Ed25519.KeyPair.generate(tio);
+    const b = try triNodeInit("b", "a", &hub, b_kp, null, null);
+    defer triNodeStop(&b);
+    const c_kp = crypto.sign.Ed25519.KeyPair.generate(tio);
+    const c = try triNodeInit("c", "a", &hub, c_kp, null, null);
+    defer triNodeStop(&c);
+
+    // Both joiners reach the founder's view, then settle.
+    {
+        const deadline = wallMs(tio) + 20_000;
+        while (wallMs(tio) < deadline) {
+            const hb = b.client.hello() catch continue;
+            const hc = c.client.hello() catch continue;
+            if (hb.epoch >= 1 and hc.epoch >= 1) break;
+        }
+        const hb = b.client.hello() catch return error.NotJoined;
+        const hc = c.client.hello() catch return error.NotJoined;
+        if (hb.epoch < 1 or hc.epoch < 1) return error.NotJoined;
+        const settle = wallMs(tio) + 1500;
+        while (wallMs(tio) < settle) {}
+    }
+
+    // The host's own writes: through the follower (forwarded) and the
+    // leader (slotted directly). Both block until the slot folds back.
+    const id_follower = try b.cn.localAppend(tio, "main", "via-follower", 0);
+    const id_leader = try a.cn.localAppend(tio, "main", "via-leader", 0);
+    try std.testing.expect(std.mem.eql(u8, &id_follower.author, &b.node.member_id));
+    try std.testing.expect(std.mem.eql(u8, &id_leader.author, &a.node.member_id));
+
+    // Every member's fold has both entries.
+    const main_id = a.node.journalIdByName("main").?;
+    const deadline = wallMs(tio) + 15_000;
+    var converged = false;
+    while (wallMs(tio) < deadline) {
+        const folds = [_]*chain.FoldState{
+            &a.node.journals.get(main_id).?.fold,
+            &b.node.journals.get(main_id).?.fold,
+            &c.node.journals.get(main_id).?.fold,
+        };
+        var ok = true;
+        for (folds) |f| {
+            if (f.entries.get(id_follower) == null or f.entries.get(id_leader) == null) {
+                ok = false;
+            }
+        }
+        if (ok) {
+            converged = true;
+            break;
+        }
+        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
+    }
+    try std.testing.expect(converged);
+
+    // And they read back over the wire from a follower.
+    const have = try bothPayloads(c.client, "main", "via-follower", "via-leader");
+    try std.testing.expect(have);
 }

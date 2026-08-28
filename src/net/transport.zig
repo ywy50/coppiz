@@ -391,15 +391,26 @@ pub const Hub = struct {
         pending: std.ArrayListUnmanaged(Conn) = .empty,
         closed: bool = false,
 
-        pub fn deinit(self: *Endpoint) void {
+        pub fn deinit(self: *Endpoint, io: std.Io) void {
+            // Unaccepted connections are closed, never leaked: a dial that
+            // landed while the listener was closing has nobody to accept it.
+            for (self.pending.items) |conn| conn.close(io);
             self.pending.deinit(self.allocator);
         }
 
         fn pushConn(self: *Endpoint, io: std.Io, conn: Conn) void {
             self.mutex.lockUncancelable(io);
             defer self.mutex.unlock(io);
-            if (self.closed) return;
-            self.pending.append(self.allocator, conn) catch return;
+            if (self.closed) {
+                // Nobody will ever accept this dial; closing frees the
+                // connection (and wakes the dialer's reader with EOF).
+                conn.close(io);
+                return;
+            }
+            self.pending.append(self.allocator, conn) catch {
+                conn.close(io);
+                return;
+            };
             self.sem.post(io);
         }
 
@@ -423,10 +434,10 @@ pub const Hub = struct {
         return .{ .allocator = allocator };
     }
 
-    pub fn deinit(self: *Hub) void {
+    pub fn deinit(self: *Hub, io: std.Io) void {
         var it = self.endpoints.iterator();
         while (it.next()) |kv| {
-            kv.value_ptr.*.deinit();
+            kv.value_ptr.*.deinit(io);
             self.allocator.destroy(kv.value_ptr.*);
             self.allocator.free(kv.key_ptr.*);
         }
@@ -608,7 +619,7 @@ const tio = std.testing.io;
 
 test "hub connect delivers frames both ways" {
     var hub = Hub.init(test_alloc);
-    defer hub.deinit();
+    defer hub.deinit(tio);
     var listener = try hub.listen(test_alloc, "node-a");
     defer listener.close(tio);
     var dialer = try hub.dialer(test_alloc, "node-b");
@@ -637,7 +648,7 @@ fn acceptAndEcho(listener: *Listener) error{Canceled}!void {
 
 test "a dropped edge refuses dials and ends live connections" {
     var hub = Hub.init(test_alloc);
-    defer hub.deinit();
+    defer hub.deinit(tio);
     var listener = try hub.listen(test_alloc, "node-a");
     defer listener.close(tio);
     var dialer = try hub.dialer(test_alloc, "node-b");
@@ -676,7 +687,7 @@ test "a dropped edge refuses dials and ends live connections" {
 
 test "pipe reader returns EndOfStream when the peer closes" {
     var hub = Hub.init(test_alloc);
-    defer hub.deinit();
+    defer hub.deinit(tio);
     var listener = try hub.listen(test_alloc, "node-a");
     defer listener.close(tio);
     var dialer = try hub.dialer(test_alloc, "node-b");
