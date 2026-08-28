@@ -2483,7 +2483,7 @@ test "append without hello is dropped and does not write" {
     const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
 
     var hub = net.transport.Hub.init(test_alloc);
-    defer hub.deinit();
+    defer hub.deinit(tio);
     const listener = try hub.listen(test_alloc, "node-a");
     const dialer = try hub.dialer(test_alloc, "node-a");
 
@@ -2532,7 +2532,7 @@ test "hello whose member id does not derive from the key is refused" {
     const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
 
     var hub = net.transport.Hub.init(test_alloc);
-    defer hub.deinit();
+    defer hub.deinit(tio);
     const listener = try hub.listen(test_alloc, "node-a");
     const dialer = try hub.dialer(test_alloc, "node-a");
 

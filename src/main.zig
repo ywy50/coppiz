@@ -1043,7 +1043,7 @@ test "doctor fails, naming the missing member key, on an empty directory" {
 // ports; the suite runs the tests sequentially.
 
 fn testAddr(offset: u16) ![]u8 {
-    const pid: u32 = @intCast(@as(i64, std.c.getpid()));
+    const pid: u32 = @intCast(@as(i64, std.os.linux.getpid()));
     const port = 20000 + @as(u16, @intCast(pid % 40000)) + offset;
     return std.fmt.allocPrint(test_alloc, "127.0.0.1:{d}", .{port});
 }

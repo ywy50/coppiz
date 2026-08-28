@@ -703,7 +703,7 @@ test "a dropped edge refuses dials and ends live connections" {
 
 test "hub send refuses an oversized frame" {
     var hub = Hub.init(test_alloc);
-    defer hub.deinit();
+    defer hub.deinit(tio);
     var listener = try hub.listen(test_alloc, "node-a");
     defer listener.close(tio);
     var dialer = try hub.dialer(test_alloc, "node-b");
