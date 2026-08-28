@@ -660,24 +660,11 @@ pub const FoldState = struct {
             const settle = cluster.settings.getU64(schema.keyIndex("merge.settle_ms").?);
             if (sl.slot_ts_ms < merge.slot_ts_ms +| settle) return error.MergeSettling;
         }
-        var candidates = std.ArrayListUnmanaged(expiry.SlottedEntry).empty;
-        defer candidates.deinit(self.allocator);
-        var it = self.entries.iterator();
-        while (it.next()) |kv| {
-            const info = kv.value_ptr.*;
-            try candidates.append(self.allocator, .{
-                .id = kv.key_ptr.*,
-                .position = info.position,
-                .slot_ts_ms = info.slot_ts_ms,
-                .expires_at = info.expires_at_ms,
-                .ttl_action = info.ttl_action,
-                .stale_marked = info.stale_marked,
-                .stale_position = info.stale_position,
-            });
-        }
+        const candidates = try self.expiryCandidates(self.allocator);
+        defer self.allocator.free(candidates);
         const set = try expiry.removalSet(
             self.allocator,
-            candidates.items,
+            candidates,
             payload.expire_through,
             sl.slot_ts_ms,
             &self.settings,
@@ -689,6 +676,33 @@ pub const FoldState = struct {
         }
         try self.checkpoints.append(self.allocator, sl.position());
         try self.registerEntry(sl, en);
+    }
+
+    /// The fold's entries as expiry candidates: the input both
+    /// `applyCheckpoint` and the node's compaction feed to
+    /// `expiry.removalSet`, so the set a checkpoint folds and the set
+    /// compaction drops can never disagree. Caller owns the slice.
+    pub fn expiryCandidates(
+        self: *const FoldState,
+        allocator: std.mem.Allocator,
+    ) ![]expiry.SlottedEntry {
+        const candidates = try allocator.alloc(expiry.SlottedEntry, self.entries.count());
+        var index: usize = 0;
+        var it = self.entries.iterator();
+        while (it.next()) |kv| : (index += 1) {
+            const info = kv.value_ptr.*;
+            candidates[index] = .{
+                .id = kv.key_ptr.*,
+                .position = info.position,
+                .slot_ts_ms = info.slot_ts_ms,
+                .expires_at = info.expires_at_ms,
+                .ttl_action = info.ttl_action,
+                .stale_marked = info.stale_marked,
+                .stale_position = info.stale_position,
+            };
+        }
+        std.debug.assert(index == candidates.len);
+        return candidates;
     }
 
     /// A deterministic hash of the folded state — the check behind "two
