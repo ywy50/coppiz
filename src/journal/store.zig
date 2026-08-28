@@ -361,9 +361,12 @@ pub const Store = struct {
             const ordinal = jd.segments.items.len + new_segments.items.len + 1;
             const name_buf = try std.fmt.allocPrint(self.allocator, "seg-{d:0>8}", .{ordinal});
             defer self.allocator.free(name_buf);
+            // Truncate: a later compaction reuses these ordinals, and a
+            // shorter rewrite over the old bytes would leave a stale tail
+            // that the next open scans as records.
             const file = try jd.dir.createFile(self.io, name_buf, .{
                 .read = true,
-                .truncate = false,
+                .truncate = true,
             });
             errdefer file.close(self.io);
             var header_buf: [segment.header_len]u8 = undefined;
