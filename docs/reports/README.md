@@ -52,6 +52,21 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-28 — `HubListener.closeFn` writes `endpoint.closed` without the endpoint mutex (latent)](bugs/2026-08-28-hub-listener-close-race.md)
 - [2026-08-28 — PR #19's install-only-coppiz wiring broke the G2 sidecar test; `zig build test` was red on `main` again](bugs/2026-08-28-g2-sidecar-needs-install.md)
 - [2026-08-28 — `ServingProc.stop` burns 5 s per killed serve: the process-level tests spent ~60 s of the gate on zombie polls](bugs/2026-08-28-servingproc-stop-zombie-poll.md)
+- [2026-08-29 — `reforwardQueue`'s leader-slot branches never complete `pending_locals`: an embedded host's `localAppend` hangs forever on election](bugs/2026-08-29-reforward-queue-loses-local-completion.md)
+- [2026-08-29 — merge data re-slots refuse `settings`/`checkpoint`/`stale` records: the heal never completes (and a `leave` before data can lose the branch)](bugs/2026-08-29-merge-data-reslot-refusals.md)
+- [2026-08-29 — the now-live merge settle rule kills the leader's checkpoint cadence: `MergeSettling` is fatal to the loop after every heal](bugs/2026-08-29-settle-rule-kills-checkpoint-cadence.md)
+- [2026-08-29 — the re-slotted `create_journal` variant is reachable live: any member can create journals via the forward path](bugs/2026-08-29-live-create-journal-bypass.md)
+- [2026-08-29 — `parsePeerKey` frees the old `public_key` before validating the new one: a malformed second key is a double-free](bugs/2026-08-29-parse-peer-key-double-free.md)
+- [2026-08-29 — `Node.createJournal` is a dead public API with a latent compile error](bugs/2026-08-29-node-createjournal-compile-error.md)
+- [2026-08-29 — control/checkpoint writes fold before the store write: an I/O error leaves the fold one record ahead and the chain unreopenable](bugs/2026-08-29-fold-before-store-order.md)
+- [2026-08-29 — wire reads silently drop compacted (retain=none) records; the local read shows them as `(removed)`](bugs/2026-08-29-wire-read-drops-compacted-slots.md)
+- [2026-08-29 — merge re-slots do not clamp the slot timestamp: a clock regression stalls the heal with `BadTimestamp`](bugs/2026-08-29-merge-reslot-timestamp-unclamped.md)
+- [2026-08-29 — TCP accept/connect leak the OS socket when the `TcpConn` allocation fails](bugs/2026-08-29-tcp-conn-fd-leak-on-oom.md)
+- [2026-08-29 — `decodeValue` string_list leaks already-duped items on its error paths](bugs/2026-08-29-decode-value-string-list-leak.md)
+- [2026-08-29 — the quote-aware TOML scanner ignores the `\"` escape and accepts unterminated quotes](bugs/2026-08-29-toml-parser-escapes-and-unterminated.md)
+- [2026-08-29 — `encodeCreateJournalPayload` writes the journal name with an unchecked u16 cast: a 64 KiB name panics in debug](bugs/2026-08-29-create-journal-name-codec-overflow.md)
+- [2026-08-29 — `compact` is not crash-atomic: an interrupted compaction leaves duplicate segments and the journal refuses to reopen](bugs/2026-08-29-compact-not-crash-atomic.md)
+- [2026-08-29 — the simulator's `heal` discards losing-side messages still in inboxes](bugs/2026-08-29-sim-heal-drops-inbox.md)
 
 ### Investigations
 
