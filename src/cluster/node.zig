@@ -40,8 +40,10 @@ const net = @import("../net/net.zig");
 const message = net.message;
 const transport = net.transport;
 
-/// Provisional page bound for backfill and reads (OQ 56 has no value yet;
-/// this mirrors config's provisional queue bound).
+/// The sync/backfill page size: a provisional value standing in until OQ 56
+/// resolves `sync.page_bytes` (which names no value and no layer). Kept
+/// small enough that one page fits inside one wire frame; the request is
+/// capped by `framing.max_body_bytes` either way.
 pub const provisional_page_bytes: u32 = 64 * 1024;
 
 // ---------------------------------------------------------------------------

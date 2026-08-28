@@ -111,9 +111,10 @@ pub fn isHexId(text: []const u8, id: [16]u8) bool {
 /// preferred. `seniority` ranks by join slot; `configured` by authority list
 /// order; `combined` filters by the authority list and orders within it by
 /// `tiebreak`. When neither member is an authority (or the tiebreak ties),
-/// the ranking falls back to seniority — the `fallback = seniority`
-/// degradation; under `stall` a partition cannot produce two leaders, so the
-/// merge rule never needs the no-authority case.
+/// the ordering degrades to seniority — compareRank ranks and never
+/// refuses: the `fallback` setting gates `leader`'s election, not this
+/// ranking, so the merge rule (epoch.survivor) reaches the degradation
+/// whenever a branch's leader is not on the list.
 pub fn compareRank(inputs: Inputs, a: View, b: View) std.math.Order {
     // seniority ignores the authority list, exactly as `leader` does — the
     // merge survivor must use the same ranking election uses.

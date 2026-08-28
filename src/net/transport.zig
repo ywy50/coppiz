@@ -116,9 +116,8 @@ pub const TcpConn = struct {
 
     fn sendFrame(ctx: *anyopaque, io: std.Io, body: []const u8) !void {
         const self: *TcpConn = @ptrCast(@alignCast(ctx));
-        // Sized past the common sync/read page so a page coalesces into one
-        // write (the old 4 KiB buffer spilled multi-write per page); a
-        // single frame's stack use is short-lived.
+        // Keeps page-sized frames (sync/read) to a few large sends rather
+        // than many small ones. A single frame's stack use is short-lived.
         var buf: [64 * 1024]u8 = undefined;
         var writer = self.stream.writer(io, &buf);
         try framing.writeFrame(&writer.interface, body);
