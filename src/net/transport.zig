@@ -256,6 +256,24 @@ pub const Direction = struct {
         self.sem.post(io);
     }
 
+    /// Pushes a header immediately followed by a body as one chunk: one
+    /// lock, one copy, one sem post, where two `push` calls would each pay
+    /// all three. The reader already handles a combined chunk (a partial
+    /// `readInto` re-bases the remainder).
+    pub fn pushFramed(self: *Direction, io: std.Io, header: []const u8, body: []const u8) void {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        if (self.closed) return;
+        const copy = self.allocator.alloc(u8, header.len + body.len) catch return;
+        @memcpy(copy[0..header.len], header);
+        @memcpy(copy[header.len..], body);
+        self.chunks.append(self.allocator, copy) catch {
+            self.allocator.free(copy);
+            return;
+        };
+        self.sem.post(io);
+    }
+
     pub fn close(self: *Direction, io: std.Io) void {
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
@@ -353,8 +371,7 @@ pub const PipeConn = struct {
         if (body.len > framing.max_body_bytes) return error.OversizedFrame;
         var header: [framing.len_bytes]u8 = undefined;
         std.mem.writeInt(u32, &header, @intCast(body.len), .little);
-        self.out.push(io, &header);
-        self.out.push(io, body);
+        self.out.pushFramed(io, &header, body);
     }
 
     fn shutdownFn(ctx: *anyopaque, io: std.Io) void {

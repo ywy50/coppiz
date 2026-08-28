@@ -250,6 +250,35 @@ pub const Store = struct {
         if (self.fsync == .every) try head.file.sync(self.io);
     }
 
+    /// Appends a pre-encoded record (len | crc | slot | entry) verbatim:
+    /// the bytes a peer sent over the wire are already the store's on-disk
+    /// format, so replicating them skips a re-encode and its CRC per slot.
+    /// `position` must be the record's own slot position — the index keys on
+    /// it. The record's length prefix must agree with the slice length.
+    pub fn appendRecord(
+        self: *Store,
+        journal_id: [16]u8,
+        position: slot.Position,
+        record: []const u8,
+    ) !void {
+        const jd = self.journals.get(journal_id) orelse return error.UnknownJournal;
+        if (record.len < segment.record_prefix_len) return error.BadRecord;
+        const size = segment.record_prefix_len + std.mem.readInt(u32, record[0..4], .little);
+        if (size != record.len) return error.BadRecord;
+        if (jd.head_records_len >= self.seal_threshold) try self.sealHead(jd);
+
+        const head = &jd.segments.items[jd.segments.items.len - 1];
+        const offset = segment.header_len + jd.head_records_len;
+        try head.file.writePositionalAll(self.io, record, offset);
+        try jd.index.put(position, .{
+            .segment = jd.segments.items.len - 1,
+            .offset = offset,
+        });
+        jd.head_records_len += size;
+        head.records_len = jd.head_records_len;
+        if (self.fsync == .every) try head.file.sync(self.io);
+    }
+
     /// Seals the head segment (recorded hash) and opens the next one.
     fn sealHead(self: *Store, jd: *JournalDir) !void {
         const head = &jd.segments.items[jd.segments.items.len - 1];

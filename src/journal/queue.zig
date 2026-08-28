@@ -156,33 +156,37 @@ pub const Queue = struct {
 
     /// Removes one queued entry by its journal and id — its slot landed. A
     /// missing entry is a no-op (already trimmed). The queue file is
-    /// rewritten without it; record bytes are re-encoded identically.
+    /// rewritten without it; kept records are copied verbatim from the on-disk
+    /// bytes (the decode→re-encode round-trip produced identical bytes and
+    /// was pure CPU on the cluster write path, where one slot lands per
+    /// forwarded entry).
     pub fn remove(self: *Queue, journal_id: [16]u8, id: entry.Id) !void {
-        const Ctx = struct {
-            allocator: std.mem.Allocator,
-            list: *std.ArrayListUnmanaged(u8),
-            journal_id: [16]u8,
-            id: entry.Id,
-        };
+        const len = try self.file.length(self.io);
+        const records_len = len - header_len;
+        const records = try self.allocator.alloc(u8, @intCast(records_len));
+        defer self.allocator.free(records);
+        const m = try self.file.readPositionalAll(self.io, records, header_len);
+        if (m != records.len) return error.Truncated;
         var kept = std.ArrayListUnmanaged(u8).empty;
         defer kept.deinit(self.allocator);
-        var ctx = Ctx{
-            .allocator = self.allocator,
-            .list = &kept,
-            .journal_id = journal_id,
-            .id = id,
-        };
-        try self.scan(&ctx, struct {
-            fn cb(c: *Ctx, en: *const entry.Entry) anyerror!void {
-                if (std.mem.eql(u8, &en.journal, &c.journal_id) and
-                    std.mem.eql(u8, &en.author, &c.id.author) and
-                    en.author_seq == c.id.author_seq) return;
-                const buf = try c.allocator.alloc(u8, recordSize(en));
-                defer c.allocator.free(buf);
-                encodeRecord(en, buf);
-                try c.list.appendSlice(c.allocator, buf);
+        var off: usize = 0;
+        while (off < records.len) {
+            const rec_len = try scanRecord(records[off..]);
+            const body = records[off + record_prefix_len .. off + rec_len];
+            // The match key comes from a header-only decode (it borrows the
+            // payload — no allocation), which also keeps the old scan's
+            // magic/version/kind refusal semantics. Kept records are copied
+            // as raw spans: the on-disk bytes are already exactly what the
+            // old decode→re-encode round-trip produced.
+            var en = try entry.decode(body);
+            const matches = std.mem.eql(u8, &en.journal, &journal_id) and
+                std.mem.eql(u8, &en.author, &id.author) and
+                en.author_seq == id.author_seq;
+            if (!matches) {
+                try kept.appendSlice(self.allocator, records[off .. off + rec_len]);
             }
-        }.cb);
+            off += rec_len;
+        }
         if (kept.items.len == @as(usize, @intCast(self.queued_bytes))) return; // nothing to trim
         try self.file.writePositionalAll(self.io, kept.items, header_len);
         try self.file.setLength(self.io, header_len + kept.items.len);

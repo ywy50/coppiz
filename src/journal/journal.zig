@@ -539,6 +539,7 @@ pub const Node = struct {
         sl: *const slot.Slot,
         en: *const entry.Entry,
         reslotted: bool,
+        record: ?[]const u8,
     ) !void {
         // A member with no chain yet folds its first record — the genesis —
         // into the control fold, which adopts the founder's journal id; a
@@ -591,7 +592,16 @@ pub const Node = struct {
                 );
             }
         }
-        try self.store.append(journal_id, sl, en);
+        // The store write uses the wire's own record bytes when the caller
+        // has them (a broadcast slot or a sync page carries the exact
+        // on-disk form): appending them verbatim skips a re-encode and its
+        // CRC. The local paths (leader authoring, open-time folds) pass null
+        // and encode as before.
+        if (record) |raw| {
+            try self.store.appendRecord(journal_id, sl.position(), raw);
+        } else {
+            try self.store.append(journal_id, sl, en);
+        }
         if (std.mem.eql(u8, &en.author, &self.member_id)) {
             self.queue.remove(journal_id, en.id()) catch {};
         }
@@ -1569,7 +1579,7 @@ test "applyReplicated replays another member's whole store onto a fresh member" 
         journal_id: [16]u8,
         fn cb(r: *@This(), sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
             const e = en orelse return; // compacted records have no entry (OQ 43)
-            try r.target.applyReplicated(r.journal_id, sl, e, false);
+            try r.target.applyReplicated(r.journal_id, sl, e, false, null);
         }
     };
     var control_replay = Replay{ .target = b, .journal_id = a.control.journal_id };
