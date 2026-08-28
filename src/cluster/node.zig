@@ -841,7 +841,7 @@ pub const ClusterNode = struct {
             // the election — that window is exactly when a spurious
             // self-election would happen. The check runs for conn-less
             // members too, so a member whose conn died still gets suspected.
-            if (ms.last_heard_ms != 0 and now - ms.last_heard_ms >= suspect_after) {
+            if (ms.last_heard_ms != 0 and now -| ms.last_heard_ms >= suspect_after) {
                 if (ms.conn_id) |cid| self.closeConn(cid);
                 ms.conn_id = null;
                 ms.state = .lost;
@@ -866,7 +866,7 @@ pub const ClusterNode = struct {
             while (kit.next()) |id| {
                 const ms = self.members.get(id.*) orelse continue;
                 if (ms.state == .lost and ms.last_heard_ms != 0 and
-                    now - ms.last_heard_ms >= evict_after)
+                    now -| ms.last_heard_ms >= evict_after)
                 {
                     try targets.append(self.allocator, id.*);
                 }
@@ -1277,11 +1277,7 @@ pub const ClusterNode = struct {
         }
         // The node's own operator channel (the CLI client dials with this
         // node's key): admit without a join, and never as a member peer.
-        if (std.mem.eql(u8, &h.member_id, &self.node.member_id) and
-            std.mem.eql(u8, &h.public_key, &self.node.keypair.public_key.toBytes()))
-        {
-            return self.ackFor(true, .none);
-        }
+        if (self.isSelfClient(h)) return self.ackFor(true, .none);
         const my_genesis = self.node.group_hash;
         const have_chain = !std.mem.eql(u8, &my_genesis, &([_]u8{0} ** 32));
         const cluster_mismatch = have_chain and
@@ -1436,26 +1432,32 @@ pub const ClusterNode = struct {
             refuse(self, a.completion, "unknown_journal");
             return;
         };
-        const max_bytes = self.settingU64("journal.max_entry_bytes", 16 * 1024 * 1024);
+        // The bound is the target journal's own setting (PRD 0004), the same
+        // fold the wire append path reads — not the control journal's.
+        const fold = self.foldFor(jid) orelse {
+            refuse(self, a.completion, "unknown_journal");
+            return;
+        };
+        const max_bytes = fold.settings.getU64(schema.keyIndex("journal.max_entry_bytes").?);
         if (a.payload.len > max_bytes) {
             refuse(self, a.completion, "too_large");
             return;
         }
-        const en = self.signedEntry(.data, jid, a.payload, a.ttl_ms) catch {
-            refuse(self, a.completion, "internal");
+        const en = self.signedEntry(.data, jid, a.payload, a.ttl_ms) catch |err| {
+            refuse(self, a.completion, clientRefusalName(err));
             return;
         };
-        self.node.queue.append(&en) catch {
-            refuse(self, a.completion, "queue_full");
+        self.node.queue.append(&en) catch |err| {
+            refuse(self, a.completion, clientRefusalName(err));
             return;
         };
-        self.noteBuilt(jid, en.author_seq) catch {
-            refuse(self, a.completion, "internal");
+        self.noteBuilt(jid, en.author_seq) catch |err| {
+            refuse(self, a.completion, clientRefusalName(err));
             return;
         };
         if (self.isLeader()) {
-            _ = self.slotAndBroadcast(&en, false) catch {
-                refuse(self, a.completion, "internal");
+            _ = self.slotAndBroadcast(&en, false) catch |err| {
+                refuse(self, a.completion, clientRefusalName(err));
                 return;
             };
             completeLocal(a.completion, self.io, en.id(), "");

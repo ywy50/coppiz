@@ -431,24 +431,11 @@ pub const Node = struct {
         through: slot.Position,
         now: i64,
     ) ![]const entry.Id {
-        var candidates = std.ArrayListUnmanaged(expiry.SlottedEntry).empty;
-        defer candidates.deinit(self.allocator);
-        var it = fold.entries.iterator();
-        while (it.next()) |kv| {
-            const info = kv.value_ptr.*;
-            try candidates.append(self.allocator, .{
-                .id = kv.key_ptr.*,
-                .position = info.position,
-                .slot_ts_ms = info.slot_ts_ms,
-                .expires_at = info.expires_at_ms,
-                .ttl_action = info.ttl_action,
-                .stale_marked = info.stale_marked,
-                .stale_position = info.stale_position,
-            });
-        }
+        const candidates = try fold.expiryCandidates(self.allocator);
+        defer self.allocator.free(candidates);
         const set = try expiry.removalSet(
             self.allocator,
-            candidates.items,
+            candidates,
             through,
             @intCast(now),
             &fold.settings,
