@@ -90,11 +90,12 @@ fn hexNibble(c: u8) ?u8 {
     return switch (c) {
         '0'...'9' => c - '0',
         'a'...'f' => c - 'a' + 10,
+        'A'...'F' => c - 'A' + 10,
         else => null,
     };
 }
 
-/// Whether `text` is the lowercase hex of `id`.
+/// Whether `text` is the hex of `id` (either letter case).
 pub fn isHexId(text: []const u8, id: [16]u8) bool {
     if (text.len != 32) return false;
     var i: usize = 0;

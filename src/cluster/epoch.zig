@@ -75,11 +75,12 @@ pub fn encodeEpochPayload(payload: EpochPayload, buf: *[epoch_payload_len]u8) vo
 pub fn decodeEpochPayload(bytes: []const u8) error{ InvalidLength, InvalidReason }!EpochPayload {
     if (bytes.len != epoch_payload_len) return error.InvalidLength;
     const reason_int = std.mem.readInt(u16, bytes[8..10], .little);
-    const reason: Reason = if (reason_int < @intFromEnum(Reason.leader_lost) or
+    if (reason_int < @intFromEnum(Reason.leader_lost) or
         reason_int > @intFromEnum(Reason.manual))
-        return error.InvalidReason
-    else
-        @enumFromInt(reason_int);
+    {
+        return error.InvalidReason;
+    }
+    const reason: Reason = @enumFromInt(reason_int);
     return .{
         .number = std.mem.readInt(u64, bytes[0..8], .little),
         .reason = reason,

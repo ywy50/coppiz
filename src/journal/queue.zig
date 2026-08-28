@@ -1,5 +1,5 @@
-//! The unslotted queue: a member's durable list of entries it authored or
-//! received that have no slot yet (PRD 0001 *Write path*).
+//! The unslotted queue: a member's durable list of locally authored entries
+//! that have no slot yet (PRD 0001 *Write path*).
 //!
 //! An append writes the entry to this file first (durably, so a crash does
 //! not lose an acknowledged-as-accepted write), forwards it to the leader,
