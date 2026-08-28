@@ -339,6 +339,7 @@ pub const PipeConn = struct {
 
     fn sendFrame(ctx: *anyopaque, io: std.Io, body: []const u8) !void {
         const self: *PipeConn = @ptrCast(@alignCast(ctx));
+        if (body.len > framing.max_body_bytes) return error.OversizedFrame;
         var header: [framing.len_bytes]u8 = undefined;
         std.mem.writeInt(u32, &header, @intCast(body.len), .little);
         self.out.push(io, &header);
@@ -672,6 +673,25 @@ test "a dropped edge refuses dials and ends live connections" {
     defer test_alloc.free(reply2);
     try std.testing.expectEqualStrings("pong", reply2);
     try group2.await(tio);
+}
+
+test "hub send refuses an oversized frame" {
+    var hub = Hub.init(test_alloc);
+    defer hub.deinit();
+    var listener = try hub.listen(test_alloc, "node-a");
+    defer listener.close(tio);
+    var dialer = try hub.dialer(test_alloc, "node-b");
+    defer dialer.deinit();
+
+    var group: std.Io.Group = .init;
+    group.async(tio, acceptAndClose, .{&listener});
+    var conn = try dialer.connect(tio, test_alloc, "node-a");
+    defer conn.close(tio);
+    try group.await(tio);
+    const too_big = try test_alloc.alloc(u8, framing.max_body_bytes + 1);
+    defer test_alloc.free(too_big);
+    @memset(too_big, 0);
+    try std.testing.expectError(error.OversizedFrame, conn.send(tio, too_big));
 }
 
 test "pipe reader returns EndOfStream when the peer closes" {

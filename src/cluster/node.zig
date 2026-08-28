@@ -52,8 +52,10 @@ const Event = union(enum) {
     /// The timer fired: periodic work (heartbeats, suspects, election,
     /// backfill, redials).
     tick,
-    /// An accepted or dialed connection, pre-hello.
-    conn_ready: net.transport.Conn,
+    /// An accepted or dialed connection, pre-hello. `outbound` is set for
+    /// connections this member dialed (they expect `hello_ack`); inbound
+    /// accepts expect `hello`.
+    conn_ready: struct { conn: net.transport.Conn, outbound: bool },
     /// One frame from a connection's reader task; `body` is owned by the
     /// loop and freed after dispatch.
     frame: Frame,
@@ -104,6 +106,8 @@ const Mailbox = struct {
 const MemberState = struct {
     /// The address to dial (owned).
     address: []const u8,
+    /// The public key last bound to this id (zeros until hello or fold).
+    public_key: [32]u8 = [_]u8{0} ** 32,
     /// The live connection's id, when connected.
     conn_id: ?u64 = null,
     /// Liveness as this member sees the peer (election.State).
@@ -117,11 +121,18 @@ const MemberState = struct {
     backoff_ms: u64 = 250,
 };
 
+/// How a live connection was authenticated. Operator and replication
+/// messages are refused until hello completes.
+const ConnRole = enum { unknown, operator, member };
+
 /// One live connection: a member peer, a CLI client, or a pre-hello
 /// connection. `member_id` is set when the hello identifies the peer.
 const ConnState = struct {
     conn: net.transport.Conn,
     member_id: ?[16]u8 = null,
+    role: ConnRole = .unknown,
+    /// True when this member dialed; only then is `hello_ack` accepted.
+    outbound: bool = false,
     /// The reader has been shut down and its peer-gone notice will destroy
     /// the conn; no further sends.
     closing: bool = false,
@@ -285,6 +296,7 @@ pub const ClusterNode = struct {
         for (self.node.control.members.items) |member| {
             if (std.mem.eql(u8, &member.id, &self.node.member_id)) continue;
             if (self.members.getPtr(member.id)) |ms| {
+                ms.public_key = member.public_key;
                 // The runtime address (learned from the peer's hello) wins;
                 // the fold's address is authoritative only when it names
                 // something — the founder's genesis records none.
@@ -296,6 +308,7 @@ pub const ClusterNode = struct {
             } else {
                 try self.members.put(self.allocator, member.id, .{
                     .address = try self.allocator.dupe(u8, member.address),
+                    .public_key = member.public_key,
                 });
             }
         }
@@ -379,7 +392,10 @@ pub const ClusterNode = struct {
             switch (ev) {
                 .stop => return,
                 .tick => self.onTick() catch self.fatal(),
-                .conn_ready => |conn| self.onConnReady(conn) catch self.fatal(),
+                .conn_ready => |ready| self.onConnReady(
+                    ready.conn,
+                    ready.outbound,
+                ) catch self.fatal(),
                 .frame => |f| {
                     self.onFrame(f.conn_id, f.body) catch {};
                     self.allocator.free(f.body);
@@ -443,7 +459,7 @@ pub const ClusterNode = struct {
     fn acceptMain(self: *ClusterNode, listener: *net.transport.Listener) error{Canceled}!void {
         while (true) {
             const conn = listener.accept(self.io) catch return;
-            self.mailbox.post(self.io, .{ .conn_ready = conn });
+            self.mailbox.post(self.io, .{ .conn_ready = .{ .conn = conn, .outbound = false } });
         }
     }
 
@@ -462,7 +478,7 @@ pub const ClusterNode = struct {
             return;
         };
         self.allocator.free(hello);
-        self.mailbox.post(self.io, .{ .conn_ready = conn });
+        self.mailbox.post(self.io, .{ .conn_ready = .{ .conn = conn, .outbound = true } });
     }
 
     fn readerMain(self: *ClusterNode, conn_id: u64) error{Canceled}!void {
@@ -478,10 +494,10 @@ pub const ClusterNode = struct {
 
     // -- events --------------------------------------------------------------
 
-    fn onConnReady(self: *ClusterNode, conn: net.transport.Conn) !void {
+    fn onConnReady(self: *ClusterNode, conn: net.transport.Conn, outbound: bool) !void {
         const conn_id = self.next_conn_id;
         self.next_conn_id += 1;
-        try self.conns.put(self.allocator, conn_id, .{ .conn = conn });
+        try self.conns.put(self.allocator, conn_id, .{ .conn = conn, .outbound = outbound });
         self.group.async(self.io, readerMain, .{ self, conn_id });
     }
 
@@ -533,6 +549,11 @@ pub const ClusterNode = struct {
             self.closeConn(conn_id);
             return;
         };
+        const cs = self.conns.get(conn_id) orelse return;
+        if (!frameAllowed(cs.role, cs.outbound, msg.kind())) {
+            self.closeConn(conn_id);
+            return;
+        }
         switch (msg) {
             .hello => |h| try self.onHello(conn_id, h),
             .hello_ack => |a| try self.onHelloAck(conn_id, a),
@@ -549,6 +570,20 @@ pub const ClusterNode = struct {
             .merge_ack => self.onMergeAck(conn_id) catch {},
             .ack => {},
         }
+    }
+
+    /// Operator messages need the node's own hello; replication messages
+    /// need a member hello. `hello_ack` is only the reply to an outbound
+    /// dial — an inbound one is how a stranger would steal a member id.
+    fn frameAllowed(role: ConnRole, outbound: bool, kind: message.Kind) bool {
+        return switch (kind) {
+            .hello => true,
+            .hello_ack => outbound,
+            .append, .read_req, .settings => role == .operator,
+            .forward, .slot, .sync_req, .sync_page, .heartbeat => role == .member,
+            .merge_offer, .merge_ack => role == .member,
+            .ack, .read_page => true,
+        };
     }
 
     fn onTick(self: *ClusterNode) !void {
@@ -767,6 +802,15 @@ pub const ClusterNode = struct {
         cs.conn.shutdown(self.io);
     }
 
+    /// True when `address` can be written as one `pending.admit` line: no
+    /// NUL/CR/LF that would inject extra records.
+    fn addressSafe(address: []const u8) bool {
+        for (address) |c| {
+            if (c == 0 or c == '\n' or c == '\r') return false;
+        }
+        return true;
+    }
+
     /// Closes a duplicate connection without touching the member's state;
     /// the reader's peer-gone notice destroys it.
     fn closeDupConn(self: *ClusterNode, conn_id: u64) void {
@@ -840,12 +884,18 @@ pub const ClusterNode = struct {
         try self.sendMessage(conn_id, .{ .hello_ack = ack });
         if (self.conns.getPtr(conn_id)) |cs| {
             // The node's own operator channel is not a member peer.
-            if (!is_self_client) cs.member_id = h.member_id;
+            if (is_self_client) {
+                cs.role = .operator;
+            } else {
+                cs.member_id = h.member_id;
+                cs.role = .member;
+            }
         }
         if (is_self_client) return;
 
         if (self.members.getPtr(h.member_id)) |ms| {
             ms.conn_id = conn_id;
+            ms.public_key = h.public_key;
             const updated = try self.allocator.dupe(u8, h.address);
             self.allocator.free(ms.address);
             ms.address = updated;
@@ -855,6 +905,7 @@ pub const ClusterNode = struct {
             // A newcomer: the admitter appends its join, then it backfills.
             try self.members.put(self.allocator, h.member_id, .{
                 .address = try self.allocator.dupe(u8, h.address),
+                .public_key = h.public_key,
                 .conn_id = conn_id,
                 .last_heard_ms = self.nowMs(),
                 .state = .member,
@@ -865,6 +916,12 @@ pub const ClusterNode = struct {
 
     /// The admission verdict for a hello: cluster match, then the mode.
     fn admission(self: *ClusterNode, h: message.Hello) message.HelloAck {
+        // The id is derived from the key (PRD 0003 *Identity*); a hello that
+        // names someone else's id with a different key is refused.
+        const derived = chain.deriveMemberId(h.public_key);
+        if (!std.mem.eql(u8, &h.member_id, &derived)) {
+            return self.ackFor(false, .not_allowlisted);
+        }
         // The node's own operator channel (the CLI client dials with this
         // node's key): admit without a join, and never as a member peer.
         if (std.mem.eql(u8, &h.member_id, &self.node.member_id) and
@@ -878,8 +935,20 @@ pub const ClusterNode = struct {
             !std.mem.eql(u8, &h.genesis_hash, &([_]u8{0} ** 32)) and
             !std.mem.eql(u8, &h.genesis_hash, &my_genesis);
         if (cluster_mismatch) return self.ackFor(false, .wrong_genesis);
-        // A member of the fold reconnecting is admitted by the chain itself.
-        if (self.members.contains(h.member_id)) return self.ackFor(true, .none);
+        // A member of the fold reconnecting is admitted by the chain itself,
+        // but only with the key the chain already holds for that id.
+        if (self.node.control.memberById(h.member_id)) |member| {
+            if (!std.mem.eql(u8, &member.public_key, &h.public_key)) {
+                return self.ackFor(false, .not_allowlisted);
+            }
+            return self.ackFor(true, .none);
+        }
+        if (self.members.get(h.member_id)) |ms| {
+            const known = !std.mem.eql(u8, &ms.public_key, &([_]u8{0} ** 32));
+            if (known and std.mem.eql(u8, &ms.public_key, &h.public_key)) {
+                return self.ackFor(true, .none);
+            }
+        }
         const max_members = self.settingU16("cluster.max_members", 32);
         if (self.node.control.memberCount() >= max_members) {
             return self.ackFor(false, .max_members);
@@ -930,6 +999,7 @@ pub const ClusterNode = struct {
     }
 
     fn recordPendingAdmit(self: *ClusterNode, h: message.Hello) !void {
+        if (!addressSafe(h.address)) return;
         const line = try std.fmt.allocPrint(
             self.allocator,
             "{x} {x} {s}\n",
@@ -951,22 +1021,31 @@ pub const ClusterNode = struct {
             self.closeConn(conn_id);
             return;
         }
-        if (self.conns.getPtr(conn_id)) |cs| cs.member_id = a.member_id;
+        if (self.conns.getPtr(conn_id)) |cs| {
+            cs.member_id = a.member_id;
+            cs.role = .member;
+        }
         if (self.members.get(a.member_id)) |ms| {
             if (ms.conn_id != null and ms.conn_id.? != conn_id) {
                 self.closeDupConn(ms.conn_id.?);
             }
         }
+        const known_key = if (self.node.control.memberById(a.member_id)) |m|
+            m.public_key
+        else
+            [_]u8{0} ** 32;
         if (self.members.getPtr(a.member_id)) |ms| {
             const updated = try self.allocator.dupe(u8, a.address);
             self.allocator.free(ms.address);
             ms.address = updated;
+            if (!std.mem.eql(u8, &known_key, &([_]u8{0} ** 32))) ms.public_key = known_key;
             ms.conn_id = conn_id;
             ms.last_heard_ms = self.nowMs();
             ms.state = .member;
         } else {
             try self.members.put(self.allocator, a.member_id, .{
                 .address = try self.allocator.dupe(u8, a.address),
+                .public_key = known_key,
                 .conn_id = conn_id,
                 .last_heard_ms = self.nowMs(),
                 .state = .member,
@@ -1221,7 +1300,9 @@ pub const ClusterNode = struct {
     }
 
     fn onHeartbeat(self: *ClusterNode, conn_id: u64, hb: message.Heartbeat) !void {
-        _ = conn_id;
+        const cs = self.conns.get(conn_id) orelse return;
+        const expected = cs.member_id orelse return;
+        if (!std.mem.eql(u8, &hb.member_id, &expected)) return;
         const ms = self.members.getPtr(hb.member_id) orelse return;
         ms.last_heard_ms = self.nowMs();
         ms.head = hb.head;
@@ -1248,7 +1329,7 @@ pub const ClusterNode = struct {
         self.sendMessage(conn_id, .{ .sync_req = .{
             .journal_id = journal_id,
             .from = from,
-            .max_bytes = provisional_page_bytes,
+            .max_bytes = @min(provisional_page_bytes, net.framing.max_body_bytes),
         } }) catch {
             // The conn died mid-request; the failure detector will redial.
             self.sync_in_flight = false;
@@ -1290,7 +1371,7 @@ pub const ClusterNode = struct {
             .records = &records,
             .next = r.from,
             .bytes = 0,
-            .max_bytes = r.max_bytes,
+            .max_bytes = @min(r.max_bytes, net.framing.max_body_bytes),
         };
         self.node.store.scan(journal_id, &ctx, struct {
             fn cb(c: *Ctx, sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
@@ -1797,7 +1878,7 @@ pub const ClusterNode = struct {
             .next = .{ .epoch = 0, .seq = 0 },
             .bytes = 0,
             .stopped = false,
-            .max_bytes = r.max_bytes,
+            .max_bytes = @min(r.max_bytes, net.framing.max_body_bytes),
         };
         self.node.readRange(jid, from, null, r.include_stale, r.include_expired, &ctx, struct {
             fn cb(c: *Ctx, sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
@@ -2005,6 +2086,104 @@ test "the loop serves a wire client over the hub: hello, append, read" {
     }.cb);
     try std.testing.expectEqual(@as(usize, 1), seen.items.len);
     try std.testing.expectEqualStrings("hello", seen.items[0]);
+}
+
+test "append without hello is dropped and does not write" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(tio, "data", .default_dir) catch {};
+    {
+        const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, tio, data_dir, &.{}, "main", &journal.wallClock);
+    }
+    const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit();
+    const listener = try hub.listen(test_alloc, "node-a");
+    const dialer = try hub.dialer(test_alloc, "node-a");
+
+    var node = try journal.Node.open(test_alloc, tio, data_dir, .{ .replay_forward = true });
+    defer node.deinit();
+    var cn = try ClusterNode.init(test_alloc, tio, node, .{
+        .transport = dialer,
+        .listener = listener,
+        .address = "node-a",
+        .allowlist = &.{},
+    });
+    defer {
+        cn.stop();
+        cn.waitForStop();
+        cn.deinit();
+        listener.close(tio);
+        dialer.deinit();
+    }
+    cn.start();
+
+    var conn = try dialer.connect(tio, test_alloc, "node-a");
+    defer conn.close(tio);
+    const m = message.Message{ .append = .{
+        .journal = "main",
+        .payload = "unauthenticated",
+        .ttl_ms = 0,
+    } };
+    const buf = try test_alloc.alloc(u8, message.encodedLen(m));
+    defer test_alloc.free(buf);
+    message.encode(m, buf);
+    try conn.send(tio, buf);
+    try std.testing.expectError(error.EndOfStream, conn.recv(tio, test_alloc));
+
+    const jid = node.journalIdByName("main").?;
+    try std.testing.expectEqual(@as(usize, 0), node.journals.get(jid).?.fold.entries.count());
+}
+
+test "hello whose member id does not derive from the key is refused" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(tio, "data", .default_dir) catch {};
+    {
+        const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, tio, data_dir, &.{}, "main", &journal.wallClock);
+    }
+    const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit();
+    const listener = try hub.listen(test_alloc, "node-a");
+    const dialer = try hub.dialer(test_alloc, "node-a");
+
+    var node = try journal.Node.open(test_alloc, tio, data_dir, .{ .replay_forward = true });
+    defer node.deinit();
+    var cn = try ClusterNode.init(test_alloc, tio, node, .{
+        .transport = dialer,
+        .listener = listener,
+        .address = "node-a",
+        .allowlist = &.{},
+    });
+    defer {
+        cn.stop();
+        cn.waitForStop();
+        cn.deinit();
+        listener.close(tio);
+        dialer.deinit();
+    }
+    cn.start();
+
+    var spoofed_id = node.member_id;
+    spoofed_id[0] ^= 0xff;
+    var client = try net.client.Client.connectTransport(
+        test_alloc,
+        tio,
+        dialer,
+        "node-a",
+        spoofed_id,
+        node.keypair.public_key.toBytes(),
+        [_]u8{0} ** 32,
+        "",
+    );
+    defer client.deinit();
+    const ack = try client.helloAck();
+    try std.testing.expect(!ack.admitted);
 }
 
 test "e2e (b): partition a 2-member seniority cluster, write on both sides, heal, merge" {

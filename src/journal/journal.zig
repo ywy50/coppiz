@@ -835,6 +835,10 @@ fn loadMemberKey(
     return loadMemberKeyPublic(allocator, io, data_dir);
 }
 
+/// Owner-only mode for `member.key`. `default_file` is 0o666 masked by
+/// umask, which would leave the secret group- and world-readable.
+const member_key_perm: std.Io.File.Permissions = .fromMode(0o600);
+
 /// Writes a fresh member key to `member.key`. Used by `init`.
 pub fn writeMemberKey(
     _: std.mem.Allocator,
@@ -845,11 +849,13 @@ pub fn writeMemberKey(
     const file = data_dir.createFile(io, "member.key", .{
         .read = true,
         .truncate = false,
+        .permissions = member_key_perm,
     }) catch |err| blk: {
         if (err != error.PathAlreadyExists) return err;
         break :blk try data_dir.openFile(io, "member.key", .{ .mode = .read_write });
     };
     defer file.close(io);
+    try file.setPermissions(io, member_key_perm);
     const bytes = keypair.secret_key.toBytes();
     try file.writePositionalAll(io, &bytes, 0);
     try file.sync(io);
@@ -1003,6 +1009,22 @@ const TestEnv = struct {
 
 fn openNode(env: *TestEnv) !*Node {
     return Node.open(test_alloc, tio, try env.dataDir(), .{ .now = &fakeClock });
+}
+
+test "member.key is created owner-readable only" {
+    var env = TestEnv.init();
+    defer env.deinit();
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    const file = try env.tmp.dir.openFile(tio, "data/member.key", .{});
+    defer file.close(tio);
+    const st = try file.stat(tio);
+    try std.testing.expectEqual(
+        @as(std.posix.mode_t, 0o600),
+        st.permissions.toMode() & 0o777,
+    );
 }
 
 test "init, append, read, head, reopen (the single-member journal)" {

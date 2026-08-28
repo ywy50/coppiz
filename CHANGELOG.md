@@ -5,6 +5,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- The cluster loop refuses operator and replication messages until hello
+  completes, binds a hello's member id to the claimed public key (and to
+  the key the chain already holds on reconnect), and ignores a heartbeat
+  whose member id is not this connection's. `pending.admit` drops addresses
+  that contain NUL, CR, or LF. Sync and read pages are capped at the frame
+  body bound.
+- `member.key` is created with owner-only permissions (0600).
+- Hub frame sends refuse an oversized body the same way TCP framing does.
+
 ### Added
 
 - The replication wire (PRD 0003 phase 4, [OQ
