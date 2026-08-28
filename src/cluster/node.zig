@@ -528,6 +528,9 @@ pub const ClusterNode = struct {
     /// locally when this member is the leader (a crash or failover may
     /// have left them queued; already-slotted ids are trimmed).
     fn reforwardQueue(self: *ClusterNode) !void {
+        // The common reconnect case is an empty queue; a scan reads the whole
+        // file, so skip it entirely then.
+        if (self.node.queue.queued_bytes == 0) return;
         const Ctx = struct {
             self: *ClusterNode,
             pending: *std.ArrayListUnmanaged(entry.Entry),
@@ -1642,7 +1645,7 @@ pub const ClusterNode = struct {
         const fold = self.foldFor(en.journal) orelse return error.UnknownJournal;
         const sl = try self.node.slotFor(fold, en);
         const prev_head = self.node.control.head;
-        try self.node.applyReplicated(en.journal, &sl, en, reslotted);
+        try self.node.applyReplicated(en.journal, &sl, en, reslotted, null);
         if (en.kind == .epoch) {
             if (self.node.control.epoch) |ep| {
                 if (sl.epoch > ep.number) {
@@ -1707,7 +1710,7 @@ pub const ClusterNode = struct {
         };
         sl.signature = (try slot.sign(self.node.keypair, &sl)).toBytes();
         const prev_head = self.node.control.head;
-        try self.node.applyReplicated(fold.journal_id, &sl, &en, false);
+        try self.node.applyReplicated(fold.journal_id, &sl, &en, false, null);
         self.branch_start = sl.position();
         self.common_tail = prev_head;
         self.broadcastToMembers(.{ .slot = .{
@@ -1728,10 +1731,18 @@ pub const ClusterNode = struct {
             // once a leader exists.
             return;
         };
-        const buf = try self.allocator.alloc(u8, entry.header_len + en.payload.len);
-        defer self.allocator.free(buf);
-        try entry.encode(en, buf);
-        try self.sendMessage(lid, .{ .forward = .{ .entry_bytes = buf } });
+        const cs = self.conns.get(lid) orelse return error.NoConn;
+        // One allocation for the whole frame body (version | kind | u32 len |
+        // entry) instead of an entry buffer copied into a second message
+        // buffer.
+        const entry_len = entry.header_len + en.payload.len;
+        const body = try self.allocator.alloc(u8, 2 + 4 + entry_len);
+        defer self.allocator.free(body);
+        body[0] = message.version;
+        body[1] = @intFromEnum(message.Kind.forward);
+        std.mem.writeInt(u32, body[2..6], @intCast(entry_len), .little);
+        try entry.encode(en, body[6..]);
+        try cs.conn.send(self.io, body);
     }
 
     fn leaderConnId(self: *ClusterNode) ?u64 {
@@ -1799,7 +1810,7 @@ pub const ClusterNode = struct {
         var prev_head: ?slot.Position = null;
         if (en.kind == .epoch) prev_head = self.node.control.head;
 
-        self.node.applyReplicated(jid, &m.sl, &en, m.reslotted) catch |err| switch (err) {
+        self.node.applyReplicated(jid, &m.sl, &en, m.reslotted, m.record) catch |err| switch (err) {
             error.BadPrevHash => {
                 // The peer's chain does not chain to mine: a healed
                 // partition, or a missed broadcast. From my own current
@@ -2007,7 +2018,10 @@ pub const ClusterNode = struct {
                 try self.onDivergence(conn_id, payload.leader, rec.slot.epoch);
                 return;
             }
-            self.node.applyReplicated(p.journal_id, &rec.slot, &e, false) catch {
+            // The record bytes the page carried are the exact on-disk form,
+            // so the store appends them verbatim (no re-encode).
+            const raw = p.records[off .. off + rec.next_offset];
+            self.node.applyReplicated(p.journal_id, &rec.slot, &e, false, raw) catch {
                 self.closeConn(conn_id);
                 return;
             };
@@ -2318,7 +2332,7 @@ pub const ClusterNode = struct {
         for (decoded.items) |*d| {
             const en = d.en;
             const sl = try self.reslot(&en, prev_hash, seq);
-            try self.node.applyReplicated(control_id, &sl, &en, true);
+            try self.node.applyReplicated(control_id, &sl, &en, true, null);
             self.broadcastToMembers(.{ .slot = .{
                 .reslotted = true,
                 .record = &.{},
@@ -2355,7 +2369,7 @@ pub const ClusterNode = struct {
                 return error.CorruptMergeBranch;
             const e = rec.entry orelse return error.CorruptMergeBranch;
             const sl = try self.reslot(&e, prev_hash, seq);
-            try self.node.applyReplicated(jid, &sl, &e, false);
+            try self.node.applyReplicated(jid, &sl, &e, false, null);
             self.broadcastToMembers(.{ .slot = .{
                 .reslotted = false,
                 .record = &.{},
