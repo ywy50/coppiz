@@ -8,7 +8,10 @@
 
 ## Status
 
-Open.
+Resolved — the `exe_tests` run step now depends on the coppiz install step
+(`build.zig`, `addChecks`), wired during the test-build speedup work
+(investigation
+[2026-08-28 — making `zig build test` faster without dropping tests](../investigations/2026-08-28-test-suite-quick-wins.md)).
 
 ## Symptom and impact
 
@@ -32,11 +35,28 @@ The run step needs the install step to complete first, but they are siblings. Th
 
 ## Resolution
 
-Not yet fixed. Suggested direction: make the install step a dependency of the run step (e.g. `exe_tests_run.step.dependOn(b.getInstallStep())`, or have `addChecks` wire the install before the run steps). A regression check is the `zig build test` gate itself, run repeatedly.
+Fixed as suggested. `addChecks` now wires an explicit ordering instead of
+siblings:
+
+```zig
+const install_exe = b.addInstallArtifact(exe, .{});
+const exe_tests_run = b.addRunArtifact(exe_tests);
+exe_tests_run.step.dependOn(&install_exe.step);
+test_step.dependOn(&exe_tests_run.step);
+```
+
+The run cannot start before the install step (compile + copy to
+`zig-out/bin/coppiz`) completes. The install is scoped to the coppiz binary
+alone — the suite never spawns the example executables, so they stay off the
+test path (the same change that removed the wasted example compiles).
 
 ## Verification
 
-- Static: dependency-graph structure verified in `build.zig:181-194`; the spawn paths at `main.zig:856, 905` verified.
+`zig build test --summary all`: green (21/21 steps, 242/242 tests, exit 0,
+three consecutive runs). The race was never deterministically reproducible
+(previously blocked by the two compile errors), so verification is
+dependency-graph structure plus the green gate; repeated runs would be the
+regression check.
 
 ## Follow-up
 
@@ -45,4 +65,4 @@ Related test-suite defect: the hardcoded port `17431` (reported separately). Bot
 ## References
 
 - Code: `build.zig:181-194`, `src/main.zig:856, 905`
-- Fix: none
+- Fix: working tree (see the investigation 2026-08-28 test-build speedup; not yet committed)

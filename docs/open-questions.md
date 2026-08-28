@@ -282,6 +282,19 @@ Ordering inside each section is by what blocks implementation first.
     *Blocks:* PRD 0001 phase 3–4 defaults. *Answer from:* measurement, like
     OQ 54.
 
+62. **What makes the cluster e2e spin a core for minutes, intermittently?**
+    Running a test binary directly (not through `zig build test`'s protocol)
+    stuck three times at ~100% CPU for 10+ minutes in three io worker
+    threads — twice at `e2e (G4)` (node.zig:3118) and once at the journal
+    member-key test — while the gate runs stayed green (3/3). The loop,
+    mailbox and hub transport are all semaphore-based (no busy-poll found by
+    reading; stacks could not be captured, ptrace blocked). If a node loop
+    livelocks, the same path could burn a production core. *Answer from:* a
+    repro under a tracer (strace/perf on the spinning threads), or a bisect
+    of the checkpoint/TTL path G4 exercises.
+    *Trigger:* the investigation 2026-08-28 (test-build speedup) — see its
+    resolution.
+
 ## F. Transport and wire
 
 19. **Replication wire: own binary framing or HTTP?** clanker's spike used
