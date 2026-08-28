@@ -82,7 +82,8 @@ runs a node, members join live, appends through a follower replicate to the
 leader and back, and a healed partition merges deterministically. `coppiz
 append`/`read`/`head` talk to a serving node over the wire when the data
 directory is locked ([OQ 47](docs/open-questions.md)); `coppiz status`,
-`coppiz settings set` and `coppiz admit` round out the CLI. The embedded-host
+`coppiz members`, `coppiz doctor`, `coppiz settings set` and `coppiz admit`
+round out the CLI. The embedded-host
 write API (a host calling `node.append` on a follower from its own process)
 is [PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)
 follow-up; the wire is the host interface today. The product is named

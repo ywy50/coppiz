@@ -189,6 +189,18 @@ pub const Client = struct {
         }
     }
 
+    /// The member listing: the node's control fold's members plus its
+    /// epoch and leader view. The reply is arena-owned; it lives until
+    /// `deinit`.
+    pub fn members(self: *Client) !message.MembersPage {
+        try self.send(.members_req);
+        const reply = try self.recvMessage();
+        return switch (reply) {
+            .members_page => |p| p,
+            else => error.ProtocolError,
+        };
+    }
+
     /// A settings change request (the change-list bytes the chain encodes).
     pub fn settings(self: *Client, journal_name: []const u8, changes: []const u8) !message.Ack {
         try self.send(.{ .settings = .{
