@@ -118,8 +118,10 @@ the phases.
    handover. Gate: e2e (a)–(e).
 7. **Embedding and the node binary** — [PRD 0005](prds/0005-embedding-the-library-as-the-product.md):
    the embedded-host write API and the example hosts shipped 2026-08-27
-   (steps 1–3); remaining: loop-routed host reads, `doctor`, G2's
-   standalone pairing, G5/G6.
+   (steps 1–3); `doctor`, the loop-routed host read path
+   (`cluster.ClusterNode.localReadRange`) and G2's sidecar↔binary pairing
+   followed (2026-08-28); remaining: G5 (a thread-count test) and G6 (the
+   clanker branch's gated single-call proof).
 8. **First host integration (clanker)** — PRD 0005 phase 5: a clanker branch
    with `ck_state` over coppiz, one stream replicated between two instances,
    measured against its spike note's three journeys. A second, unrelated

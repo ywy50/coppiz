@@ -1338,3 +1338,73 @@ test "process-level: members and doctor reach a serving node over the wire" {
     try std.testing.expect(std.mem.indexOf(u8, doctor_out, "wire: hello answered") != null);
     try std.testing.expect(std.mem.indexOf(u8, doctor_out, "FAIL") == null);
 }
+
+test "process-level: the sidecar binary pairs with a serving coppiz over TCP (G2)" {
+    // PRD 0005 acceptance criterion G2: the embedded library surface and
+    // the standalone binary surface are one protocol. The embedded half is
+    // the sidecar's own hub test; this is the binary half — a real
+    // `coppiz serve` process and the sidecar executable speaking to it
+    // over loopback TCP, like any host that links the library would.
+    var a = try BinTest.init();
+    defer a.deinit();
+    const addr_a = try testAddr(6);
+    defer test_alloc.free(addr_a);
+    try writeToml(&a, addr_a, &.{}, null);
+    _ = try a.run(&.{ "init", "--dir", a.dir, "--journal", "main" });
+    const pa = try a.spawn(&.{ "serve", "--dir", a.dir });
+    const pa_proc = ServingProc{ .child = pa };
+    defer pa_proc.stop();
+    try waitStatus(&a, "epoch 1");
+
+    // The sidecar binary (installed beside the coppiz binary) dials the
+    // serving node as a wire host, identified by the member key its data
+    // directory holds.
+    var argv = std.ArrayListUnmanaged([]const u8).empty;
+    defer argv.deinit(test_alloc);
+    try argv.append(test_alloc, "zig-out/bin/sidecar");
+    try argv.appendSlice(test_alloc, &.{ "--address", addr_a, "--key-dir", a.dir });
+    var child = try std.process.spawn(tio, .{
+        .argv = argv.items,
+        .stdout = .pipe,
+        .stderr = .pipe,
+        .stdin = .ignore,
+    });
+    // The sidecar reports through `std.debug.print`, which writes to
+    // stderr; both pipes are drained so a talkative child cannot stall.
+    var out = std.ArrayListUnmanaged(u8).empty;
+    defer out.deinit(test_alloc);
+    var err_out = std.ArrayListUnmanaged(u8).empty;
+    defer err_out.deinit(test_alloc);
+    var chunk: [4096]u8 = undefined;
+    while (true) {
+        const n = child.stdout.?.readStreaming(tio, &.{&chunk}) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
+        if (n == 0) break;
+        try out.appendSlice(test_alloc, chunk[0..n]);
+    }
+    while (true) {
+        const n = child.stderr.?.readStreaming(tio, &.{&chunk}) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
+        if (n == 0) break;
+        try err_out.appendSlice(test_alloc, chunk[0..n]);
+    }
+    const term = try child.wait(tio);
+    const code: u8 = switch (term) {
+        .exited => |c| c,
+        else => 1,
+    };
+    try std.testing.expectEqual(@as(u8, 0), code);
+    try std.testing.expect(std.mem.indexOf(u8, err_out.items, "sidecar:") != null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, err_out.items, "coppiz serve over TCP") != null,
+    );
+
+    // The sidecar's append landed in the serving node and reads back.
+    const read_out = try a.run(&.{ "read", "--dir", a.dir, "--journal", "main" });
+    defer test_alloc.free(read_out);
+    try std.testing.expect(std.mem.indexOf(u8, read_out, "via-wire") != null);
+}

@@ -45,6 +45,21 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   node over the wire instead. Exits nonzero when any check fails;
   warnings (a configured listen with no node serving, an empty journal)
   do not.
+- The embedded-host read path (PRD 0005): `cluster.ClusterNode.localReadRange`
+  routes a host's synchronous read through its member's loop — the loop runs
+  the range over its own state (atomic with respect to its own mutations: a
+  merge's truncate-and-re-fold, a checkpoint's compaction) and copies the
+  records, and the host's callback replays the copies on its own thread, so a
+  host thread never touches the folds while the loop runs. A host that wants
+  to stream a large journal page by page still reads through the wire client.
+  `examples/embed-cluster` reads through the loop instead of its operator
+  channel.
+- The sidecar↔binary pairing (PRD 0005 acceptance criterion G2): the
+  `examples/sidecar` host runs against a real `coppiz serve` over TCP
+  (`zig-out/bin/sidecar --address 127.0.0.1:PORT --key-dir DATA`), speaking
+  the same client code it uses for the embedded node — proof that the
+  embedded library surface and the standalone binary surface are one
+  protocol. The pairing is an e2e in the node binary's own tests.
 
 - The embedded-host write path (PRD 0005): `cluster.ClusterNode.localAppend`
   runs a host's append through its member's loop — durable queue, then the
