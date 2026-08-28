@@ -32,4 +32,4 @@ None yet.
 
 ### Investigations
 
-None yet.
+- [2026-08-28 — making `zig build test` faster without dropping tests](investigations/2026-08-28-test-suite-quick-wins.md)
