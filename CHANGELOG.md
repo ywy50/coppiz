@@ -5,6 +5,31 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Reads walk a journal in chain order (slot position), including the
+  control journal named `__cluster__`. A checkpoint no longer removes
+  TTL-reached entries while `ttl.action = mark_stale` and
+  `stale.cleanup = keep`. A live append over the wire honours the
+  journal's `journal.max_entry_bytes`. Epoch and wire decoders refuse a
+  zero reason/kind instead of trapping. Authority hex ids match either
+  letter case. `coppiz admit` skips a truncated `pending.admit` line; a
+  refused wire append flushes the reason to stderr.
+- A fatal error in the cluster loop now stops `coppiz serve` instead of
+  leaving it waiting forever. Failed dials are retried with backoff, a
+  leader drains its unslotted queue, and append/settings failures are
+  acked instead of leaving the client hanging. An indexed record whose CRC
+  fails is `Corrupt`, not silently missing; a `prompt` hello whose
+  `pending.admit` write fails is refused rather than reported as queued.
+- The cluster loop refuses operator and replication messages until hello
+  completes, binds a hello's member id to the claimed public key (and to
+  the key the chain already holds on reconnect), and ignores a heartbeat
+  whose member id is not this connection's. `pending.admit` drops addresses
+  that contain NUL, CR, or LF. Sync and read pages are capped at the frame
+  body bound.
+- `member.key` is created with owner-only permissions (0600).
+- Hub frame sends refuse an oversized body the same way TCP framing does.
+
 ### Added
 
 - `coppiz members` — one line per member of the control fold, in fold
