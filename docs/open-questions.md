@@ -297,7 +297,10 @@ Ordering inside each section is by what blocks implementation first.
     *Status:* still open. Two gdb-launched repro attempts (gdb as the
     parent, which can ptrace its child where attaching is blocked) ran the
     direct binary to completion without the spin; it has not reproduced in
-    ~8 consecutive direct runs since the original 3/3 observation.
+    ~20 consecutive direct runs since the pass-2 busy-spin removal (the
+    original 3/3 was observed with the busy-spins still in). The correlation
+    is consistent with the spin→sleep change having removed the trigger,
+    but no root cause is established.
 
 ## F. Transport and wire
 
