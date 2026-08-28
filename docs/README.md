@@ -92,13 +92,13 @@ ids, chain per journal, self-describing segments, pure validation and
 election, a reserved federation settings scope
 ([PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md)).
 
-**Source layout (planned).** `src/journal/` entry/slot codecs, chain, storage;
-`src/cluster/` membership fold, election, epochs, merge, node loop;
-`src/settings/` schema, validation, fold; `src/net/` framing, heartbeats,
-backfill; `src/config/` local `coppiz.toml` parsing (PRD 0004); `src/cli/`
-the node CLI and `src/api/` the optional service API (PRD 0005);
-`src/root.zig` the library API; `src/main.zig` the node binary;
-`src/federation/` (later) group membership, ownership, routing, parity.
+**Source layout.** `src/journal/` contains entry/slot codecs, the chain, and
+storage; `src/cluster/` contains the membership fold, election, epochs,
+merge, and node loop; `src/settings/` contains schema, validation, and fold;
+`src/net/` contains framing, messages, transports, and the wire client; and
+`src/config/` parses local `coppiz.toml` configuration. `src/root.zig` is the
+library API and `src/main.zig` is the node binary. `src/federation/` remains
+future work for group membership, ownership, routing, and parity.
 Pure logic (codecs, fold, election, merge, expiry) is kept I/O-free so it
 can be unit-tested and driven by a deterministic simulator
 ([OQ 27](open-questions.md)).

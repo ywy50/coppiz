@@ -75,41 +75,17 @@ measurement ([OQ 54](open-questions.md)). Detail: [PRD 0006](prds/0006-scaling-t
 
 ## Planned
 
-In dependency order. Each line names the PRD whose Implementation section has
-the phases.
+The completed journal, settings, cluster, simulator, wire, node-loop, and
+CLI work is listed above. Remaining work, in dependency order:
 
-1. **Journal core, single member** — [PRD 0001](prds/0001-journal-core.md)
-   phases 1–3: codecs, chain validation, segment storage with torn-tail
-   recovery. Gate: acceptance criteria G3–G7 on one member. **Decide RFC
-   0001** (library/service) before PRD 0001 phase 4 (the library API at size
-   1) starts — the deadline RFC 0001's own comment period sets
-   ([RFC 0001](rfcs/0001-library-first-or-service-first.md)); it has a
-   recommendation.
-2. **Settings in the chain** — [PRD 0004](prds/0004-settings.md): schema as
-   code, validation, fold, `docs/configuration.md` generated and pinned.
-3. **TTL and staleness** — [PRD 0002](prds/0002-ttl-and-staleness.md): pure
-   expiry predicates, `stale` and `checkpoint` rules, payload drop. Testable
-   on one member (it is its own leader).
-4. **Decide RFC 0002** (join order) — before the cluster work starts; it has
-   a recommendation.
-5. **Deterministic simulator** — [OQ 27](open-questions.md): seeded
-   multi-node run with partitions, crashes, skew and reorder, over the pure
-   fold/election/merge functions. Placed *before* the node loop so the loop
-   is written to be driven by it. **Shipped 2026-08-27** (`src/sim/sim.zig`)
-   over PRD 0003 phases 1–3.
-6. **Membership and leadership** — [PRD 0003](prds/0003-membership-and-leadership.md):
-   membership fold, election function, epochs and merge (phases 1–3 shipped
-   2026-08-27), then the wire protocol ([OQ 19](open-questions.md)), the node
-   loop (written to be drivable by the simulator), admission, reconfigure
-   handover. Gate: e2e (a)–(e).
-7. **Embedding and the node binary** — [PRD 0005](prds/0005-embedding-the-library-as-the-product.md):
-   public library API, `examples/` (single, cluster, sidecar), the `coppiz`
-   CLI, `doctor`, `status`.
-8. **First host integration (clanker)** — PRD 0005 phase 5: a clanker branch
+1. **Embedding and host examples** — [PRD 0005](prds/0005-embedding-the-library-as-the-product.md):
+   the embedded-host write API and the single-member, cluster, and sidecar
+   examples.
+2. **First host integration (clanker)** — PRD 0005 phase 5: a clanker branch
    with `ck_state` over coppiz, one stream replicated between two instances,
    measured against its spike note's three journeys. A second, unrelated
    host example follows to keep the API general ([OQ 46](open-questions.md)).
-9. **First public release** — reopened claims ([OQ 40](open-questions.md),
+3. **First public release** — reopened claims ([OQ 40](open-questions.md),
    resolved 2026-08-27), CI ([OQ 45]), rolling-upgrade procedure ([OQ 26]),
    backup runbook ([OQ 39]). The licence is Apache-2.0
    ([ADR 0006](adrs/0006-the-library-is-apache-2-0-licensed.md),

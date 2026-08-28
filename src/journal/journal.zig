@@ -1,10 +1,12 @@
-//! The single-member node: the library API at tier 0 (PRD 0001 phase 4).
+//! The journal node: the library API at tier 0 and the state owned by a
+//! cluster member (PRD 0001 phase 4).
 //!
 //! One process is a complete journal and its own leader: `open` folds every
 //! chain from the store, `append` runs the PRD write path (durable
 //! unslotted queue, then slot as leader, then trim), and reads are always
-//! local. The node loop, replication and the leader *election* are PRD
-//! 0003's; here the epoch is 1 and the leader is this member.
+//! local. At that tier the epoch is 1 and the leader is this member. The
+//! cluster node uses the replicated-slot, control-entry, and re-fold seams
+//! below to apply the same journal state after election and replication.
 //!
 //! The clock is injectable (`now`), which is what makes slot-stamping and
 //! read visibility deterministic in tests; the default is the wall clock.

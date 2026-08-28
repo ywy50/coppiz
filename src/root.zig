@@ -1,10 +1,11 @@
 //! coppiz — a replicated, append-only store library.
 //!
-//! Only the package version lives here so far; the journal design itself is
-//! not started. It lives in docs/: start at docs/README.md, then docs/prds/
-//! for what each part is meant to be and docs/open-questions.md for what is
-//! still undecided. This file is also the library's test root: it gives
-//! `zig build test` its library half and claims the module name `coppiz`.
+//! This module exposes the library's journal, cluster, settings, local
+//! configuration, and replication APIs. The design records live in `docs/`:
+//! start at `docs/README.md`, then use `docs/prds/` for intended behavior and
+//! `docs/open-questions.md` for unsettled decisions. This file is also the
+//! library test root: it gives `zig build test` its library half and claims
+//! the module name `coppiz`.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -19,9 +20,8 @@ pub const version: std.SemanticVersion =
             "build.zig.zon version is not semver: '" ++ build_options.version_text ++ "'",
         );
 
-/// The library's public surface: the single-member node and the local
-/// config parser (PRD 0001 phase 4, PRD 0004 phase 4). The settings schema
-/// and the journal primitives are reachable through these modules.
+/// The library's single-member journal API and local configuration parser.
+/// Settings and journal primitives are reachable through these modules.
 pub const journal = @import("journal/journal.zig");
 pub const config = @import("config/local.zig");
 pub const render = @import("settings/render.zig");
