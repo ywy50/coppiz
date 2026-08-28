@@ -8,7 +8,9 @@
 
 ## Status
 
-Open. The arity change is from `51caeb09`; the three 0-arg call sites are from `5dd066ce` ("chore(sec): apply review findings", merged via the 65e review stack).
+Resolved — the three call sites pass the test's `io` (`hub.deinit(tio)`),
+implemented in the test-build speedup work (investigation
+[2026-08-28 — making `zig build test` faster without dropping tests](../investigations/2026-08-28-test-suite-quick-wins.md)).
 
 ## Symptom and impact
 
@@ -45,17 +47,26 @@ Expected: 78+ unit tests run and the gate exits 0. Actual: the compile error abo
 
 ## Resolution
 
-Not yet fixed. Suggested fix: pass the test's `io` at each of the three sites — `defer hub.deinit(tio);` (both `node.zig` tests and the `transport.zig` test have `tio = std.testing.io` in scope). Then `zig build test` must compile and run the full root test root.
+Fixed as suggested: `defer hub.deinit(tio);` at all three sites
+(`src/cluster/node.zig:2486,2535`, `src/net/transport.zig:706`; `tio =
+std.testing.io` is in scope in each test). The signature change itself
+(`51caeb09`, `deinit(self, io)`) is the correct API — the hub closes its
+directions through the io.
 
 ## Verification
 
-Confirmed by reproduction on a clean worktree. The `root.zig` compile step fails with the exact message above; the three locations are the only mismatched call sites (grep for `hub.deinit(` confirms all other sites pass `tio`).
+`zig build test --summary all`: `Build Summary: 21/21 steps succeeded;
+242/242 tests passed`, exit 0 (three consecutive full runs; the two
+root-required compile failures were the other red-suite bug
+[2026-08-28 — `zig build test` is red: the CLI test root uses `std.c.getpid()` without linking libc](2026-08-28-build-test-red-libc-getpid.md)
+plus this one). The `src/root.zig` test root compiles and all 152 library
+tests run, including the cluster e2e suite at node.zig:2399-3553.
 
 ## Follow-up
 
-None — this is a straight arity fix. Prevention: the review stacks that produced `5dd066ce` were merged without a green `zig build test`; consider gating merges on it.
+None — this is a straight arity fix. Prevention: the review stacks that produced `5dd066ce` were merged without a green `zig build test`; the test-build speedup work (the investigation this fix belongs to) makes full runs practical again.
 
 ## References
 
 - Code: `src/net/transport.zig:438` (signature), `src/cluster/node.zig:2486,2535`, `src/net/transport.zig:706` (call sites)
-- Fix: none
+- Fix: working tree (see the investigation 2026-08-28 test-build speedup; not yet committed)

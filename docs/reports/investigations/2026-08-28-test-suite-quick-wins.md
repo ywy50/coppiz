@@ -10,15 +10,22 @@
   process-level tests only ever spawn `zig-out/bin/coppiz`. The rest is
   mostly real wall-clock in the cluster/process e2e tests, which is inherent
   to what they verify.
-- **Resolution:** recommend, not implemented here — each change below is
-  small, local to `build.zig`, and safe to land with a full `zig build test`
-  run as its gate. Marked *unverified* where only a timed run can quantify
-  the saving.
+- **Resolution:** implemented and measured — the test step now installs only
+  the `coppiz` binary; the suite's remaining wall clock is e2e runtime, which
+  the measured profile confirms is inherent to what the tests verify. One
+  follow-up risk (an intermittent CPU spin) is [OQ 62](../../open-questions.md).
 
 ## Status
 
-Resolved — the suite was not benchmarked; the report stands as the audit and
-its ordered recommendations.
+Resolved and implemented — the recommendation below landed with
+measurements; the follow-up findings (runtime profile, e2e wait mechanics,
+an intermittent CPU spin) are recorded in the Resolution section. The suite
+was also red at `main` @ `51caeb0` when the implementation pass started; the
+two compile failures and their fixes are the bug reports
+[2026-08-28 — `zig build test` is red: `Hub.deinit(self, io)` called with no arguments at three test sites](../bugs/2026-08-28-build-test-red-hub-deinit-arity.md)
+and
+[2026-08-28 — `zig build test` is red: the CLI test root uses `std.c.getpid()` without linking libc](../bugs/2026-08-28-build-test-red-libc-getpid.md),
+both now Resolved.
 
 ## Trigger and scope
 
@@ -101,31 +108,83 @@ Nothing else is a clear win without touching what the tests assert.
 
 ## Resolution or handoff
 
-Ordered by expected impact over risk:
+### Recommendation 1 — installed: the test step installs only the coppiz binary
 
-1. **Install only what the suite spawns.** Give the examples an install only
-   for `zig build examples`, and make `test_step` depend on installing the
-   `coppiz` binary alone instead of `b.getInstallStep()` (build.zig:194). The
-   suite needs `zig-out/bin/coppiz` (src/main.zig:856,905) and the three
-   example *test binaries* (build.zig:188-192); it never needs the installed
-   example executables. This removes up to three full library compiles per
-   run. Smallest change: a dedicated install step for `exe` that the test
-   step depends on, leaving the examples' install to the `examples` step.
-   *Unverified:* quantify with a timed `zig build test` before and after.
+`test_step` no longer depends on `b.getInstallStep()`; the examples are
+installed by `zig build examples` (which now builds, installs *and* runs the
+hosts), not by the default install step. `zig build` installs
+`zig-out/bin/coppiz` alone; the suite needs exactly that (the process-level
+tests spawn it — src/main.zig:856,905) plus the three example *test
+binaries*. The `exe_tests` run also now depends on the coppiz install step
+explicitly, closing the spawn-before-install race reported as
+[2026-08-28 — the process-level e2e tests race the install step](../bugs/2026-08-28-process-tests-race-install.md).
 
-2. **If the saving is still not enough, look at example compile count** — the
-   examples are each compiled as a test binary *and* an executable by the
-   test path (build.zig:72 vs 190). Any reduction must keep the example test
-   binaries running.
+Measured effect (warm cache, four consecutive full runs): 196–212 s total,
+of which the compile steps are ~1–2 s — the saving is the three example
+executable compiles (measured ~0.8–1.0 s each in the cold run's compile
+lines) that `zig build test` no longer performs. The saving lands when the
+library changes (the common interactive case), where each embedding binary
+recompiles; the test path now compiles the library six times instead of
+nine. Modest, but it is exactly the waste this audit identified, and it
+removes the only part of the suite's work that no test consumes.
 
-3. **Do not shrink the e2e timings** to buy seconds: they encode the
-   failure-detector semantics the tests exist to check, and the deadlines are
-   caps, not sleeps.
+### The runtime profile (Hypothesis B, now measured)
+
+The wall clock is e2e runtime, not compile: `lib_tests` runs 152 tests in
+~3 min, `exe_tests` 12 tests in ~1 min (concurrent), everything else under
+5 s. The cluster e2e waits are condition polls with deadline caps that exit
+early (verified: e2e (b) ~5 s, e2e (c) ~5 s) plus fixed settle/expiry waits
+of 1.5–2.5 s. Hypothesis B holds: the waits encode the failure-detector and
+TTL semantics the tests exist to check.
+
+### Rejected: replacing the busy-spin settle waits with `io.sleep`
+
+Six test waits busy-spin the main thread for 1.5–2.5 s
+(`while (wallMs(tio) < deadline) {}` — node.zig:2703, 2952, 2972, 3107,
+3333, 3431) with a comment claiming an `io.sleep` from the test task starves
+the node loops' timers. The claim is load-bearing and correct on Linux:
+`std.Io.Threaded` sets `use_parking_sleep = false` there, so `io.sleep`
+becomes a whole-thread `clock_nanosleep`, and a test task sharing a worker
+with a node loop would block that loop for the sleep's full duration. The
+spins give the loops the CPU for the whole wait. Replacing them would make
+the e2e tests' correctness depend on the host's core count / thread-pool
+dynamics to save ~12 s (6%); not a good trade. Left as-is (including the
+doubled comment at node.zig:2697-2700, which is a leftover, not a hazard).
+
+### Finding for follow-up: intermittent CPU spin in direct test-binary runs
+
+Running a test binary directly (not through `zig build test`'s protocol)
+stuck three times on this machine at ~100% CPU for 10+ minutes in three io
+worker threads: twice at `e2e (G4)` and once at the journal member-key test.
+The gate (`zig build test`) did not reproduce it in three full runs, and
+stacks could not be captured (ptrace blocked). The loop, mailbox and hub
+transport are all semaphore-based (no busy-poll found by reading). Tracked
+as [OQ 62](../../open-questions.md) — before it is resolved, a direct
+`test`-binary run can peg a core indefinitely and a `zig build test` run
+could hit it intermittently.
+
+### Recommendations 2 and 3
+
+- Recommendation 2 (reduce example compile count) is subsumed by
+  recommendation 1: the test path now compiles each example once (its test
+  binary), never as an executable.
+- Recommendation 3 stands as written: do not shrink the e2e timings. The
+  measured profile confirms they are the suite's cost and that the waits
+  exit early; a timing change would alter what the tests verify.
 
 ## References
 
+- Related bugs:
+  [2026-08-28 — `zig build test` is red: `Hub.deinit(self, io)` arity](../bugs/2026-08-28-build-test-red-hub-deinit-arity.md),
+  [2026-08-28 — the CLI test root uses `std.c.getpid()` without linking libc](../bugs/2026-08-28-build-test-red-libc-getpid.md),
+  [2026-08-28 — the process-level e2e tests race the install step](../bugs/2026-08-28-process-tests-race-install.md)
+  (all Resolved by this work)
+- Follow-up: [OQ 62](../../open-questions.md) — the intermittent CPU spin
 - Code: `build.zig` (addChecks at build.zig:160-233; examples at
   build.zig:65-74; lint steps at build.zig:207-232)
 - Tests that spawn the binary: `src/main.zig` (`BinTest.run`/`spawn`,
   src/main.zig:823-907)
 - Cluster e2e waits: `src/cluster/node.zig` (tests at node.zig:2399-3553)
+- Timed runs: `zig build test --summary all` on `main` @ `51caeb0` before and
+  after the change (before: red, 230 tests; after: 21/21 steps, 242/242
+  tests, 196–212 s)

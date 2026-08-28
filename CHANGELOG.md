@@ -29,6 +29,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   body bound.
 - `member.key` is created with owner-only permissions (0600).
 - Hub frame sends refuse an oversized body the same way TCP framing does.
+- `zig build test` is green again — the suite had not compiled since the
+  review-stack merges (a `Hub.deinit` arity drift at three test sites, and
+  the CLI test root requiring libc for `std.c.getpid()`); the shipped binary
+  still links no libc.
+
+### Changed
+
+- `zig build test` installs only the `coppiz` binary: the example
+  executables are no longer compiled as install targets no test spawns, and
+  `zig build examples` now installs them (it previously only built and ran
+  them).
 
 ### Added
 

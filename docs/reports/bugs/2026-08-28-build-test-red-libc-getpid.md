@@ -8,7 +8,8 @@
 
 ## Status
 
-Open. Introduced by `db0024bb` ("chore(test): apply review findings", merged via the ad67 test-review stack).
+Resolved — implemented in the test-build speedup work (investigation
+[2026-08-28 — making `zig build test` faster without dropping tests](../investigations/2026-08-28-test-suite-quick-wins.md)). The suggested `std.posix.getpid()` does not exist in Zig 0.16 (verified: `std.posix` has `getppid` but no `getpid`; the only non-libc getpid is `std.os.linux.getpid`, which narrows the file to Linux) — the fix below keeps `std.c.getpid()` and links libc into the test binary only.
 
 ## Symptom and impact
 
@@ -46,11 +47,20 @@ const pid: u32 = @intCast(@as(i64, std.c.getpid()));
 
 ## Resolution
 
-Not yet fixed. Suggested fix: replace `std.c.getpid()` with `std.posix.getpid()` in `src/main.zig:1046` (keeps the test root libc-free), then re-run `zig build test`.
+Fixed in `build.zig` (`addChecks`): the `exe_tests` test binary now compiles
+`src/main.zig` through its own module instance with `.link_libc = true`, and
+`testAddr` keeps `std.c.getpid()`. The shipped `coppiz` executable keeps its
+libc-free module, so the static-musl constraint (ADR 0001) is untouched —
+only the test binary links libc, which is a test-runner concern, not a
+shipped-artifact one.
 
 ## Verification
 
-Confirmed by reproduction on a clean worktree (`git worktree add ... main`, then `zig build test`). The exact compiler error is quoted above. After the fix, re-running `zig build test` must compile the `src/main.zig` test root and run the process-level cluster tests.
+`zig build test --summary all`: `Build Summary: 21/21 steps succeeded;
+242/242 tests passed`, exit 0 (three consecutive full runs). The
+previously-unreachable `src/main.zig` test root now compiles and runs its 12
+tests, including the four process-level cluster e2e tests that spawn the
+real binary over TCP.
 
 ## Follow-up
 
@@ -59,4 +69,4 @@ The same test file's process-level tests hardcode an additional port (`127.0.0.1
 ## References
 
 - Code: `src/main.zig:1046` (`testAddr`), regression commit `db0024bb`
-- Fix: none
+- Fix: working tree (see the investigation 2026-08-28 test-build speedup; not yet committed)

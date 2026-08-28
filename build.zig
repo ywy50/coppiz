@@ -59,17 +59,20 @@ pub fn build(b: *std.Build) void {
     const docs_step = b.step("docs", "Regenerate docs/configuration.md from the settings schema");
     docs_step.dependOn(&docgen_run.step);
 
-    // Examples (PRD 0005): `zig build examples` builds and runs each host.
-    // The same modules are each a test root in addChecks, so `zig build
-    // test` runs them too.
+    // Examples (PRD 0005): `zig build examples` builds, installs and runs
+    // each host. The install stays off the default install step: `zig build
+    // test` depends on installing the coppiz binary alone, and the example
+    // executables are never spawned by the suite — compiling them for an
+    // install nobody consumes wasted three whole library compiles per test
+    // run (investigation 2026-08-28).
     const examples_step = b.step(
         "examples",
-        "Build and run the example hosts (embed-single, embed-cluster, sidecar)",
+        "Build, install and run the example hosts (embed-single, embed-cluster, sidecar)",
     );
     for (example_names) |name| {
         const mod = exampleModule(b, lib_mod, target, optimize, name);
         const example_exe = b.addExecutable(.{ .name = name, .root_module = mod });
-        b.installArtifact(example_exe);
+        examples_step.dependOn(&b.addInstallArtifact(example_exe, .{}).step);
         examples_step.dependOn(&b.addRunArtifact(example_exe).step);
     }
 
@@ -171,7 +174,18 @@ fn addChecks(
     // right through the build_tests module below), directly or through
     // another module — or its tests silently never run.
     const lib_tests = b.addTest(.{ .root_module = lib_mod });
-    const exe_tests = b.addTest(.{ .root_module = exe.root_module });
+    // main.zig's process-level tests derive their ports from the test
+    // process's pid (testAddr), and std.c.getpid is reachable only when the
+    // compilation links libc. The shipped exe must stay libc-free (hosts are
+    // static musl, ADR 0001), so the test binary gets its own module copy
+    // with libc linked, never the executable's module.
+    const exe_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "coppiz", .module = lib_mod }},
+        .link_libc = true,
+    }) });
     // The build file carries lint-gate logic with its own tests; compiling
     // it as a plain module (not as the build script) runs them.
     const build_tests = b.addTest(.{ .root_module = b.createModule(.{
@@ -180,7 +194,18 @@ fn addChecks(
     }) });
     const test_step = b.step("test", "Run unit tests and the lint gates");
     test_step.dependOn(&b.addRunArtifact(lib_tests).step);
-    test_step.dependOn(&b.addRunArtifact(exe_tests).step);
+    // The process-level e2e tests spawn the installed binary
+    // (`zig-out/bin/coppiz`, src/main.zig: testAddr/BinTest). The suite never
+    // runs the example executables, so the test step installs the coppiz
+    // binary alone instead of riding the whole install step — that would
+    // compile the three examples as executables no test spawns
+    // (investigation 2026-08-28). The run depends on the install: a sibling
+    // start order would let the tests spawn before the binary exists (bug
+    // 2026-08-28-process-tests-race-install).
+    const install_exe = b.addInstallArtifact(exe, .{});
+    const exe_tests_run = b.addRunArtifact(exe_tests);
+    exe_tests_run.step.dependOn(&install_exe.step);
+    test_step.dependOn(&exe_tests_run.step);
     test_step.dependOn(&b.addRunArtifact(build_tests).step);
     // The examples are each a test (PRD 0005), so their test binaries join
     // the gate: a change that breaks an example breaks the build. They
@@ -190,8 +215,6 @@ fn addChecks(
         const example_tests = b.addTest(.{ .root_module = mod });
         test_step.dependOn(&b.addRunArtifact(example_tests).step);
     }
-    // The process-level e2e tests spawn the installed binary.
-    test_step.dependOn(b.getInstallStep());
 
     // Analysis gates. Until CI decides what it gates (OQ 45), `zig build
     // test` is the one blocking entry point, so it carries the checks: the
