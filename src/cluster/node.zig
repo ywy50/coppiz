@@ -641,6 +641,8 @@ pub const ClusterNode = struct {
             .settings => |s| try self.onSettings(conn_id, s),
             .merge_offer => |o| try self.onMergeOffer(conn_id, o),
             .merge_ack => self.onMergeAck(conn_id) catch {},
+            .members_req => try self.onMembersReq(conn_id),
+            .members_page => {},
             .ack => {},
         }
     }
@@ -2065,6 +2067,23 @@ pub const ClusterNode = struct {
         try self.sendMessage(conn_id, .{ .read_page = .{
             .next = next,
             .records = records.items,
+        } });
+    }
+
+    /// The member listing (`coppiz members` over the wire): the control
+    /// fold's members, in fold order (seniority), plus this node's epoch
+    /// and leader view.
+    fn onMembersReq(self: *ClusterNode, conn_id: u64) !void {
+        const fold = &self.node.control;
+        const infos = try self.allocator.alloc(message.MemberInfo, fold.members.items.len);
+        defer self.allocator.free(infos);
+        for (fold.members.items, infos) |m, *info| {
+            info.* = .{ .id = m.id, .seniority = m.seniority, .address = m.address };
+        }
+        try self.sendMessage(conn_id, .{ .members_page = .{
+            .epoch = if (fold.epoch) |e| e.number else 0,
+            .leader = if (fold.epoch) |e| e.leader else [_]u8{0} ** 16,
+            .members = infos,
         } });
     }
 

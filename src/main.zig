@@ -15,6 +15,8 @@
 //!               [--include-stale] [--include-expired]
 //!   coppiz head --dir DIR [--journal NAME]
 //!   coppiz status --dir DIR
+//!   coppiz members --dir DIR
+//!   coppiz doctor --dir DIR
 //!   coppiz settings schema
 //!   coppiz settings set --dir DIR --key KEY --value VALUE [--journal NAME]
 //!   coppiz admit --dir DIR --member HEXID
@@ -52,6 +54,8 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, cmd, "read")) return cmdRead(gpa, io, argv.items[2..]);
     if (std.mem.eql(u8, cmd, "head")) return cmdHead(gpa, io, argv.items[2..]);
     if (std.mem.eql(u8, cmd, "status")) return cmdStatus(gpa, io, argv.items[2..]);
+    if (std.mem.eql(u8, cmd, "members")) return cmdMembers(gpa, io, argv.items[2..]);
+    if (std.mem.eql(u8, cmd, "doctor")) return cmdDoctor(gpa, io, argv.items[2..]);
     if (std.mem.eql(u8, cmd, "settings")) return cmdSettings(gpa, io, argv.items[2..]);
     if (std.mem.eql(u8, cmd, "admit")) return cmdAdmit(gpa, io, argv.items[2..]);
     var stderr_writer = std.Io.File.stderr().writer(io, &stderr_buf);
@@ -74,6 +78,8 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\               [--include-stale] [--include-expired]
         \\  coppiz head --dir DIR [--journal NAME]
         \\  coppiz status --dir DIR
+        \\  coppiz members --dir DIR
+        \\  coppiz doctor --dir DIR
         \\  coppiz settings schema
         \\  coppiz settings set --dir DIR --key KEY --value VALUE [--journal NAME]
         \\  coppiz admit --dir DIR --member HEXID
@@ -462,6 +468,176 @@ fn cmdStatus(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void
     try out_writer.interface.flush();
 }
 
+// -- members ---------------------------------------------------------------
+
+/// `members` — one line per member of the control fold, in fold order
+/// (seniority): id, join slot, advertised address, and a `leader` marker.
+/// Local when the node is not serving; over the wire otherwise (OQ 47).
+fn cmdMembers(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void {
+    const dir = getArg(argv, "--dir") orelse return error.MissingDir;
+    var out_buf: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(io, &out_buf);
+    const writer = &stdout_writer.interface;
+
+    const node = openNode(gpa, io, dir) catch |err| switch (err) {
+        error.AlreadyOpen => {
+            try membersViaWire(gpa, io, dir, writer);
+            try writer.flush();
+            return;
+        },
+        else => return err,
+    };
+    defer node.deinit();
+    const leader_id: [16]u8 = if (node.control.epoch) |e| e.leader else [_]u8{0} ** 16;
+    for (node.control.members.items) |m| {
+        try printMember(writer, m.id, m.seniority, m.address, leader_id);
+    }
+    try writer.flush();
+}
+
+fn membersViaWire(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    dir: []const u8,
+    writer: *std.Io.Writer,
+) !void {
+    var session = try wireHello(gpa, io, dir);
+    defer session.client.deinit();
+    const page = try session.client.members();
+    for (page.members) |m| {
+        try printMember(writer, m.id, m.seniority, m.address, page.leader);
+    }
+}
+
+fn printMember(
+    w: *std.Io.Writer,
+    id: [16]u8,
+    seniority: slot.Position,
+    address: []const u8,
+    leader_id: [16]u8,
+) !void {
+    const shown: []const u8 = if (address.len > 0) address else "-";
+    try w.print("{x} {f} {s}", .{ id, seniority, shown });
+    if (std.mem.eql(u8, &id, &leader_id)) try w.writeAll(" leader");
+    try w.writeByte('\n');
+}
+
+// -- doctor ------------------------------------------------------------------
+
+const Doctor = struct {
+    writer: *std.Io.Writer,
+    failed: bool = false,
+
+    fn ok(self: *Doctor, comptime fmt: []const u8, args: anytype) !void {
+        try self.writer.print("ok   " ++ fmt ++ "\n", args);
+    }
+
+    fn warn(self: *Doctor, comptime fmt: []const u8, args: anytype) !void {
+        try self.writer.print("warn " ++ fmt ++ "\n", args);
+    }
+
+    fn fail(self: *Doctor, comptime fmt: []const u8, args: anytype) !void {
+        self.failed = true;
+        try self.writer.print("FAIL " ++ fmt ++ "\n", args);
+    }
+};
+
+/// `doctor` — diagnoses a data directory (PRD 0005 *Failure modes*): the
+/// config, the member key, the lock, and the chain. A locked directory is
+/// a finding, not an error: the serving node is probed over the wire
+/// instead. Opening the chain replays the unslotted queue, exactly as
+/// `read` does. Exits nonzero when any check fails; warnings do not.
+fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void {
+    const dir = getArg(argv, "--dir") orelse return error.MissingDir;
+    var out_buf: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(io, &out_buf);
+    var doc = Doctor{ .writer = &stdout_writer.interface };
+    defer stdout_writer.interface.flush() catch {};
+
+    // Node.open takes ownership of the handle (the store closes it), so no
+    // defer close here — a doctor process exits right after anyway.
+    const data_dir = std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true }) catch |err| {
+        try doc.fail("data dir {s}: {s}", .{ dir, @errorName(err) });
+        return error.DoctorFailed;
+    };
+    try doc.ok("data dir {s}", .{dir});
+
+    const has_toml = try fileExists(io, data_dir, "coppiz.toml");
+    var cfg: config.Config = loadConfig(gpa, io, dir, null) catch |err| blk: {
+        try doc.fail("config: coppiz.toml does not parse ({s})", .{@errorName(err)});
+        break :blk config.Config{ .allocator = gpa };
+    };
+    defer cfg.deinit();
+    if (!doc.failed) {
+        if (has_toml) {
+            try doc.ok("config: coppiz.toml parses", .{});
+        } else {
+            try doc.ok("config: no coppiz.toml, defaults in force", .{});
+        }
+    }
+
+    if (!try fileExists(io, data_dir, "member.key")) {
+        try doc.fail("member key: missing (run `coppiz init` or `coppiz serve`)", .{});
+        return error.DoctorFailed;
+    }
+    try doc.ok("member key: present", .{});
+
+    const node = journal.Node.open(gpa, io, data_dir, .{}) catch |err| switch (err) {
+        error.AlreadyOpen => {
+            try doc.ok("lock: held by a serving node", .{});
+            if (cfg.listen) |l| {
+                if (wireHello(gpa, io, dir)) |s| {
+                    var session = s;
+                    defer session.client.deinit();
+                    try doc.ok(
+                        "wire: hello answered on {s}, epoch {d}",
+                        .{ l, session.ack.epoch },
+                    );
+                } else |werr| {
+                    try doc.fail("wire: {s} dialing {s}", .{ @errorName(werr), l });
+                }
+            } else {
+                try doc.fail("listen: unset, so the serving node cannot be reached", .{});
+            }
+            if (doc.failed) return error.DoctorFailed;
+            return;
+        },
+        else => {
+            try doc.fail("chain: {s}", .{@errorName(err)});
+            return error.DoctorFailed;
+        },
+    };
+    defer node.deinit();
+
+    const epoch_num: u64 = if (node.control.epoch) |e| e.number else 0;
+    try doc.ok("chain: epoch {d}, {d} member(s), {d} journal(s)", .{
+        epoch_num,
+        node.control.memberCount(),
+        node.control.journals.count(),
+    });
+    var it = node.control.journals.iterator();
+    while (it.next()) |kv| {
+        if (node.head(kv.key_ptr.*)) |h| {
+            try doc.ok("journal {s}: head {f}", .{ kv.value_ptr.name, h });
+        } else {
+            try doc.warn("journal {s}: empty", .{kv.value_ptr.name});
+        }
+    }
+    if (cfg.listen) |l| {
+        try doc.warn("listen {s} configured but no node is serving", .{l});
+    }
+    if (doc.failed) return error.DoctorFailed;
+}
+
+fn fileExists(io: std.Io, dir: std.Io.Dir, name: []const u8) !bool {
+    const file = dir.openFile(io, name, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    file.close(io);
+    return true;
+}
+
 // -- settings --------------------------------------------------------------
 
 fn cmdSettings(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void {
@@ -598,6 +774,8 @@ test "usage prints every command" {
     try std.testing.expect(std.mem.indexOf(u8, text, "coppiz read") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "coppiz head") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "coppiz status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "coppiz members") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "coppiz doctor") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "settings schema") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "settings set") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "coppiz admit") != null);
@@ -799,6 +977,48 @@ test "acknowledged appends survive a crash-like truncation (G4, process level)" 
     const read = try bt.run(&.{ "read", "--dir", bt.dir, "--journal", "main" });
     defer test_alloc.free(read);
     try std.testing.expect(std.mem.indexOf(u8, read, "one") != null);
+}
+
+test "members and doctor work locally on a single-member directory" {
+    var bt = try BinTest.init();
+    defer bt.deinit();
+    const init_out = try bt.run(&.{ "init", "--dir", bt.dir, "--journal", "main" });
+    defer test_alloc.free(init_out);
+
+    // One member, the founder: one line, marked leader, seniority = genesis.
+    const members_out = try bt.run(&.{ "members", "--dir", bt.dir });
+    defer test_alloc.free(members_out);
+    try std.testing.expect(std.mem.endsWith(u8, members_out, " leader\n"));
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        std.mem.count(u8, members_out, "\n"),
+    );
+
+    // Doctor: every check passes; the chain and journal lines are present.
+    // Append first so the data journal has a head (a bare init leaves it
+    // empty, which doctor reports as a warning, not a head line).
+    const append_out = try bt.run(&.{
+        "append", "--dir", bt.dir, "--journal", "main", "--payload", "x",
+    });
+    defer test_alloc.free(append_out);
+    const doctor_out = try bt.run(&.{ "doctor", "--dir", bt.dir });
+    defer test_alloc.free(doctor_out);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        doctor_out,
+        "chain: epoch 1, 1 member(s), 1 journal(s)",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, doctor_out, "journal main: head") != null);
+    try std.testing.expect(std.mem.indexOf(u8, doctor_out, "FAIL") == null);
+}
+
+test "doctor fails, naming the missing member key, on an empty directory" {
+    var bt = try BinTest.init();
+    defer bt.deinit();
+    const res = try bt.runRaw(&.{ "doctor", "--dir", bt.dir });
+    defer test_alloc.free(res.out);
+    try std.testing.expect(res.code != 0);
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "FAIL member key: missing") != null);
 }
 
 // -- process-level cluster tests -------------------------------------------
@@ -1060,4 +1280,29 @@ test "process-level: a chain from a different genesis is refused admission" {
     pd_proc.stop();
     try std.testing.expectEqual(@as(usize, 1), try memberCountOf(&a));
     try std.testing.expectEqual(@as(usize, 1), try memberCountOf(&d));
+}
+
+test "process-level: members and doctor reach a serving node over the wire" {
+    var a = try BinTest.init();
+    defer a.deinit();
+    try writeToml(&a, "127.0.0.1:17431", &.{}, "open");
+    const init_out = try a.run(&.{ "init", "--dir", a.dir, "--journal", "main" });
+    test_alloc.free(init_out);
+    const pa = try a.spawn(&.{ "serve", "--dir", a.dir });
+    const pa_proc = ServingProc{ .child = pa };
+    defer pa_proc.stop();
+    const a_id = try leaderHex(&a);
+    defer test_alloc.free(a_id);
+
+    // The data dir is locked by serve, so both commands go over the wire.
+    const members_out = try a.run(&.{ "members", "--dir", a.dir });
+    defer test_alloc.free(members_out);
+    try std.testing.expect(std.mem.indexOf(u8, members_out, a_id) != null);
+    try std.testing.expect(std.mem.endsWith(u8, members_out, " leader\n"));
+
+    const doctor_out = try a.run(&.{ "doctor", "--dir", a.dir });
+    defer test_alloc.free(doctor_out);
+    try std.testing.expect(std.mem.indexOf(u8, doctor_out, "held by a serving node") != null);
+    try std.testing.expect(std.mem.indexOf(u8, doctor_out, "wire: hello answered") != null);
+    try std.testing.expect(std.mem.indexOf(u8, doctor_out, "FAIL") == null);
 }

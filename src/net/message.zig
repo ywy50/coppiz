@@ -44,6 +44,10 @@ pub const Kind = enum(u8) {
     /// now truncate its data branches and re-sync (the truncation must not
     /// beat the survivor's fetch, or the loser's data would be lost).
     merge_ack = 14,
+    /// A member listing request from the CLI (no payload); the node answers
+    /// with a `members_page` from its control fold.
+    members_req = 15,
+    members_page = 16,
 
     pub fn name(self: Kind) []const u8 {
         return switch (self) {
@@ -61,6 +65,8 @@ pub const Kind = enum(u8) {
             .settings => "settings",
             .merge_offer => "merge_offer",
             .merge_ack => "merge_ack",
+            .members_req => "members_req",
+            .members_page => "members_page",
         };
     }
 };
@@ -584,6 +590,80 @@ pub fn decodeMergeOffer(bytes: []const u8) DecodeError!MergeOffer {
     };
 }
 
+// -- members -----------------------------------------------------------------
+
+/// One member in a `members_page`: the fold facts (`chain.Member`) minus
+/// the public key, which the listing has no use for.
+pub const MemberInfo = struct {
+    id: [16]u8,
+    /// The member's join slot (genesis for the founder); earlier = more
+    /// senior (RFC 0002).
+    seniority: slot.Position,
+    /// Owned after decode; the founder advertises the empty string.
+    address: []const u8,
+};
+
+/// The reply to a `members_req`: the control fold's membership plus the
+/// answering node's epoch and leader view.
+pub const MembersPage = struct {
+    epoch: u64,
+    leader: [16]u8,
+    /// Owned after decode (the slice and each address).
+    members: []MemberInfo,
+};
+
+pub fn membersPageLen(p: MembersPage) usize {
+    var len: usize = 8 + 16 + 2;
+    for (p.members) |m| len += 16 + 16 + 2 + m.address.len;
+    return len;
+}
+
+pub fn encodeMembersPage(p: MembersPage, buf: []u8) void {
+    std.mem.writeInt(u64, buf[0..8], p.epoch, .little);
+    buf[8..24].* = p.leader;
+    writeU16(buf[24..26], p.members.len);
+    var off: usize = 26;
+    for (p.members) |m| {
+        @memcpy(buf[off .. off + 16], &m.id);
+        writePosition(buf[off + 16 .. off + 32], m.seniority);
+        writeU16(buf[off + 32 .. off + 34], m.address.len);
+        @memcpy(buf[off + 34 .. off + 34 + m.address.len], m.address);
+        off += 34 + m.address.len;
+    }
+}
+
+pub fn decodeMembersPage(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+) DecodeError!MembersPage {
+    if (bytes.len < 26) return error.InvalidLength;
+    const count = std.mem.readInt(u16, bytes[24..26], .little);
+    const members = try allocator.alloc(MemberInfo, count);
+    var done: usize = 0;
+    errdefer {
+        for (members[0..done]) |m| allocator.free(m.address);
+        allocator.free(members);
+    }
+    var off: usize = 26;
+    while (done < count) : (done += 1) {
+        if (off + 34 > bytes.len) return error.InvalidLength;
+        const addr_len = std.mem.readInt(u16, bytes[off + 32 ..][0..2], .little);
+        if (off + 34 + addr_len > bytes.len) return error.InvalidLength;
+        members[done] = .{
+            .id = bytes[off..][0..16].*,
+            .seniority = readPosition(bytes[off + 16 .. off + 32]),
+            .address = try allocator.dupe(u8, bytes[off + 34 .. off + 34 + addr_len]),
+        };
+        off += 34 + addr_len;
+    }
+    if (off != bytes.len) return error.InvalidLength;
+    return .{
+        .epoch = std.mem.readInt(u64, bytes[0..8], .little),
+        .leader = bytes[8..24].*,
+        .members = members,
+    };
+}
+
 // -- the message union ------------------------------------------------------
 
 pub const Message = union(enum) {
@@ -601,6 +681,8 @@ pub const Message = union(enum) {
     settings: Settings,
     merge_offer: MergeOffer,
     merge_ack,
+    members_req,
+    members_page: MembersPage,
 
     pub fn kind(self: Message) Kind {
         return switch (self) {
@@ -618,6 +700,8 @@ pub const Message = union(enum) {
             .settings => .settings,
             .merge_offer => .merge_offer,
             .merge_ack => .merge_ack,
+            .members_req => .members_req,
+            .members_page => .members_page,
         };
     }
 
@@ -639,6 +723,10 @@ pub const Message = union(enum) {
             .settings => |v| {
                 allocator.free(v.journal);
                 allocator.free(v.changes);
+            },
+            .members_page => |v| {
+                for (v.members) |m| allocator.free(m.address);
+                allocator.free(v.members);
             },
             else => {},
         }
@@ -670,6 +758,8 @@ pub fn encodedLen(m: Message) usize {
         .settings => |v| settingsLen(v),
         .merge_offer => merge_offer_len,
         .merge_ack => 0,
+        .members_req => 0,
+        .members_page => |v| membersPageLen(v),
     };
     return 2 + payload;
 }
@@ -694,6 +784,8 @@ pub fn encode(m: Message, buf: []u8) void {
         .settings => |v| encodeSettings(v, out),
         .merge_offer => |v| encodeMergeOffer(v, out[0..merge_offer_len]),
         .merge_ack => {},
+        .members_req => {},
+        .members_page => |v| encodeMembersPage(v, out),
     }
 }
 
@@ -703,6 +795,7 @@ pub fn decode(allocator: std.mem.Allocator, body: []const u8) DecodeError!Messag
     if (body.len < 2) return error.InvalidLength;
     if (body[0] != version) return error.BadVersion;
     const kind_int = body[1];
+    if (kind_int > @intFromEnum(Kind.members_page)) return error.UnknownKind;
     if (kind_int < @intFromEnum(Kind.hello)) return error.UnknownKind;
     if (kind_int > @intFromEnum(Kind.merge_ack)) return error.UnknownKind;
     const kind: Kind = @enumFromInt(kind_int);
@@ -722,6 +815,8 @@ pub fn decode(allocator: std.mem.Allocator, body: []const u8) DecodeError!Messag
         .settings => .{ .settings = try decodeSettings(allocator, payload) },
         .merge_offer => .{ .merge_offer = try decodeMergeOffer(payload) },
         .merge_ack => if (payload.len != 0) return error.InvalidLength else .merge_ack,
+        .members_req => if (payload.len != 0) return error.InvalidLength else .members_req,
+        .members_page => .{ .members_page = try decodeMembersPage(allocator, payload) },
     };
 }
 
@@ -917,6 +1012,31 @@ test "merge_offer round-trips" {
     try std.testing.expectEqual(test_pos, got.merge_offer.branch_head);
 }
 
+test "members_req and members_page round-trip" {
+    var req = try roundTrip(.members_req);
+    defer req.deinit(test_alloc);
+    try std.testing.expectEqual(Kind.members_req, req.kind());
+
+    var infos = [_]MemberInfo{
+        .{ .id = test_id, .seniority = .{ .epoch = 1, .seq = 1 }, .address = "" },
+        .{ .id = [_]u8{7} ** 16, .seniority = test_pos, .address = "127.0.0.1:6402" },
+    };
+    var got = try roundTrip(.{ .members_page = .{
+        .epoch = 3,
+        .leader = test_id,
+        .members = &infos,
+    } });
+    defer got.deinit(test_alloc);
+    const page = got.members_page;
+    try std.testing.expectEqual(@as(u64, 3), page.epoch);
+    try std.testing.expectEqualSlices(u8, &test_id, &page.leader);
+    try std.testing.expectEqual(@as(usize, 2), page.members.len);
+    try std.testing.expectEqualSlices(u8, &test_id, &page.members[0].id);
+    try std.testing.expectEqualStrings("", page.members[0].address);
+    try std.testing.expectEqual(test_pos, page.members[1].seniority);
+    try std.testing.expectEqualStrings("127.0.0.1:6402", page.members[1].address);
+}
+
 test "bad versions, kinds and lengths are refused by name" {
     const buf = try test_alloc.alloc(u8, encodedLen(.{ .heartbeat = .{
         .member_id = test_id,
@@ -939,7 +1059,7 @@ test "bad versions, kinds and lengths are refused by name" {
 
     var bad_kind = try test_alloc.dupe(u8, buf);
     defer test_alloc.free(bad_kind);
-    bad_kind[1] = @intFromEnum(Kind.merge_ack) + 1;
+    bad_kind[1] = @intFromEnum(Kind.members_page) + 1;
     try std.testing.expectError(error.UnknownKind, decode(test_alloc, bad_kind));
 
     var zero_kind = try test_alloc.dupe(u8, buf);

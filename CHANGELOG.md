@@ -7,6 +7,20 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- `coppiz members` — one line per member of the control fold, in fold
+  order (seniority): id, join slot, advertised address, and a `leader`
+  marker. Local against an unlocked data directory; over the wire when a
+  serving node holds the lock, via a new `members_req`/`members_page`
+  message pair (the node answers from its fold, so the CLI never re-folds
+  membership).
+- `coppiz doctor` — diagnoses a data directory (PRD 0005 *Failure
+  modes*): the config, the member key, the lock, and the chain (epoch,
+  members, journals and their heads). A directory locked by a serving
+  node is a finding, not an error: doctor reports the lock and probes the
+  node over the wire instead. Exits nonzero when any check fails;
+  warnings (a configured listen with no node serving, an empty journal)
+  do not.
+
 - The embedded-host write path (PRD 0005): `cluster.ClusterNode.localAppend`
   runs a host's append through its member's loop — durable queue, then the
   leader slots or the follower forwards — and blocks until the slot folds
