@@ -36,10 +36,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Changed
 
-- `zig build test` installs only the `coppiz` binary: the example
-  executables are no longer compiled as install targets no test spawns, and
-  `zig build examples` now installs them (it previously only built and ran
-  them).
+- `zig build test` installs only what the suite spawns — the `coppiz`
+  binary and the `sidecar` example (the G2 process-level test runs the
+  installed sidecar): the other example executables are no longer compiled
+  as install targets no test runs, and `zig build examples` installs them
+  (it previously only built and ran them).
+- The cluster e2e tests' fixed settle/expiry waits sleep instead of busy
+  spinning the main thread: the waits last the same wall-clock time, but no
+  longer peg a CPU core.
 
 ### Added
 

@@ -61,22 +61,28 @@ pub fn build(b: *std.Build) void {
 
     // Examples (PRD 0005): `zig build examples` builds, installs and runs
     // each host. The install stays off the default install step: `zig build
-    // test` depends on installing the coppiz binary alone, and the example
-    // executables are never spawned by the suite — compiling them for an
-    // install nobody consumes wasted three whole library compiles per test
-    // run (investigation 2026-08-28).
+    // test` installs only what the suite spawns — the coppiz binary and the
+    // sidecar (the G2 process-level test runs it, src/main.zig:1364) — never
+    // the example executables no test runs (investigation 2026-08-28).
     const examples_step = b.step(
         "examples",
         "Build, install and run the example hosts (embed-single, embed-cluster, sidecar)",
     );
+    // The sidecar is wired outside the loop because the test step installs
+    // it beside coppiz; the loop's skip keeps one definition of the artifact.
+    const sidecar_mod = exampleModule(b, lib_mod, target, optimize, "sidecar");
+    const sidecar_exe = b.addExecutable(.{ .name = "sidecar", .root_module = sidecar_mod });
+    examples_step.dependOn(&b.addInstallArtifact(sidecar_exe, .{}).step);
+    examples_step.dependOn(&b.addRunArtifact(sidecar_exe).step);
     for (example_names) |name| {
+        if (std.mem.eql(u8, name, "sidecar")) continue;
         const mod = exampleModule(b, lib_mod, target, optimize, name);
         const example_exe = b.addExecutable(.{ .name = name, .root_module = mod });
         examples_step.dependOn(&b.addInstallArtifact(example_exe, .{}).step);
         examples_step.dependOn(&b.addRunArtifact(example_exe).step);
     }
 
-    addChecks(b, lib_mod, exe, target, optimize);
+    addChecks(b, lib_mod, exe, sidecar_exe, target, optimize);
 }
 
 /// One example host module: the example's main.zig importing the library
@@ -164,6 +170,7 @@ fn addChecks(
     b: *std.Build,
     lib_mod: *std.Build.Module,
     exe: *std.Build.Step.Compile,
+    sidecar_exe: *std.Build.Step.Compile,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) void {
@@ -194,17 +201,20 @@ fn addChecks(
     }) });
     const test_step = b.step("test", "Run unit tests and the lint gates");
     test_step.dependOn(&b.addRunArtifact(lib_tests).step);
-    // The process-level e2e tests spawn the installed binary
-    // (`zig-out/bin/coppiz`, src/main.zig: testAddr/BinTest). The suite never
-    // runs the example executables, so the test step installs the coppiz
-    // binary alone instead of riding the whole install step — that would
-    // compile the three examples as executables no test spawns
-    // (investigation 2026-08-28). The run depends on the install: a sibling
-    // start order would let the tests spawn before the binary exists (bug
+    // The process-level e2e tests spawn the installed binaries
+    // (`zig-out/bin/coppiz` and, for the G2 test, `zig-out/bin/sidecar` —
+    // src/main.zig: testAddr/BinTest/G2). The suite never runs the
+    // embed-single/embed-cluster executables, so the test step installs only
+    // the two spawned binaries instead of riding the whole install step —
+    // that would compile every example as an executable no test spawns
+    // (investigation 2026-08-28). The run depends on the installs: a sibling
+    // start order would let the tests spawn before the binaries exist (bug
     // 2026-08-28-process-tests-race-install).
     const install_exe = b.addInstallArtifact(exe, .{});
+    const install_sidecar = b.addInstallArtifact(sidecar_exe, .{});
     const exe_tests_run = b.addRunArtifact(exe_tests);
     exe_tests_run.step.dependOn(&install_exe.step);
+    exe_tests_run.step.dependOn(&install_sidecar.step);
     test_step.dependOn(&exe_tests_run.step);
     test_step.dependOn(&b.addRunArtifact(build_tests).step);
     // The examples are each a test (PRD 0005), so their test binaries join
