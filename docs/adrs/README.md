@@ -11,7 +11,7 @@ RFC can be withdrawn without ever producing an ADR.
 Open a new ADR from the template, numbered after the last in the inventory:
 
 ```bash
-cp docs/adrs/TEMPLATE.md "docs/adrs/0006-<slug>.md"
+cp docs/adrs/TEMPLATE.md "docs/adrs/0008-<slug>.md"
 ```
 
 The title is the **choice**, not the question. Add it to the inventory
@@ -28,3 +28,4 @@ forward to its replacement.
 | [0004](0004-the-product-is-named-coppiz.md) | Accepted | The product is named coppiz |
 | [0005](0005-join-order-is-slot-position.md) | Accepted | Join order is slot position: a `join` is a chain entry written by the admitter, and seniority is its slot, so it cannot be forged |
 | [0006](0006-the-library-is-apache-2-0-licensed.md) | Accepted | The library is Apache-2.0 licensed |
+| [0007](0007-the-library-is-the-primary-surface.md) | Accepted | The library is the primary surface; the node binary is its wrapper |

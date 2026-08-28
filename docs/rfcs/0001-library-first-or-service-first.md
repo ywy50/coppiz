@@ -2,11 +2,13 @@
 
 ## Status
 
-Discussion — opened 2026-08-21. clanker's RFC 0019 (option T, Packaging)
-names this as "the new project's first design decision". Blocking question
-for [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md) phases 1 and 3;
-the core ([PRD 0001](../prds/0001-journal-core.md)) can start before it is
-decided.
+Decided — 2026-08-28, option A (library-first; the node binary is a thin
+wrapper). [ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md)
+records the choice; PRD 0005's steps 1–3 (the embedded write path and the
+`examples/` hosts) shipped with it, and its step-4 service API stays deferred
+as a wrapper module behind the first non-Zig consumer. Opened 2026-08-21;
+clanker's RFC 0019 (option T, Packaging) named this "the new project's first
+design decision".
 
 An RFC is a *request for comment*: it presents the options and a recommendation
 so a decision can be made, and it is not itself the decision record. When it is
@@ -221,6 +223,8 @@ the protocol clean enough that D stays possible".
 
 ## References
 
+- [ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md) — the
+  decision this RFC produced.
 - clanker [RFC 0019 — Shared state store](https://github.com/maci0/clanker/blob/main/docs/rfcs/0019-shared-state-store.md),
   option T *Packaging* — names this decision.
 - clanker PRD 0011 (mesh) — "no second daemon", "serve owns sockets".

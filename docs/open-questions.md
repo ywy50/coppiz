@@ -356,6 +356,11 @@ Ordering inside each section is by what blocks implementation first.
 
 15. **Library-first or service-first.** [RFC 0001](rfcs/0001-library-first-or-service-first.md).
     *Blocks:* PRD 0005 phases 1 and 3.
+    **Resolved 2026-08-28** (operator): option A — library-first. The library
+    is the primary surface, the node binary its wrapper, and the service API
+    stays deferred as a wrapper module behind the first non-Zig consumer.
+    Recorded in [ADR 0007](adrs/0007-the-library-is-the-primary-surface.md);
+    PRD 0005's steps 1–3 shipped with the decision.
 30. **Integration path with clanker.** clanker's RFC 0019 stage-1 spike is
     specified in clanker's tree and unrun. Run it there first (throwaway) and
     then build coppiz, or build coppiz's core and make the spike *use* coppiz?

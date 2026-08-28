@@ -6,7 +6,8 @@ Shipped (steps 1–3) — 2026-08-27. Draft 2026-08-21, reframed the same day
 after the operator clarified that coppiz is for anyone with this class of
 problem, not for clanker specifically. Source of truth: `src/root.zig`
 (library API), `src/main.zig` (node), `examples/` (one host per shape);
-`src/api/` (a service API) stays conditional on RFC 0001.
+`src/api/` (a service API) is deferred behind the first non-Zig consumer
+([ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md)).
 
 The embedded write path shipped with the cluster loop:
 `cluster.ClusterNode.localAppend` runs a host's append through the loop —
@@ -128,12 +129,14 @@ coppiz should instead support multi-process opens natively.
 
 **The node binary** is `src/main.zig`: the library plus a TOML config, a
 CLI (`init`, `run`, `status`, `members`, `admit`, `deny`, `append`, `read`,
-`follow`, `settings`, `reconfigure`, `migrate`, `doctor`), and — if RFC 0001 keeps it — a service
-API on a listen address. Which leads is that RFC's decision; the build makes
-both from one tree either way. (`settings schema` is PRD 0004's;
+`follow`, `settings`, `reconfigure`, `migrate`, `doctor`). The service API
+on a listen address is deferred behind the first non-Zig consumer
+([ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md)); its shape when
+added is below, and the build makes both from one tree either way.
+(`settings schema` is PRD 0004's;
 `migrate` is the explicit on-disk format migration named in Failure modes.)
 
-**Service API shape** (if kept): HTTP/1.1 + JSON on a separate port from
+**Service API shape** (when added): HTTP/1.1 + JSON on a separate port from
 replication, for non-Zig hosts, for short-lived processes beside a
 long-lived node (the multi-process case above), and for operators. One
 resource per journal, cursors as `epoch:seq`, follow as SSE. It is a thin
@@ -197,7 +200,8 @@ example: its RFC 0019 and stage-1 spike note.
 2. `examples/embed-cluster/` once PRD 0003 exists.
 3. `src/main.zig` + `src/cli/` — the node CLI over the library;
    `examples/sidecar/`.
-4. `src/api/` — the service API (conditional on RFC 0001).
+4. `src/api/` — the service API (deferred behind the first non-Zig
+   consumer, [ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md)).
 5. First host integration, in that host's tree (for clanker: a branch that
    fetches coppiz, adds `ck_state`, routes one stream through it behind a
    flag, measured against its spike note's three journeys — burst, backfill,
@@ -237,7 +241,8 @@ example: its RFC 0019 and stage-1 spike note.
 
 ## Open questions / future work
 
-- Library-first or service-first ([RFC 0001](../rfcs/0001-library-first-or-service-first.md), [OQ 15](../open-questions.md)).
+- Library-first or service-first — decided: option A ([ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md);
+  [RFC 0001](../rfcs/0001-library-first-or-service-first.md) decided, [OQ 15](../open-questions.md) resolved).
 - Several processes on one data directory, SQLite-style ([OQ 47]).
 - Which non-clanker hosts are the design targets, and what they need that
   clanker does not ([OQ 46]).

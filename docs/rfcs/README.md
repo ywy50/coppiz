@@ -11,7 +11,7 @@ RFC leads to one.
 Open a new RFC from the template, numbered after the last in the inventory:
 
 ```bash
-cp docs/rfcs/TEMPLATE.md "docs/rfcs/0003-<slug>.md"
+cp docs/rfcs/TEMPLATE.md "docs/rfcs/0004-<slug>.md"
 ```
 
 Then add it to the inventory below. An RFC needs at least two candidates, the
@@ -26,6 +26,6 @@ reference for what one would do ([OQ 41](../open-questions.md)).
 
 | # | Status | Title |
 |---|---|---|
-| [0001](0001-library-first-or-service-first.md) | Discussion | Library-first or service-first: which surface leads the design |
+| [0001](0001-library-first-or-service-first.md) | Decided | Library-first or service-first: which surface leads the design |
 | [0002](0002-how-join-order-is-made-unspoofable.md) | Decided | How join order is made unspoofable |
 | [0003](0003-append-durability-fsync-policy.md) | Discussion | What does `storage.fsync` govern? |

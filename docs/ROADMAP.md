@@ -94,18 +94,18 @@ the phases.
 
 1. **Journal core, single member** — [PRD 0001](prds/0001-journal-core.md)
    phases 1–3: codecs, chain validation, segment storage with torn-tail
-   recovery. Gate: acceptance criteria G3–G7 on one member. **Decide RFC
-   0001** (library/service) before PRD 0001 phase 4 (the library API at size
-   1) starts — the deadline RFC 0001's own comment period sets
-   ([RFC 0001](rfcs/0001-library-first-or-service-first.md)); it has a
-   recommendation.
+   recovery. Gate: acceptance criteria G3–G7 on one member. **RFC 0001**
+   (library/service) is decided — option A, [ADR 0007](adrs/0007-the-library-is-the-primary-surface.md);
+   PRD 0001's phases 1–4 are shipped (see Done).
 2. **Settings in the chain** — [PRD 0004](prds/0004-settings.md): schema as
    code, validation, fold, `docs/configuration.md` generated and pinned.
+   **Shipped 2026-08-27** (see Done).
 3. **TTL and staleness** — [PRD 0002](prds/0002-ttl-and-staleness.md): pure
    expiry predicates, `stale` and `checkpoint` rules, payload drop. Testable
-   on one member (it is its own leader).
-4. **Decide RFC 0002** (join order) — before the cluster work starts; it has
-   a recommendation.
+   on one member (it is its own leader). **Shipped 2026-08-27** (see Done).
+4. **RFC 0002** (join order) — decided: option A
+   ([ADR 0005](adrs/0005-join-order-is-slot-position.md)); PRD 0003
+   phases 1–3 shipped with it (see Done).
 5. **Deterministic simulator** — [OQ 27](open-questions.md): seeded
    multi-node run with partitions, crashes, skew and reorder, over the pure
    fold/election/merge functions. Placed *before* the node loop so the loop
@@ -115,7 +115,7 @@ the phases.
    membership fold, election function, epochs and merge (phases 1–3 shipped
    2026-08-27), then the wire protocol ([OQ 19](open-questions.md)), the node
    loop (written to be drivable by the simulator), admission, reconfigure
-   handover. Gate: e2e (a)–(e).
+   handover. Gate: e2e (a)–(e). **Shipped** (see Done).
 7. **Embedding and the node binary** — [PRD 0005](prds/0005-embedding-the-library-as-the-product.md):
    the embedded-host write API and the example hosts shipped 2026-08-27
    (steps 1–3); `doctor`, the loop-routed host read path

@@ -98,8 +98,9 @@ election, a reserved federation settings scope
 write and read paths, PRD 0005);
 `src/settings/` schema, validation, fold; `src/net/` framing, heartbeats,
 backfill; `src/config/` local `coppiz.toml` parsing (PRD 0004); the CLI
-lives in `src/main.zig` and `src/api/` (a service API) stays conditional on
-RFC 0001; `src/root.zig` the library API; `examples/` one host per shape
+lives in `src/main.zig`; `src/api/` (a service API) is deferred behind the
+first non-Zig consumer ([ADR 0007](adrs/0007-the-library-is-the-primary-surface.md));
+`src/root.zig` the library API; `examples/` one host per shape
 (PRD 0005); `src/federation/` (later) group membership, ownership, routing,
 parity. Pure logic (codecs, fold, election, merge, expiry) is kept I/O-free
 so it can be unit-tested and driven by a deterministic simulator
