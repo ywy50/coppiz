@@ -144,6 +144,42 @@ pub const Queue = struct {
         }
     }
 
+    /// Removes one queued entry by its journal and id — its slot landed. A
+    /// missing entry is a no-op (already trimmed). The queue file is
+    /// rewritten without it; record bytes are re-encoded identically.
+    pub fn remove(self: *Queue, journal_id: [16]u8, id: entry.Id) !void {
+        const Ctx = struct {
+            allocator: std.mem.Allocator,
+            list: *std.ArrayListUnmanaged(u8),
+            journal_id: [16]u8,
+            id: entry.Id,
+        };
+        var kept = std.ArrayListUnmanaged(u8).empty;
+        defer kept.deinit(self.allocator);
+        var ctx = Ctx{
+            .allocator = self.allocator,
+            .list = &kept,
+            .journal_id = journal_id,
+            .id = id,
+        };
+        try self.scan(&ctx, struct {
+            fn cb(c: *Ctx, en: *const entry.Entry) anyerror!void {
+                if (std.mem.eql(u8, &en.journal, &c.journal_id) and
+                    std.mem.eql(u8, &en.author, &c.id.author) and
+                    en.author_seq == c.id.author_seq) return;
+                const buf = try c.allocator.alloc(u8, recordSize(en));
+                defer c.allocator.free(buf);
+                encodeRecord(en, buf);
+                try c.list.appendSlice(c.allocator, buf);
+            }
+        }.cb);
+        if (kept.items.len == @as(usize, @intCast(self.queued_bytes))) return; // nothing to trim
+        try self.file.writePositionalAll(self.io, kept.items, header_len);
+        try self.file.setLength(self.io, header_len + kept.items.len);
+        self.queued_bytes = @intCast(kept.items.len);
+        try self.file.sync(self.io);
+    }
+
     /// Empties the queue (all queued entries have been slotted).
     pub fn clear(self: *Queue) !void {
         try self.file.setLength(self.io, header_len);
@@ -317,4 +353,53 @@ test "an unknown queue version is refused" {
         error.UnsupportedVersion,
         Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20),
     );
+}
+
+test "remove trims exactly one queued entry by journal and id" {
+    var env = TestEnv.init();
+    defer env.deinit();
+    var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20);
+    defer queue.deinit();
+
+    const jid = "0123456789abcdef".*;
+    const other_jid = "fedcba9876543210".*;
+    var one = testEntry("one");
+    one.journal = jid;
+    one.author_seq = 1;
+    var two = testEntry("two");
+    two.journal = jid;
+    two.author_seq = 2;
+    // A second journal can carry the same (author, author_seq) pair; the
+    // journal is part of the key.
+    var other = testEntry("other");
+    other.journal = other_jid;
+    other.author_seq = 2;
+    try queue.append(&one);
+    try queue.append(&two);
+    try queue.append(&other);
+
+    try queue.remove(jid, one.id());
+    var seen = std.ArrayListUnmanaged([]const u8).empty;
+    defer {
+        for (seen.items) |item| test_alloc.free(item);
+        seen.deinit(test_alloc);
+    }
+    try queue.scan(&seen, struct {
+        fn cb(list: *std.ArrayListUnmanaged([]const u8), en: *const entry.Entry) anyerror!void {
+            try list.append(test_alloc, try test_alloc.dupe(u8, en.payload));
+        }
+    }.cb);
+    try std.testing.expectEqual(@as(usize, 2), seen.items.len);
+    try std.testing.expectEqualStrings("two", seen.items[0]);
+    try std.testing.expectEqualStrings("other", seen.items[1]);
+
+    // Removing again is a no-op; the same id in the other journal survives.
+    try queue.remove(jid, one.id());
+    var count: usize = 0;
+    try queue.scan(&count, struct {
+        fn cb(c: *usize, _: *const entry.Entry) anyerror!void {
+            c.* += 1;
+        }
+    }.cb);
+    try std.testing.expectEqual(@as(usize, 2), count);
 }

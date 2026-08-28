@@ -37,7 +37,7 @@ shipped narrative (that is the roadmap).
 | how it gets to 1,000 or 100,000 instances | [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md) — groups, ownership, parity, and what the core must get right now |
 | what is not decided | [open-questions.md](open-questions.md) |
 
-## Architecture (implemented down to the pure core; the node loop is next)
+## Architecture (implemented down to the node loop; federation is next)
 
 coppiz is a replicated, append-only store written in Zig 0.16 with the
 standard library only ([ADR 0001](adrs/0001-zig-0-16-standard-library-only-for-the-core.md)),

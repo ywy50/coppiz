@@ -7,6 +7,38 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- The replication wire (PRD 0003 phase 4, [OQ
+  19](docs/open-questions.md) decided — own binary framing over one TCP
+  connection): `src/net/` — length-prefixed frames with a versioned body,
+  the typed message set (hello/hello_ack, append/ack, forward, slot,
+  sync_req/sync_page, heartbeat, read_req/read_page, settings,
+  merge_offer), and a transport seam (`Conn`/`Listener`/`Transport`) with
+  a TCP implementation and an in-memory hub whose directed edges drop and
+  heal, so the same loop code runs under both. Disk and wire share the
+  segment record codec. Fuzz tests cover the message decoder.
+- The cluster node loop (PRD 0003 phase 5): `src/cluster/node.zig` — one
+  event-processing task per member over the wire: the failure detector
+  (heartbeat/suspect from chain settings), the election → epoch cycle, the
+  leader write path (slot, broadcast, ack), forward/backfill over pages,
+  admission (`allowlist`/`open`/`prompt`), eviction, and partition/merge:
+  the losing branch truncates its store to the last common slot and re-folds
+  the survivor's chain, which carries the `merge` entry and the loser's
+  entries re-slotted (the fold infers a re-slot from author and epoch, so a
+  merged chain replays identically after restart).
+- `coppiz serve` and the wire-client fallback for `append`/`read`/`head`
+  when the data directory is locked, plus `coppiz status` (epoch, leader),
+  `coppiz settings set` (live, leader-appended), and `coppiz admit` (the
+  offline half of `prompt` admission).
+- Journal seams the loop builds on: `applyReplicated` (the single incoming
+  slot path), replicated `create_journal` store/fold creation,
+  `replay_forward` opens (a follower re-forwards its queue instead of
+  re-slotting locally), `store.truncate` (the merge re-fold's storage
+  half), and per-entry queue trimming.
+- The e2e matrix (PRD 0003 phase 6): process-level 1 → 2 → 3 live joins
+  with correct seniority leadership, live reconfiguration and its frozen
+  refusal, and forged-chain refusal; in-process partition-heal-merge and
+  `configured` + `stall` over the hub transport with real stores and real
+  loops.
 - The single-member journal core (PRD 0001 phases 1–4): entry and slot
   codecs with Ed25519 signing and SHA-256 chaining, the pure fold and
   validation rules (including the `create_journal` control kind), segments

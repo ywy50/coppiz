@@ -46,6 +46,18 @@ to land. Update it when a PRD changes status.
   reorder, configured + stall (G4 core), clock skew. Pins the merge
   discipline: on heal every node re-folds from the last common slot
   ([OQ 44](open-questions.md)).
+- **Membership and leadership: wire, node loop, e2e** (2026-08-27) —
+  [PRD 0003](prds/0003-membership-and-leadership.md) phases 4–6, on
+  [OQ 19](open-questions.md) decided (own binary framing over one TCP
+  connection): the replication wire (`src/net/` — framing, the message set,
+  and a transport seam with TCP and an in-memory hub implementation), the
+  node loop (`src/cluster/node.zig` — failure detector, election → epoch,
+  admission, forward/broadcast/backfill, and the partition/merge with the
+  OQ 44 re-fold discipline), the `coppiz serve` CLI with every command
+  falling back to the wire when the data directory is locked, and the e2e
+  matrix (process-level (a) 1 → 2 → 3 joins, (d) live reconfiguration, (e)
+  forged-join refusal; in-process (b) partition-heal-merge and (c)
+  configured + stall over the hub transport).
 
 ## Scale tiers
 

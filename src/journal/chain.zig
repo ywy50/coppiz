@@ -296,6 +296,25 @@ pub const FoldState = struct {
             return;
         }
         if (!std.mem.eql(u8, &en.journal, &self.journal_id)) return error.WrongJournal;
+        const leader = self.epoch.?.leader;
+
+        // After a merge, the surviving leader re-slots the losing branch's
+        // control entries (PRD 0003 *Partition and merge*; OQ 33). Their
+        // slots are signed by the current leader, but the entries are not
+        // the leader's — or they are the losing branch's `epoch` re-slotted
+        // at the current epoch number, which the live epoch rule would
+        // refuse as stale. The re-slot rule applies them as no-ops, or with
+        // the idempotent join/leave variants. The test is sound by
+        // construction: an entry the live rule accepts — leader-authored, or
+        // a genuinely new epoch — never matches it, so a merged chain replays
+        // identically after a restart without any side channel.
+        const reslotted_epoch = en.kind == .epoch and sl.epoch == self.epoch.?.number;
+        const reslotted_entry = en.kind != .epoch and !std.mem.eql(u8, &en.author, &leader);
+        if (reslotted_epoch or reslotted_entry) {
+            try self.applyControlReslotted(sl, en);
+            return;
+        }
+
         if (en.kind == .epoch) {
             // The epoch entry opens the new leader's term, so its slot is
             // signed by the *claimed* leader, not the current one (PRD 0003
@@ -307,7 +326,6 @@ pub const FoldState = struct {
             try epoch.applyEpoch(self, sl, en);
             return;
         }
-        const leader = self.epoch.?.leader;
         if (!std.mem.eql(u8, &sl.leader, &leader)) return error.NotLeader;
         const leader_member = self.memberById(leader) orelse return error.NotLeader;
         try verifySlotSignature(leader_member, sl);
@@ -374,11 +392,20 @@ pub const FoldState = struct {
         en: *const entry.Entry,
     ) ApplyError!void {
         try self.checkChainContinuity(sl);
-        if (self.head == null and sl.epoch != cluster.epoch.?.number) return error.BadPosition;
-        const leader = cluster.epoch.?.leader;
-        if (!std.mem.eql(u8, &sl.leader, &leader)) return error.NotLeader;
-        const leader_member = cluster.memberById(leader) orelse return error.NotLeader;
-        try verifySlotSignature(leader_member, sl);
+        // A journal's first record is written in the term that created it.
+        // A future term's record (the losing branch of a partition) is
+        // refused here and skipped by the refold; a *past* term's record is
+        // the pre-failover data a follower kept when a new leader was
+        // elected — it stays valid and folds against the later control.
+        if (self.head == null and sl.epoch > cluster.epoch.?.number) return error.BadPosition;
+        // The slot's leader must be a member whose signature verifies; it
+        // does not have to be the *current* leader, because data written
+        // before a failover keeps its original term's leader (the merge
+        // re-slots it into the new term). The entry's author is still
+        // checked against the member table, so nothing a non-member could
+        // sign gets in.
+        const slot_leader = cluster.memberById(sl.leader) orelse return error.NotLeader;
+        try verifySlotSignature(slot_leader, sl);
         if (!std.mem.eql(u8, &en.journal, &self.journal_id)) return error.WrongJournal;
         try checkEntrySignature(cluster, en);
         try self.checkAuthorSeq(en);
@@ -1824,4 +1851,129 @@ test "control payload codecs round-trip" {
     const cp = try decodeCheckpointPayload(&cp_buf);
     try std.testing.expectEqual(@as(u64, 2), cp.expire_through.epoch);
     try std.testing.expectEqual(@as(u64, 3), cp.expire_through.seq);
+}
+
+test "a re-slotted control entry is inferred from its author and epoch (OQ 33 replay)" {
+    var fix = Fix.init();
+    var fold = try controlWithGenesis(&fix);
+    defer fold.deinit();
+
+    var io_state = std.Io.Threaded.init(test_alloc, .{});
+    const second = crypto.sign.Ed25519.KeyPair.generate(io_state.io());
+    const second_id = deriveMemberId(second.public_key.toBytes());
+
+    // The second member joins (admitted by the founder).
+    const join_payload = try test_alloc.alloc(
+        u8,
+        membership.joinPayloadLen(.{
+            .member_id = second_id,
+            .public_key = second.public_key.toBytes(),
+            .address = "node-2",
+        }),
+    );
+    defer test_alloc.free(join_payload);
+    membership.encodeJoinPayload(
+        .{
+            .member_id = second_id,
+            .public_key = second.public_key.toBytes(),
+            .address = "node-2",
+        },
+        join_payload,
+    );
+    const join_en = try fix.entryFor(.join, fix.control_id, 2, 0, join_payload);
+    const join_sl = try fix.slotFor(1, 2, entry.entryHash(&join_en), fold.head_slot_hash, 1001);
+    try fold.applyControl(&join_sl, &join_en);
+
+    // The founder (leader) changes a setting live; the live rule applies it.
+    // The key is cluster-scoped — a cluster settings entry cannot touch a
+    // journal-scoped key (fold.zig's scope filter).
+    const heartbeat = schema.keyIndex("cluster.heartbeat_ms").?;
+    const settings_payload = try test_alloc.alloc(
+        u8,
+        settings_fold.payloadLen(.{
+            .scope = .cluster,
+            .journal_id = [_]u8{0} ** 16,
+            .changes = &[_]validate.Change{.{ .key = heartbeat, .value = .{ .u64 = 5000 } }},
+        }),
+    );
+    defer test_alloc.free(settings_payload);
+    settings_fold.encodePayload(
+        .{
+            .scope = .cluster,
+            .journal_id = [_]u8{0} ** 16,
+            .changes = &[_]validate.Change{.{ .key = heartbeat, .value = .{ .u64 = 5000 } }},
+        },
+        settings_payload,
+    );
+    const live_en = try fix.entryFor(.settings, fix.control_id, 3, 0, settings_payload);
+    const live_sl = try fix.slotFor(1, 3, entry.entryHash(&live_en), fold.head_slot_hash, 1002);
+    try fold.applyControl(&live_sl, &live_en);
+    try std.testing.expectEqual(@as(u64, 5000), fold.settings.getU64(heartbeat));
+
+    // A merge re-slot: the losing branch's settings entry, authored by the
+    // second member and re-slotted by the founder at the current epoch. The
+    // live rule would refuse it (not the leader); the re-slot inference
+    // applies it as a no-op — the survivor's value wins (OQ 33).
+    const other_payload = try test_alloc.alloc(
+        u8,
+        settings_fold.payloadLen(.{
+            .scope = .cluster,
+            .journal_id = [_]u8{0} ** 16,
+            .changes = &[_]validate.Change{.{ .key = heartbeat, .value = .{ .u64 = 9000 } }},
+        }),
+    );
+    defer test_alloc.free(other_payload);
+    settings_fold.encodePayload(
+        .{
+            .scope = .cluster,
+            .journal_id = [_]u8{0} ** 16,
+            .changes = &[_]validate.Change{.{ .key = heartbeat, .value = .{ .u64 = 9000 } }},
+        },
+        other_payload,
+    );
+    var re_en = entry.Entry{
+        .kind = .settings,
+        .journal = fix.control_id,
+        .author = second_id,
+        .author_seq = 1,
+        .author_ts_ms = 0,
+        .ttl_ms = 0,
+        .payload_hash = entry.payloadHash(other_payload),
+        .payload_len = @intCast(other_payload.len),
+        .payload_omitted = false,
+        .signature = undefined,
+        .payload = other_payload,
+    };
+    re_en.signature = (try entry.sign(second, &re_en)).toBytes();
+    const re_sl = try fix.slotFor(1, 4, entry.entryHash(&re_en), fold.head_slot_hash, 1003);
+    try fold.applyControl(&re_sl, &re_en);
+    try std.testing.expectEqual(@as(u64, 5000), fold.settings.getU64(heartbeat));
+    try std.testing.expect(fold.entries.get(re_en.id()) != null);
+
+    // A re-slotted epoch at the current number is a no-op too: the losing
+    // branch's epoch entry names the second member, but the founder's term
+    // survives.
+    var epoch_buf: [epoch.epoch_payload_len]u8 = undefined;
+    epoch.encodeEpochPayload(
+        .{ .number = 1, .reason = .leader_lost, .leader = second_id },
+        &epoch_buf,
+    );
+    var ep_en = entry.Entry{
+        .kind = .epoch,
+        .journal = fix.control_id,
+        .author = second_id,
+        .author_seq = 2,
+        .author_ts_ms = 0,
+        .ttl_ms = 0,
+        .payload_hash = entry.payloadHash(&epoch_buf),
+        .payload_len = epoch.epoch_payload_len,
+        .payload_omitted = false,
+        .signature = undefined,
+        .payload = &epoch_buf,
+    };
+    ep_en.signature = (try entry.sign(second, &ep_en)).toBytes();
+    const ep_sl = try fix.slotFor(1, 5, entry.entryHash(&ep_en), fold.head_slot_hash, 1004);
+    try fold.applyControl(&ep_sl, &ep_en);
+    try std.testing.expectEqual(@as(u64, 1), fold.epoch.?.number);
+    try std.testing.expectEqualSlices(u8, &fix.founder_id, &fold.epoch.?.leader);
 }

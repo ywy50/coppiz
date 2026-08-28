@@ -25,6 +25,22 @@ pub const version: std.SemanticVersion =
 pub const journal = @import("journal/journal.zig");
 pub const config = @import("config/local.zig");
 pub const render = @import("settings/render.zig");
+pub const schema = @import("settings/schema.zig");
+pub const settings_fold = @import("settings/fold.zig");
+pub const validate = @import("settings/validate.zig");
+/// The replication wire (PRD 0003 phase 4, OQ 19 decided): framing, the
+/// message set, and the transport seam (TCP plus the in-memory hub the
+/// node loop and the simulator share).
+pub const net = @import("net/net.zig");
+/// The cluster node loop (PRD 0003 phase 5): the failure detector, the
+/// election -> epoch cycle, admission, and replication — one event loop per
+/// member over the wire.
+pub const cluster = @import("cluster/node.zig");
+/// The pure cluster core (PRD 0003 phases 1–3): membership, election, and
+/// the epoch/merge rules, exported for hosts and the CLI.
+pub const membership = @import("cluster/membership.zig");
+pub const election = @import("cluster/election.zig");
+pub const epoch = @import("cluster/epoch.zig");
 
 comptime {
     // Every src/ module should be referenced here (or from src/main.zig
@@ -67,7 +83,12 @@ test "all public declarations analyze" {
     std.testing.refAllDecls(@import("cluster/membership.zig"));
     std.testing.refAllDecls(@import("cluster/election.zig"));
     std.testing.refAllDecls(@import("cluster/epoch.zig"));
+    std.testing.refAllDecls(@import("cluster/node.zig"));
     std.testing.refAllDecls(@import("sim/sim.zig"));
+    std.testing.refAllDecls(@import("net/net.zig"));
+    std.testing.refAllDecls(@import("net/framing.zig"));
+    std.testing.refAllDecls(@import("net/message.zig"));
+    std.testing.refAllDecls(@import("net/transport.zig"));
 }
 
 test "version round-trips the zon text the build hands over" {

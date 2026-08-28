@@ -8,6 +8,8 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **cluster** | the set of members that share journals; created by one `genesis` entry | PRD 0003 |
 | **member** | a node admitted to the cluster: an Ed25519 keypair, a member id derived from the public key, and an address | PRD 0003 |
 | **node** | one running process holding a data directory; a node that has been admitted is a member | PRD 0005 |
+| **frame** | the wire unit: a length-prefixed body whose first bytes name the wire version and the message kind; the slot/entry records inside `slot`, `sync_page` and `read_page` reuse the on-disk segment record codec | PRD 0003, OQ 19 |
+| **wire client** | the CLI's short-lived connection to a serving node, used when the data-directory lock keeps the CLI out (OQ 47); the client dials with the node's own key, and the node admits it as its operator channel without a join | PRD 0003, OQ 19 |
 | **founder** | the member whose `genesis` created the cluster; seniority 0 | PRD 0003 |
 | **genesis** | the control entry that creates the cluster and its first journal; carries the initial settings and the founder's key; its slot gives the founder seniority 0 | PRD 0001 |
 | **journal** | one named, append-only sequence of slots with its own settings ("schema"); a cluster holds many; a log of slots, not a financial ledger — consumers fold it into whatever view they need. Renamed from "ledger" 2026-08-27; the brief's word, kept there and in verbatim citations | PRD 0001 |
@@ -44,6 +46,8 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **partition** | members that disagree on liveness; each side may elect its own leader | PRD 0003 |
 | **AP / CP** | the two partition postures, from CAP: an AP choice keeps accepting writes during a partition and heals the divergence afterwards (merge); a CP choice refuses writes rather than risk two leaders (`stall`) | PRD 0001, PRD 0003 |
 | **branch** | the slots one side of a partition produced in its own epoch | PRD 0003 |
+| **branch start** | the first slot of a branch — the epoch entry that opened it | PRD 0003 |
+| **common tail** | the last slot before a branch started — the shared prefix both sides of a partition have; a losing branch truncates to it and re-folds the survivor's chain from it | PRD 0003 |
 | **surviving branch** | the branch a merge keeps: its leader appends the `merge` entry and the losing branch's entries are re-slotted after it, in that branch's order | PRD 0003 |
 | **archived branch** | a losing branch's original slots after a merge: its entries are re-slotted into the surviving chain, and these slots are kept (delivered to members without them) so the partition stays verifiable; never appended to again; not to be confused with an archival checkpoint | PRD 0003 |
 | **merge** | the control entry and rule by which the surviving branch re-slots the losing branch's entries after it | PRD 0003 |

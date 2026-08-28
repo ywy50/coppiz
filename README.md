@@ -69,20 +69,24 @@ detail.
 
 ## Status
 
-**Shipped (2026-08-27): the single-member core and the pure cluster core.**
-One process is a complete journal — append, read, follow, restart — with
-settings, TTL and checkpoint cleanup in the chain. On top of that sits the
-cluster core of [PRD 0003](docs/prds/0003-membership-and-leadership.md) as
-pure logic: the membership fold (seniority is a join's slot position,
-[RFC 0002](docs/rfcs/0002-how-join-order-is-made-unspoofable.md),
-[ADR 0005](docs/adrs/0005-join-order-is-slot-position.md)), the election
-function, and the epoch/merge rules — driven by a deterministic simulator
-([OQ 27](docs/open-questions.md)) that partitions, crashes and reorders
-in-memory nodes against them. Next is the node loop and the replication wire
-(PRD 0003 phases 4–6; the wire format is [OQ 19](docs/open-questions.md));
-the order everything ships in is [docs/ROADMAP.md](docs/ROADMAP.md). The
-product is named `coppiz` ([ADR
-0004](docs/adrs/0004-the-product-is-named-coppiz.md)).
+**Shipped (2026-08-27): the single-member core, the pure cluster core, and
+the cluster node loop.** One process is a complete journal — append, read,
+follow, restart — with settings, TTL and checkpoint cleanup in the chain.
+On top of that sits the cluster core of [PRD
+0003](docs/prds/0003-membership-and-leadership.md): the pure membership
+fold, election and epoch/merge rules (driven by the deterministic simulator,
+[OQ 27](docs/open-questions.md)), and now the node loop over the wire —
+failure detection, election → epoch, admission (allowlist/open/prompt), and
+forward/broadcast/backfill, so real processes replicate: `coppiz serve`
+runs a node, members join live, appends through a follower replicate to the
+leader and back, and a healed partition merges deterministically. `coppiz
+append`/`read`/`head` talk to a serving node over the wire when the data
+directory is locked ([OQ 47](docs/open-questions.md)); `coppiz status`,
+`coppiz settings set` and `coppiz admit` round out the CLI. The embedded-host
+write API (a host calling `node.append` on a follower from its own process)
+is [PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)
+follow-up; the wire is the host interface today. The product is named
+`coppiz` ([ADR 0004](docs/adrs/0004-the-product-is-named-coppiz.md)).
 
 ## Overview
 

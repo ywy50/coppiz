@@ -285,6 +285,17 @@ Ordering inside each section is by what blocks implementation first.
     binary stream over one TCP connection. If RFC 0001's option D (observer
     clients) is to stay possible, the protocol must be specified. *Blocks:*
     PRD 0003 phase 4.
+    **Resolved 2026-08-27** (design, at PRD 0003 phase 4): own binary
+    framing over one TCP connection — 4-byte little-endian length prefix,
+    then a body whose first byte is the wire version and second the message
+    kind (all other integers little-endian, as in every coppiz format).
+    The slot/entry records inside `slot`, `sync_page` and `read_page` reuse
+    the on-disk segment record codec, so one codec serves disk and wire.
+    The transport is a thin seam (`Conn`/`Listener`/`Transport` in
+    `src/net/transport.zig`) with two implementations: TCP, and an
+    in-memory hub whose directed edges `drop` and `heal` — the same loop
+    code runs under both, which is the OQ 27 shape. Recorded in PRD 0003's
+    status and implemented in `src/net/`.
 23. **Wire encryption.** Plain TCP on loopback/RFC1918 for v1 (clanker's mesh
     made the same call); for anything else, TLS — Zig `std` has a TLS client
     but no server — or a Noise-style handshake over the member keys we

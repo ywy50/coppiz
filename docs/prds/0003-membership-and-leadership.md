@@ -18,9 +18,24 @@ Source of truth: `src/cluster/membership.zig`, `src/cluster/election.zig`,
 `src/journal/chain.zig`, and `src/sim/sim.zig` (the simulator, roadmap item
 5). OQ 58 (concurrent-join ordering) and OQ 33 (settings at merge) resolved
 with the drafted defaults (admitter receipt order; losing-side `settings`
-re-slotted as no-ops). Remaining: phase 4+ (wire protocol, OQ 19), the node
-loop (phase 5), and the e2e matrix (phase 6), which the simulator's scenarios
-are the first slice of.
+re-slotted as no-ops).
+
+Phases 4–6 shipped 2026-08-27, on [OQ 19](../open-questions.md) decided
+(own binary framing over one TCP connection): the replication wire
+(`src/net/` — framing, the message set, and a transport seam with a TCP and
+an in-memory hub implementation, so the same loop runs under both), the
+node loop (`src/cluster/node.zig` — failure detector, election → epoch,
+admission with `allowlist`/`open`/`prompt`, forward/broadcast/backfill, and
+the partition/merge with the OQ 44 re-fold discipline), the `coppiz serve`
+CLI with every command falling back to the wire when the data directory is
+locked, and the e2e matrix of *Acceptance criteria* below (process-level (a)
+(d) (e); (b) and (c) in-process over the hub transport with real stores and
+real loops). The fold infers a re-slot from its author and epoch
+(`chain.zig applyControl`), so a merged chain replays identically after a
+restart without a side channel. Remaining: the embedded-host write API
+(PRD 0005 phase 1 — the loop's host interaction is the wire today), the
+simulator driving the loop itself (OQ 27's second half), and the open
+questions the matrix names.
 
 One implementation note the simulator pinned down ([OQ 44](../open-questions.md)):
 a merge converges only if every node **re-folds from the last common slot** —

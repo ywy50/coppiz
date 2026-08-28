@@ -437,6 +437,79 @@ pub const Store = struct {
         try self.rebuildIndex(jd);
     }
 
+    /// The group id a journal's segments name (PRD 0006): the header of its
+    /// first segment. For the control journal this is the cluster's genesis
+    /// entry hash — the value a follower must use when a replicated
+    /// `create_journal` needs its store directory.
+    pub fn groupIdOf(self: *const Store, journal_id: [16]u8) ![32]u8 {
+        const jd = self.journals.get(journal_id) orelse return error.UnknownJournal;
+        const header = try self.readSegmentHeader(&jd.segments.items[0]);
+        return header.group_id;
+    }
+
+    /// Truncates a journal's chain to `position` (inclusive): every record
+    /// past it is dropped and the segments are rebuilt from the kept prefix.
+    /// Raw record bytes are copied verbatim, so compacted records (payload
+    /// or header dropped) survive byte-for-byte. This is the OQ 44 re-fold
+    /// discipline's storage half: the losing branch discards its tail and
+    /// folds the merged chain from the last common slot. Rare (heal-time), so
+    /// a full rebuild is fine.
+    pub fn truncate(self: *Store, journal_id: [16]u8, position: slot.Position) !void {
+        const jd = self.journals.get(journal_id) orelse return error.UnknownJournal;
+        // Collect the kept raw records in chain order. Positions are dense
+        // and ordered, so the first record past the target ends the set.
+        var kept = std.ArrayListUnmanaged(u8).empty;
+        defer kept.deinit(self.allocator);
+        outer: for (jd.segments.items) |*seg| {
+            const records = try self.readRecordRegion(seg, 0, seg.records_len);
+            defer self.allocator.free(records);
+            var off: usize = 0;
+            while (off < records.len) {
+                const rec = try segment.decodeRecord(records[off..]);
+                if (slot.Position.order(rec.slot.position(), position) == .gt) break :outer;
+                try kept.appendSlice(self.allocator, records[off .. off + rec.next_offset]);
+                off += rec.next_offset;
+            }
+        }
+
+        // Rebuild: close and delete the old segment files, then write one
+        // fresh head segment carrying the kept records (the kept bytes were
+        // already read; no old handle is needed after this).
+        const header = try self.readSegmentHeader(&jd.segments.items[0]);
+        for (jd.segments.items) |old| old.file.close(self.io);
+        // The closed handles are no longer owned; a rebuild error must not
+        // leave them for deinit to close again.
+        jd.segments.clearRetainingCapacity();
+        jd.head_records_len = 0;
+        var it = jd.dir.iterate();
+        while (try it.next(self.io)) |dirent| {
+            if (dirent.kind != .file) continue;
+            if (std.mem.startsWith(u8, dirent.name, "seg-")) {
+                try jd.dir.deleteFile(self.io, dirent.name);
+            }
+        }
+        const file = try jd.dir.createFile(self.io, "seg-00000001", .{ .read = true });
+        errdefer file.close(self.io);
+        var header_buf: [segment.header_len]u8 = undefined;
+        segment.encodeHeader(header, &header_buf);
+        try file.writePositionalAll(self.io, &header_buf, 0);
+        if (kept.items.len > 0) {
+            try file.writePositionalAll(self.io, kept.items, segment.header_len);
+        }
+        if (self.fsync != .never) try file.sync(self.io);
+
+        var segments = std.ArrayListUnmanaged(Segment).empty;
+        try segments.append(self.allocator, .{
+            .file = file,
+            .records_len = @intCast(kept.items.len),
+            .sealed = false,
+        });
+        jd.segments.deinit(self.allocator);
+        jd.segments = segments;
+        jd.head_records_len = @intCast(kept.items.len);
+        try self.rebuildIndex(jd);
+    }
+
     /// Rebuilds the position index from the (possibly rewritten) segments.
     fn rebuildIndex(self: *Store, jd: *JournalDir) !void {
         jd.index.clearRetainingCapacity();
@@ -865,4 +938,45 @@ test "journal dir names are lowercase hex and round-trip" {
     try std.testing.expectEqualSlices(u8, &id, &back);
     try std.testing.expectError(error.BadHex, hexToJournalId("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"));
     try std.testing.expectError(error.WrongLength, hexToJournalId("short"));
+}
+
+test "truncate drops the tail and keeps the prefix readable across a sealed segment" {
+    var env = TestEnv.init();
+    defer env.deinit();
+    const journal_id = "0123456789abcdef".*;
+    const group_id = [_]u8{0x77} ** 32;
+
+    {
+        // A tiny seal threshold makes segments seal after every couple of
+        // records, so the truncation point lands inside a sealed segment.
+        const data_dir = try env.dataDir();
+        const store = try Store.open(test_alloc, tio, data_dir, .{ .seal_threshold = 500 });
+        defer store.deinit();
+        try store.createJournal(journal_id, group_id);
+        try appendN(store, journal_id, 5);
+        try store.truncate(journal_id, .{ .epoch = 1, .seq = 3 });
+    }
+
+    const store = try env.openStore();
+    defer store.deinit();
+    var seen = std.ArrayListUnmanaged(u64).empty;
+    defer seen.deinit(test_alloc);
+    try store.scan(journal_id, &seen, struct {
+        fn cb(
+            list: *std.ArrayListUnmanaged(u64),
+            sl: *const slot.Slot,
+            en: ?*const entry.Entry,
+        ) anyerror!void {
+            try std.testing.expect(en != null);
+            try list.append(test_alloc, sl.seq);
+        }
+    }.cb);
+    try std.testing.expectEqualSlices(u64, &[_]u64{ 1, 2, 3 }, seen.items);
+    try std.testing.expectEqualSlices(u8, &group_id, &(try store.groupIdOf(journal_id)));
+
+    // Appending after the truncation continues the chain from seq 4.
+    try store.append(journal_id, &testSlot(4), &testEntry(4, "after"));
+    var buf: [512]u8 = undefined;
+    const rec = (try store.read(journal_id, .{ .epoch = 1, .seq = 4 }, &buf)).?;
+    try std.testing.expectEqualStrings("after", rec.entry.?.payload);
 }

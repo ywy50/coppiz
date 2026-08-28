@@ -238,8 +238,9 @@ fn parsePeerKey(
     return error.UnknownKey;
 }
 
-/// Parses a value against the key's declared type.
-fn parseValue(
+/// Parses a value against the key's declared type. Public for the CLI's
+/// `settings set` (the same grammar as `coppiz.toml`).
+pub fn parseValue(
     allocator: std.mem.Allocator,
     key_index: u16,
     value: []const u8,

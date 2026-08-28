@@ -43,6 +43,11 @@ pub const OpenOptions = struct {
     /// The unslotted-queue bound; defaults to the provisional value.
     unslotted_max_bytes: u64 = config.provisional_unslotted_max_bytes,
     fsync: store.Fsync = .every,
+    /// Cluster-node restarts re-*forward* queued entries to the leader
+    /// instead of slotting them locally (a follower re-slotting its own
+    /// queue would fork the chain — PRD 0003 *Write path*). Tier-0 keeps
+    /// the local replay.
+    replay_forward: bool = false,
 };
 
 pub const OpenError = error{
@@ -77,6 +82,10 @@ pub const Node = struct {
     keypair: crypto.sign.Ed25519.KeyPair,
     member_id: [16]u8,
     now: *const fn (std.Io) i64,
+    /// The control journal's genesis entry hash — the group identity (PRD
+    /// 0006): the value every segment header names and the value a follower
+    /// uses when a replicated `create_journal` needs its store directory.
+    group_hash: [32]u8,
     /// The control journal's fold: members, epoch, cluster settings,
     /// journal registry.
     control: chain.FoldState,
@@ -119,6 +128,7 @@ pub const Node = struct {
             .keypair = keypair,
             .member_id = chain.deriveMemberId(keypair.public_key.toBytes()),
             .now = options.now,
+            .group_hash = [_]u8{0} ** 32,
             .control = try chain.FoldState.init(allocator, true, [_]u8{0} ** 16),
             .journals = std.AutoHashMap([16]u8, *JournalState).init(allocator),
             .followers = .empty,
@@ -130,7 +140,12 @@ pub const Node = struct {
         }
 
         try node.foldAll();
-        try node.replayQueue();
+        if (std.mem.eql(u8, &node.control.journal_id, &([_]u8{0} ** 16))) {
+            node.group_hash = [_]u8{0} ** 32;
+        } else {
+            node.group_hash = try node.store.groupIdOf(node.control.journal_id);
+        }
+        if (!options.replay_forward) try node.replayQueue();
         return node;
     }
 
@@ -177,6 +192,9 @@ pub const Node = struct {
 
     /// Resolves a journal name to its id (the control fold's registry).
     pub fn journalIdByName(self: *const Node, name: []const u8) ?[16]u8 {
+        // "__cluster__" is the control journal's canonical name (the CLI's
+        // convention); the control journal is not in its own registry.
+        if (std.mem.eql(u8, name, "__cluster__")) return self.control.journal_id;
         var it = self.control.journals.iterator();
         while (it.next()) |kv| {
             if (std.mem.eql(u8, kv.value_ptr.name, name)) return kv.key_ptr.*;
@@ -195,8 +213,9 @@ pub const Node = struct {
     }
 
     /// This member's next author_seq in a fold (author_seq is per
-    /// (author, journal) and covers control entries too).
-    fn nextAuthorSeq(self: *const Node, fold: *const chain.FoldState) u64 {
+    /// (author, journal) and covers control entries too). The cluster node
+    /// layers its queued-but-unslotted count on top of this.
+    pub fn nextAuthorSeq(self: *const Node, fold: *const chain.FoldState) u64 {
         const author = fold.authors.get(self.member_id) orelse return 1;
         return author.last_seq + 1;
     }
@@ -269,10 +288,7 @@ pub const Node = struct {
             .{ .journal_id = journal_id, .name = name, .changes = initial },
             payload,
         );
-        const group_id = self.control.entries.get(.{
-            .author = self.control.epoch.?.leader,
-            .author_seq = 1,
-        }) orelse return error.NoGenesis;
+        const group_id = self.group_hash;
 
         try self.appendControl(.create_journal, payload, &self.control);
         try self.store.createJournal(journal_id, group_id.entry_hash);
@@ -388,8 +404,9 @@ pub const Node = struct {
     }
 
     /// Builds the next slot as the leader: current epoch, next seq, clamped
-    /// slot_ts_ms (a backwards clock never moves the chain backwards).
-    fn slotFor(self: *Node, fold: *chain.FoldState, en: *const entry.Entry) !slot.Slot {
+    /// slot_ts_ms (a backwards clock never moves the chain backwards). The
+    /// cluster node's leader path slots forwarded entries with this.
+    pub fn slotFor(self: *Node, fold: *chain.FoldState, en: *const entry.Entry) !slot.Slot {
         const now_ms = @as(u64, @intCast(@max(@as(i64, 0), self.now(self.io))));
         var sl = slot.Slot{
             .epoch = self.epoch(),
@@ -405,8 +422,9 @@ pub const Node = struct {
     }
 
     /// Slots and appends a control entry (genesis excluded — that is
-    /// `init`'s job).
-    fn appendControl(
+    /// `init`'s job). Public for the cluster node, which authors control
+    /// entries (join, epoch, merge, settings) as leader.
+    pub fn appendControl(
         self: *Node,
         kind: entry.Kind,
         payload: []const u8,
@@ -438,13 +456,100 @@ pub const Node = struct {
 
     // -- open-time folding ---------------------------------------------------
 
+    /// Applies one replicated slot — the single seam every incoming slot
+    /// uses, whether a live broadcast or a backfill page. Validates against
+    /// this member's fold, writes the record to the store, trims the
+    /// unslotted queue when the entry is this member's own, and notifies
+    /// local followers. `reslotted` selects the merge re-slot rule for the
+    /// control chain (data re-slots use the normal rule; the entries-table
+    /// dedup makes them idempotent — OQ 11).
+    pub fn applyReplicated(
+        self: *Node,
+        journal_id: [16]u8,
+        sl: *const slot.Slot,
+        en: *const entry.Entry,
+        reslotted: bool,
+    ) !void {
+        // A member with no chain yet folds its first record — the genesis —
+        // into the control fold, which adopts the founder's journal id; a
+        // chainless member cannot know the control id before that.
+        const control_unset = std.mem.eql(u8, &self.control.journal_id, &([_]u8{0} ** 16));
+        const is_control = std.mem.eql(u8, &journal_id, &self.control.journal_id) or
+            (control_unset and en.kind == .genesis);
+        if (is_control) {
+            if (reslotted) {
+                try self.control.applyControlReslotted(sl, en);
+            } else {
+                try self.control.applyControl(sl, en);
+            }
+            if (en.kind == .genesis) {
+                // Bootstrap: this genesis founds the control journal's store
+                // directory and names the group (PRD 0006).
+                if (!self.store.hasJournal(journal_id)) {
+                    const hash = entry.entryHash(en);
+                    try self.store.createJournal(journal_id, hash);
+                    self.group_hash = hash;
+                }
+            } else if (en.kind == .create_journal) {
+                // A replicated create_journal records the journal in the
+                // fold; the store directory and the data fold must exist for
+                // its chain to land in.
+                const payload = try chain.decodeCreateJournalPayload(self.allocator, en.payload);
+                defer payload.deinit(self.allocator);
+                try self.ensureJournalDir(payload.journal_id);
+                if (!self.journals.contains(payload.journal_id)) {
+                    var js = try self.allocator.create(JournalState);
+                    errdefer self.allocator.destroy(js);
+                    js.fold = try chain.FoldState.init(self.allocator, false, payload.journal_id);
+                    try self.journals.put(payload.journal_id, js);
+                }
+            }
+        } else {
+            const js = self.journals.get(journal_id) orelse return error.UnknownJournal;
+            try js.fold.applyData(&self.control, sl, en);
+        }
+        try self.store.append(journal_id, sl, en);
+        if (std.mem.eql(u8, &en.author, &self.member_id)) {
+            self.queue.remove(journal_id, en.id()) catch {};
+        }
+        self.notifyFollowers(journal_id, sl, en);
+    }
+
+    /// Creates the store directory for a journal the control fold just
+    /// recorded (a replicated `create_journal` on a follower), naming the
+    /// cluster's group hash exactly as the creator's `createJournal` did.
+    pub fn ensureJournalDir(self: *Node, journal_id: [16]u8) !void {
+        if (self.store.hasJournal(journal_id)) return;
+        try self.store.createJournal(journal_id, self.group_hash);
+    }
+
+    /// Re-folds every journal from the store (the OQ 44 re-fold discipline):
+    /// after the losing branch truncates its store to the last common slot,
+    /// the fold is rebuilt from the surviving chain. The queue is untouched
+    /// — the cluster node's replay policy owns it. Callers must hold no
+    /// references into the old folds.
+    pub fn refold(self: *Node) !void {
+        const control_id = self.control.journal_id;
+        var it = self.journals.valueIterator();
+        while (it.next()) |js_ptr| {
+            const js = js_ptr.*;
+            js.fold.deinit();
+            self.allocator.destroy(js);
+        }
+        self.journals.clearRetainingCapacity();
+        self.control.deinit();
+        self.control = try chain.FoldState.init(self.allocator, true, control_id);
+        try self.foldAll();
+    }
+
     fn foldAll(self: *Node) anyerror!void {
         const ids = try self.store.journalIds(self.allocator);
         defer self.allocator.free(ids);
 
         // The control journal is the one whose first record is a genesis
         // entry; every other journal folds as a data journal against the
-        // control fold, so the control journal folds first.
+        // control fold, so the control journal folds first. A member with a
+        // key but no chain (a joiner before backfill) has nothing to fold.
         var control_id: ?[16]u8 = null;
         for (ids) |journal_id| {
             var is_control = false;
@@ -461,7 +566,10 @@ pub const Node = struct {
                 break;
             }
         }
-        const cid = control_id orelse return error.NotGenesisFound;
+        const cid = control_id orelse {
+            self.control.journal_id = [_]u8{0} ** 16;
+            return;
+        };
         self.control.journal_id = cid;
 
         try self.foldJournal(&self.control, cid);
@@ -486,6 +594,16 @@ pub const Node = struct {
                 if (c.fold.is_control) {
                     try c.fold.applyControl(sl, e);
                 } else {
+                    // A losing branch truncates its control fold first; its
+                    // own data records from the divergent epoch still sit in
+                    // the store until the survivor fetches them (merge_ack).
+                    // Their epoch exceeds the truncated control fold's, which
+                    // applyData refuses (BadPosition) — skip them; the
+                    // survivor re-slots them into the merged chain. A control
+                    // epoch with no epoch entry yet cannot validate data at
+                    // all, so it is skipped too.
+                    if (c.node.control.epoch == null or
+                        sl.epoch > c.node.control.epoch.?.number) return;
                     try c.fold.applyData(&c.node.control, sl, e);
                 }
             }
@@ -498,11 +616,18 @@ pub const Node = struct {
             allocator: std.mem.Allocator,
         };
         var pending = std.ArrayListUnmanaged(entry.Entry).empty;
-        defer pending.deinit(self.allocator);
+        defer {
+            for (pending.items) |en| self.allocator.free(en.payload);
+            pending.deinit(self.allocator);
+        }
         var ctx = Ctx{ .list = &pending, .allocator = self.allocator };
         try self.queue.scan(&ctx, struct {
             fn cb(c: *Ctx, en: *const entry.Entry) anyerror!void {
-                try c.list.append(c.allocator, en.*);
+                // The scan's buffer is freed when it returns; the payload
+                // must survive in the collected copy.
+                var copy = en.*;
+                copy.payload = try c.allocator.dupe(u8, en.payload);
+                try c.list.append(c.allocator, copy);
             }
         }.cb);
         // The queue stores borrowed entries; the fold needs the payload
@@ -686,8 +811,10 @@ pub fn visible(
 
 /// Loads this member's Ed25519 key from `member.key` (the raw 64-byte
 /// secret key). `init` writes it; a fresh directory without one cannot open
-/// (there is nothing to fold yet — run `coppiz init` first).
-fn loadMemberKey(
+/// (there is nothing to fold yet — run `coppiz init` first). Public for the
+/// wire client, which reads the key while the serving node holds the
+/// directory lock.
+pub fn loadMemberKeyPublic(
     _: std.mem.Allocator,
     io: std.Io,
     data_dir: std.Io.Dir,
@@ -699,6 +826,14 @@ fn loadMemberKey(
     if (n != buf.len) return error.TruncatedKey;
     const sk = try crypto.sign.Ed25519.SecretKey.fromBytes(buf);
     return crypto.sign.Ed25519.KeyPair.fromSecretKey(sk);
+}
+
+fn loadMemberKey(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    data_dir: std.Io.Dir,
+) !crypto.sign.Ed25519.KeyPair {
+    return loadMemberKeyPublic(allocator, io, data_dir);
 }
 
 /// Writes a fresh member key to `member.key`. Used by `init`.
@@ -1164,4 +1299,159 @@ test "journal.max_entry_bytes and the queue bound trip at the node (G6)" {
     defer tiny.deinit();
     const main_id = tiny.journalIdByName("main").?;
     try std.testing.expectError(error.QueueFull, tiny.append(main_id, "fits? no", 0));
+}
+
+test "applyReplicated replays another member's whole store onto a fresh member" {
+    var env_a = TestEnv.init();
+    defer env_a.deinit();
+    var env_b = TestEnv.init();
+    defer env_b.deinit();
+    test_now = 1_700_000_000_000;
+
+    // A: a founder with one data entry. The node lives for the whole test
+    // (the replay borrows its folds).
+    {
+        const data_dir = try env_a.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    var a = try openNode(&env_a);
+    defer a.deinit();
+    _ = try a.append(a.journalIdByName("main").?, "hello", 0);
+    _ = try a.append(a.journalIdByName("main").?, "world", 0);
+
+    // B: a member with a key but no chain (the joiner's pre-backfill state).
+    const b_keypair = crypto.sign.Ed25519.KeyPair.generate(tio);
+    {
+        const data_dir = try env_b.dataDir();
+        try writeMemberKey(test_alloc, tio, data_dir, b_keypair);
+    }
+    var b = try openNode(&env_b);
+    defer b.deinit();
+    try std.testing.expect(std.mem.eql(u8, &b.control.journal_id, &([_]u8{0} ** 16)));
+    try std.testing.expect(b.control.head == null);
+
+    // Replay A's control chain (genesis, create_journal), then the data
+    // chain, exactly as a backfill would deliver them.
+    const Replay = struct {
+        target: *Node,
+        journal_id: [16]u8,
+        fn cb(r: *@This(), sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
+            const e = en orelse return; // compacted records have no entry (OQ 43)
+            try r.target.applyReplicated(r.journal_id, sl, e, false);
+        }
+    };
+    var control_replay = Replay{ .target = b, .journal_id = a.control.journal_id };
+    try a.store.scan(a.control.journal_id, &control_replay, Replay.cb);
+
+    const main_id = a.journalIdByName("main").?;
+    var data_replay = Replay{ .target = b, .journal_id = main_id };
+    try a.store.scan(main_id, &data_replay, Replay.cb);
+
+    // The folds hash-equal and B reads the entry by id.
+    const a_hash = try a.control.hash(test_alloc);
+    const b_hash = try b.control.hash(test_alloc);
+    try std.testing.expectEqualSlices(u8, &a_hash, &b_hash);
+    try std.testing.expectEqual(a.head(main_id), b.head(main_id));
+    try std.testing.expectEqualSlices(u8, &a.group_hash, &b.group_hash);
+
+    var seen: usize = 0;
+    _ = try b.readById(
+        main_id,
+        .{ .author = a.member_id, .author_seq = 2 },
+        true,
+        true,
+        &seen,
+        struct {
+            fn cb(c: *usize, _: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
+                try std.testing.expectEqualStrings("world", en.?.payload);
+                c.* += 1;
+            }
+        }.cb,
+    );
+    try std.testing.expectEqual(@as(usize, 1), seen);
+
+    // The merge discipline: truncate B's data chain past seq 1 and re-fold
+    // — the losing branch's tail is gone and the head moves back.
+    try b.store.truncate(main_id, .{ .epoch = 1, .seq = 1 });
+    try b.refold();
+    try std.testing.expectEqual(
+        @as(?slot.Position, .{ .epoch = 1, .seq = 1 }),
+        b.head(main_id),
+    );
+    try std.testing.expect(b.journals.get(main_id).?.fold.entries.get(.{
+        .author = a.member_id,
+        .author_seq = 2,
+    }) == null);
+}
+
+test "replay_forward leaves queued entries for the leader instead of local re-slot" {
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+
+    // A follower's durable forward step: queue a signed entry without
+    // slotting it (the leader has not answered yet).
+    var main_id: [16]u8 = undefined;
+    const queued_id = blk: {
+        var node = try openNode(&env);
+        defer node.deinit();
+        main_id = node.journalIdByName("main").?;
+        var en = entry.Entry{
+            .kind = .data,
+            .journal = main_id,
+            .author = node.member_id,
+            .author_seq = 1,
+            .author_ts_ms = @intCast(test_now),
+            .ttl_ms = 0,
+            .payload_hash = entry.payloadHash("forwarded"),
+            .payload_len = 9,
+            .payload_omitted = false,
+            .signature = undefined,
+            .payload = "forwarded",
+        };
+        en.signature = (try entry.sign(node.keypair, &en)).toBytes();
+        try node.queue.append(&en);
+        break :blk en.id();
+    };
+
+    // Reopen with replay_forward: the entry stays queued (the loop will
+    // re-forward it), the data chain is untouched.
+    {
+        var node = try Node.open(test_alloc, tio, try env.dataDir(), .{
+            .now = &fakeClock,
+            .replay_forward = true,
+        });
+        defer node.deinit();
+        try std.testing.expectEqual(@as(?slot.Position, null), node.head(main_id));
+        var queued: usize = 0;
+        try node.queue.scan(&queued, struct {
+            fn cb(c: *usize, en: *const entry.Entry) anyerror!void {
+                try std.testing.expectEqualStrings("forwarded", en.payload);
+                c.* += 1;
+            }
+        }.cb);
+        try std.testing.expectEqual(@as(usize, 1), queued);
+        _ = queued_id;
+    }
+
+    // Reopen with the tier-0 default: the queued entry is slotted locally.
+    {
+        var node = try openNode(&env);
+        defer node.deinit();
+        try std.testing.expectEqual(
+            @as(?slot.Position, .{ .epoch = 1, .seq = 1 }),
+            node.head(main_id),
+        );
+        var queued: usize = 0;
+        try node.queue.scan(&queued, struct {
+            fn cb(c: *usize, _: *const entry.Entry) anyerror!void {
+                c.* += 1;
+            }
+        }.cb);
+        try std.testing.expectEqual(@as(usize, 0), queued);
+    }
 }
