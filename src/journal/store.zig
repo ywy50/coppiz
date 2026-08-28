@@ -369,6 +369,28 @@ pub const Store = struct {
         }
     }
 
+    /// The kind of a journal's first record (null when the journal holds no
+    /// records). The open fold's control-journal discovery needs only the
+    /// first record — a genesis — to tell the control journal from data
+    /// journals, and previously scanned the whole chain to find it.
+    pub fn firstRecordKind(self: *const Store, journal_id: [16]u8) !?entry.Kind {
+        const jd = self.journals.get(journal_id) orelse return error.UnknownJournal;
+        const seg = &jd.segments.items[0];
+        if (seg.records_len == 0) return null;
+        var prefix: [segment.record_prefix_len]u8 = undefined;
+        const n = try seg.file.readPositionalAll(self.io, &prefix, segment.header_len);
+        if (n != prefix.len) return error.Truncated;
+        const body_len = std.mem.readInt(u32, prefix[0..4], .little);
+        const total = segment.record_prefix_len + body_len;
+        const buf = try self.allocator.alloc(u8, total);
+        defer self.allocator.free(buf);
+        const m = try seg.file.readPositionalAll(self.io, buf, segment.header_len);
+        if (m != total) return error.Truncated;
+        const rec = try segment.decodeRecord(buf);
+        const e = rec.entry orelse return null; // a slot-only first record is not a genesis
+        return e.kind;
+    }
+
     /// What a checkpoint compaction keeps for a removed entry (PRD 0002
     /// `ttl.retain`): the entry header (with payload hash) and its slot, or
     /// only the slot.

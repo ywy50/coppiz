@@ -633,18 +633,13 @@ pub const Node = struct {
         // entry; every other journal folds as a data journal against the
         // control fold, so the control journal folds first. A member with a
         // key but no chain (a joiner before backfill) has nothing to fold.
+        // Discovery reads only each journal's first record — the open fold
+        // previously scanned every journal in full to learn what its first
+        // record was.
         var control_id: ?[16]u8 = null;
         for (ids) |journal_id| {
-            var is_control = false;
-            try self.store.scan(journal_id, &is_control, struct {
-                fn cb(flag: *bool, _: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
-                    if (flag.*) return;
-                    if (en) |e| {
-                        if (e.kind == .genesis) flag.* = true;
-                    }
-                }
-            }.cb);
-            if (is_control) {
+            const kind = try self.store.firstRecordKind(journal_id);
+            if (kind == .genesis) {
                 control_id = journal_id;
                 break;
             }
@@ -757,7 +752,11 @@ pub const Node = struct {
     }
 
     /// Reads slots in `[from, to]`, in chain order. `from` defaults to the
-    /// journal's genesis, `to` to its head (inclusive).
+    /// journal's genesis, `to` to its head (inclusive). Walks the store in
+    /// chain order (one region read per segment) instead of sorting the
+    /// fold's whole entries map per call; visibility is the fold's, as
+    /// before, with a single `now` sampled at the start so one range read is
+    /// one consistent snapshot.
     pub fn readRange(
         self: *Node,
         journal_id: [16]u8,
@@ -772,17 +771,43 @@ pub const Node = struct {
         const start = from orelse slot.Position{ .epoch = 1, .seq = 1 };
         const end = to orelse fold.head orelse return;
 
-        // The fold's entries, sorted by slot position (chain order).
-        const ids = try self.sortedEntryIds(fold);
-        defer self.allocator.free(ids);
-        for (ids) |eid| {
-            const info = fold.entries.get(eid).?;
-            if (slot.Position.order(info.position, start) == .lt) continue;
-            if (slot.Position.order(info.position, end) == .gt) break;
-            const now_ms = self.now(self.io);
-            if (!visible(fold, info, now_ms, include_stale, include_expired)) continue;
-            _ = try self.readRecord(journal_id, info, ctx, on_entry);
-        }
+        const ScanCtx = struct {
+            fold: *const chain.FoldState,
+            start: slot.Position,
+            end: slot.Position,
+            now: i64,
+            include_stale: bool,
+            include_expired: bool,
+            user_ctx: @TypeOf(ctx),
+        };
+        var c = ScanCtx{
+            .fold = fold,
+            .start = start,
+            .end = end,
+            .now = self.now(self.io),
+            .include_stale = include_stale,
+            .include_expired = include_expired,
+            .user_ctx = ctx,
+        };
+        const Dispatch = struct {
+            fn cb(cc: *ScanCtx, sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
+                // A non-indexed start falls back to a full scan; the window
+                // filter still applies.
+                if (slot.Position.order(sl.position(), cc.start) == .lt) return;
+                if (slot.Position.order(sl.position(), cc.end) == .gt) return error.EndOfRange;
+                // A slot-only record is a removed entry, which is invisible
+                // under every flag — the fold filter below already excludes
+                // it, and without an entry its id is not derivable.
+                const e = en orelse return;
+                const info = cc.fold.entries.get(e.id()) orelse return;
+                if (!visible(cc.fold, info, cc.now, cc.include_stale, cc.include_expired)) return;
+                try on_entry(cc.user_ctx, sl, en);
+            }
+        };
+        self.store.scanFrom(journal_id, start, &c, Dispatch.cb) catch |err| switch (err) {
+            error.EndOfRange => {},
+            else => return err,
+        };
     }
 
     /// The control journal, or a data journal this node has folded.
@@ -807,24 +832,6 @@ pub const Node = struct {
         const rec = (try self.store.read(journal_id, info.position, buf)) orelse return false;
         try on_entry(ctx, &rec.slot, if (rec.entry) |*en| en else null);
         return true;
-    }
-
-    fn sortedEntryIds(self: *Node, fold: *chain.FoldState) ![]entry.Id {
-        const ids = try self.allocator.alloc(entry.Id, fold.entries.count());
-        var i: usize = 0;
-        var it = fold.entries.keyIterator();
-        while (it.next()) |eid| {
-            ids[i] = eid.*;
-            i += 1;
-        }
-        std.mem.sort(entry.Id, ids, fold, struct {
-            fn lt(f: *chain.FoldState, a: entry.Id, b: entry.Id) bool {
-                const pa = f.entries.get(a).?.position;
-                const pb = f.entries.get(b).?.position;
-                return slot.Position.order(pa, pb) == .lt;
-            }
-        }.lt);
-        return ids;
     }
 
     // -- follow ---------------------------------------------------------------
