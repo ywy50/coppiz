@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 41](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 41 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -23,8 +23,8 @@ the way clanker's did before its tools existed.
 hand maintenance until the project is bigger?
 
 **Why now.** The store is not small anymore: 6 PRDs, 8 ADRs, 36 RFCs, plus
-research and reports, all cross-referencing each other and the open-questions
-register. The OQ was opened when the store was a fraction of this.
+research and reports, all cross-referencing each other. The OQ was opened
+when the store was a fraction of this.
 
 **Drivers.** Any acceptable option must:
 
@@ -149,7 +149,7 @@ available if the store outgrows it.
 
 ## References
 
-- [OQ 41](../open-questions.md) - the register entry this RFC addresses.
+- OQ 41 (historical) - the question this RFC addresses.
 - [ADR 0003](../adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md) -
   the no-external-infrastructure principle the recommendation leans on.
 - `scripts/docs-index.sh` and `scripts/project-kit.py docs-check` - the

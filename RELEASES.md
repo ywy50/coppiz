@@ -27,7 +27,7 @@ The public contract includes more than Zig declarations: the library API in
 journal settings and local config and their defaults; the on-disk entry, slot,
 segment and snapshot formats (each carries a version a reader refuses when
 unknown); and the replication wire protocol once [OQ
-19](docs/open-questions.md) decides whether it is public (RFC 0001 keeps the
+19](docs/prds/0003-membership-and-leadership.md) decides whether it is public (RFC 0001 keeps the
 protocol specified either way; whether it is a public contract is that
 question, not the library/service one). A signature-preserving change to
 results, errors, defaults, side effects, wire data, or persisted data can

@@ -12,14 +12,14 @@ states the design the RFC recommends and will follow the RFC's decision.
 Phases 1–3 shipped 2026-08-27, on the RFC's decision ([ADR
 0005](../adrs/0005-join-order-is-slot-position.md), option A): the pure
 membership fold, the election function, and the epoch/merge rules, plus the
-deterministic simulator that drives them ([OQ 27](../open-questions.md#oq-27)).
+deterministic simulator that drives them (OQ 27).
 Source of truth: `src/cluster/membership.zig`, `src/cluster/election.zig`,
 `src/cluster/epoch.zig`, the `join`/`leave`/`epoch`/`merge` rules wired into
 `src/journal/chain.zig`, and `src/sim/sim.zig` (the deterministic simulator). OQ 58 (concurrent-join ordering) and OQ 33 (settings at merge) resolved
 with the drafted defaults (admitter receipt order; losing-side `settings`
 re-slotted as no-ops).
 
-Phases 4–6 shipped 2026-08-27, on [OQ 19](../open-questions.md#oq-19) decided
+Phases 4–6 shipped 2026-08-27, on OQ 19 decided
 (own binary framing over one TCP connection): the replication wire
 (`src/net/` - framing, the message set, and a transport seam with a TCP and
 an in-memory hub implementation, so the same loop runs under both), and the
@@ -50,7 +50,7 @@ the loop (OQ 27's second half) and a deterministic scenario before it can
 be pinned. Reported rather than silently worked around: the embed-cluster
 example's partition stays short enough to avoid the election.
 
-One implementation note the simulator pinned down ([OQ 44](../open-questions.md#oq-44)):
+One implementation note the simulator pinned down ([OQ 44](0002-ttl-and-staleness.md)):
 a merge converges only if every node **re-folds from the last common slot** -
 the losing branch's entries re-slot as no-ops for the *survivor's* fold, but
 cannot undo what the loser already folded (a settings change, a join), so
@@ -85,7 +85,7 @@ cannot conflict over content, only over order - and heals order with a
 deterministic merge. Where an operator cannot accept two leaders (a strict
 single sequencer), the `configured` mode with `fallback = stall` gives up
 availability instead, and that is the CP/AP choice made per cluster rather
-than baked in. The default is [open question 2](../open-questions.md#oq-2).
+than baked in. The default is open question 2.
 
 ## Goals
 
@@ -117,7 +117,7 @@ than baked in. The default is [open question 2](../open-questions.md#oq-2).
 - **No Byzantine tolerance.** A member that signs with its own key and follows
   the protocol is trusted for what it authors; the chain stops it lying about
   *others* or about *history*, not about its own future entries. See PRD 0001
-  non-goals and [open question 1](../open-questions.md#oq-1).
+  non-goals and [open question 1](../rfcs/0009-trust-model.md).
 
 ## Design
 
@@ -152,37 +152,37 @@ for `coppiz admit <id>`; `open` admits anyone who can reach the port (for
 loopback and lab use, warned about by `coppiz doctor`). Admission is the
 cluster's trust boundary; once the `join` is slotted the member is as trusted
 as any other. How the allowlist learns the key out of band is [open question
-21](../open-questions.md).
+21](../rfcs/0016-allowlist-key-learning.md).
 
 **Member states.** `joining` (admitted, `join` not yet slotted) → `syncing`
 (slotted, backfilling to the head) → `member` (at head within
 `sync.lag_slots`, layer and value [open question
-56](../open-questions.md)) ↔ `unreachable` (failure detector lost it) →
+56](../rfcs/0038-sync-knobs-layer.md)) ↔ `unreachable` (failure detector lost it) →
 `left` (a `leave` entry). Only `member` is leader-eligible. `syncing` is the brief's
 "definitely has the full state" made a state, not a heuristic: at head of
-the chain (the sync path refuses compacted records, [open question
-43](../open-questions.md)).
+the chain (the sync path refuses compacted records, open question
+43).
 
 **Leave and seniority.** A `leave` entry - by the member itself, or by the
 leader evicting a member that has been `unreachable` for
 `membership.evict_after_ms` (0 = never; default never, [open question
-20](../open-questions.md)) - ends that member's seniority. If the same key
+20](../rfcs/0015-eviction.md)) - ends that member's seniority. If the same key
 rejoins, it gets a new `join` slot and therefore the *newest* seniority. A
 member that merely restarts or drops off the network keeps its seniority: its
 `join` slot did not move. So seniority resets only on `leave`, which is a
-chain event, never on absence ([open question 4](../open-questions.md#oq-4)).
+chain event, never on absence ([open question 4](../rfcs/0013-seniority-on-rejoin.md)).
 
 **Failure detection.** Every member heartbeats every other over the
 replication connection (`cluster.heartbeat_ms`, default 1 s); a member missed
 for `cluster.suspect_after_ms` (default 5 s) is `unreachable`. Both timings
-are placeholders, on the record at [OQ 37](../open-questions.md#oq-37) together
+are placeholders, on the record at [OQ 37](../rfcs/0034-leader-lease.md) together
 with the leader-lease question they feed. A leader that
 becomes `unreachable` triggers an election on every member that noticed.
 
 Full
 mesh is the v1 topology and inherits clanker's reasoning for a small cap
 (`cluster.max_members`, default 32); the leader-star or gossip topology for
-larger clusters is [open question 25](../open-questions.md#oq-25). The cap is per
+larger clusters is [open question 25](../rfcs/0011-topology-past-32.md). The cap is per
 **group**: past it, the system scales by more groups, not a bigger one
 ([PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)), and a member
 keeps per-member state only for its own group.
@@ -221,7 +221,7 @@ election, and frozen for the epoch - it is not re-evaluated on every append,
 or the leader would flap. Because `syncing` members are never eligible, every
 candidate under `freshest` already has the full state up to its head; the
 tiebreak only prefers the one that saw the most before the old leader went.
-Its exact semantics are [open question 12](../open-questions.md#oq-12).
+Its exact semantics are open question 12.
 
 **Epochs.** A new leader's first act is to append an `epoch` control entry:
 `{epoch: prev + 1, reason: leader_lost | mode_change | merge | manual,
@@ -276,7 +276,7 @@ setting they change by a `settings` entry the leader appends. The gate is
 - `false` - every member refuses a `settings` entry that touches
   `leadership.*`, `invalid_settings: leadership frozen`. The only way to
   change the mode is the offline procedure in [open question
-  5](../open-questions.md): stop every member, run `coppiz reconfigure` on
+  5](../rfcs/0014-offline-reconfigure.md): stop every member, run `coppiz reconfigure` on
   one, which appends the entry and an epoch locally, then restart the rest so
   they backfill it - *that* is still a chain event, so no member can be
   running a different mode than the chain says.
@@ -299,11 +299,11 @@ member under `seniority` with `reconfigurable = true`, add members, switch to
 | `leadership.reconfigurable` | bool | `true` | from `true` → `false` live; `false` → `true` offline only |
 | `cluster.admission` | `allowlist`, `prompt`, `open` | `allowlist` | yes |
 | `cluster.max_members` | u16 | 32 | yes |
-| `cluster.max_journals` | u32 | unset ([OQ 55](../open-questions.md#oq-55)) | yes |
+| `cluster.max_journals` | u32 | unset ([OQ 55](0001-journal-core.md)) | yes |
 | `cluster.heartbeat_ms` | u64 | 1000 | yes |
 | `cluster.suspect_after_ms` | u64 | 5000 | yes |
 | `membership.evict_after_ms` | u64 | 0 (never) | yes |
-| `merge.settle_ms` | u64 | 30000 ([OQ 60](../open-questions.md#oq-60)) | yes |
+| `merge.settle_ms` | u64 | 30000 ([OQ 60](../research/0008-merge-settle-default.md)) | yes |
 
 **Dependencies.** PRD 0001 (chain, control kinds, backfill), PRD 0004
 (settings entries, the frozen-key refusal), RFC 0002 (decision on the
@@ -320,11 +320,11 @@ join-order mechanism), clanker PRD 0011 (admission modes, reused as design).
 3. `src/cluster/epoch.zig` - `epoch` validation and the merge rule: given two
    heads, compute survivor and re-slot order; property test that any member
    given both heads computes the same result. Shipped 2026-08-27, with the
-   deterministic simulator ([OQ 27](../open-questions.md#oq-27), `src/sim/sim.zig`)
+   deterministic simulator (OQ 27, `src/sim/sim.zig`)
    as the phase-3 acceptance harness - its scenarios are the first slice of
    the e2e matrix below.
 4. `src/net/` - framing, heartbeats, forward/broadcast/backfill
-   ([open question 19](../open-questions.md#oq-19) decides HTTP vs own framing).
+   (open question 19 decides HTTP vs own framing).
 5. `src/cluster/node.zig` - the loop: failure detector → election → epoch;
    admission; the reconfigure handover.
 6. E2E: (a) 1 → 2 → 3 members joined live, leader correct at each step under
@@ -367,10 +367,16 @@ join-order mechanism), clanker PRD 0011 (admission modes, reused as design).
 ## Open questions / future work
 
 - The default mode at n = 2 and whether AP-with-merge or CP-with-stall is
-  what an operator expects out of the box ([OQ 2](../open-questions.md#oq-2)).
-- Seniority on rejoin ([OQ 4]), the offline reconfigure procedure ([OQ 5]),
-  eviction ([OQ 20]), topology past 32 ([OQ 25]), and `freshest` semantics
-  ([OQ 12]) - all in [the register](../open-questions.md).
+  what an operator expects out of the box was settled with the shipped
+  default: `seniority`, with `configured` + `stall` available per cluster
+  as the CP alternative (OQ 2).
+- Seniority on rejoin ([RFC 0013](../rfcs/0013-seniority-on-rejoin.md),
+  OQ 4), the offline reconfigure procedure
+  ([RFC 0014](../rfcs/0014-offline-reconfigure.md), OQ 5), eviction
+  ([RFC 0015](../rfcs/0015-eviction.md), OQ 20) and topology past 32
+  ([RFC 0011](../rfcs/0011-topology-past-32.md), OQ 25) are explored in
+  their RFCs; `freshest` semantics shipped with election-time freezing
+  (OQ 12).
 - A `quorum` mode for n ≥ 3 clusters that want Raft guarantees is roadmap;
   it would be a fourth value of `leadership.mode`, selectable live like the
   others, which is the payoff of making the mode a setting.

@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 45](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 45 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -142,7 +142,7 @@ gets the gate; C gets the claim, at the cost of one extra job.
 
 ## References
 
-- [OQ 45](../open-questions.md) - the register entry this RFC addresses.
+- OQ 45 (historical) - the question this RFC addresses.
 - [ADR 0001](../adrs/0001-zig-0-16-standard-library-only-for-the-core.md) -
   the toolchain the pin names.
 - [AGENTS.md](../../AGENTS.md) - the strictest-host (static musl) constraint

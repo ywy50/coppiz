@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 37](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 37 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -135,8 +135,8 @@ without changing the default.
 
 ## References
 
-- [OQ 37](../open-questions.md) - the register entry this RFC addresses.
+- OQ 37 (historical) - the question this RFC addresses.
 - [PRD 0003](../prds/0003-membership-and-leadership.md) - the epochs and
   the failure detector.
-- [OQ 2](../open-questions.md) - the resolved AP default.
-- [OQ 54](../open-questions.md) - the measurement list for the timings.
+- [OQ 2](../prds/0003-membership-and-leadership.md) - the resolved AP default.
+- [OQ 54](../research/0007-tier-number-measurements.md) - the measurement list for the timings.

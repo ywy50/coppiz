@@ -46,7 +46,7 @@ equals doubles the stable surface before there is one user.
    file.
 
 **Out of scope.** The wire protocol for replication between members ([OQ
-19](../open-questions.md)) - that exists in either shape. Language bindings
+19](../prds/0003-membership-and-leadership.md)) - that exists in either shape. Language bindings
 beyond Zig (roadmap).
 
 ## Current state
@@ -213,7 +213,7 @@ the protocol clean enough that D stays possible".
 - Is a C ABI needed sooner than the service API, for hosts that link C but
   not Zig? (first non-Zig consumer.)
 - Should the replication protocol be public (D) from v1, or internal until
-  1.0? ([OQ 19](../open-questions.md#oq-19))
+  1.0? ([OQ 19](../prds/0003-membership-and-leadership.md))
 
 ## Next steps / action items
 

@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-[Open question 18](../open-questions.md) - no licence chosen - blocks the
+Open question 18 - no licence chosen - blocks the
 first public exposure of the repository. clanker's research tracked the
 licences of every surveyed store (BUSL, CSL, Apache, MIT) as a selection
 criterion, and the brief's comparison set (SQLite, dqlite, rqlite) are
@@ -35,7 +35,7 @@ Apache-2.0 is permissive like MIT, and adds three written-down
 clauses MIT leaves implicit: an explicit patent grant (storage and
 replication are patent-dense; the grant is defensive - it terminates for a
 licensee that sues over patents), an inbound = outbound contribution term
-(the first external contribution, [OQ 45](../open-questions.md#oq-45), is
+(the first external contribution, [OQ 45](../rfcs/0036-ci-toolchain-pin.md), is
 licensed without a CLA), and trademark protection for the coppiz name and
 mark. TigerBeetle, the replicated Zig store whose simulator discipline this
 project copies, made the same choice.

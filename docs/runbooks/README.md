@@ -8,7 +8,8 @@ fenced blocks.
 
 ## Inventory
 
-None yet. The first ones the design already predicts are listed in
-[open-questions.md](../open-questions.md): rolling upgrade (OQ 26), backup and
-restore without forking the chain (OQ 39), and offline reconfigure when
-`leadership.reconfigurable = false` (OQ 5).
+None yet. The first ones the design already predicts are listed with the
+records that will settle them: rolling upgrade ([RFC 0023](../rfcs/0023-rolling-upgrade.md)),
+backup and restore without forking the chain ([RFC 0024](../rfcs/0024-backup-restore.md)),
+and offline reconfigure when `leadership.reconfigurable = false`
+([RFC 0014](../rfcs/0014-offline-reconfigure.md)).

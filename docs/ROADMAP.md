@@ -9,8 +9,7 @@ to land. Update it when a PRD changes status.
 - **Repository founded** (2026-08-21) - Zig 0.16 skeleton that builds and
   tests (`zig build test`), clanker's docs taxonomy, five draft PRDs (0006
   followed), two RFCs in discussion, two accepted ADRs (0003 followed), one
-  carried research note, the open-questions register and the glossary. No
-  store logic exists.
+  carried research note, and the glossary. No store logic exists.
 - **Named coppiz** (2026-08-27) - [ADR 0004](adrs/0004-the-product-is-named-coppiz.md);
   the module, binary, package name and `coppiz.toml` carry it.
 - **Journal core, single member** (2026-08-27) - [PRD 0001](prds/0001-journal-core.md)
@@ -32,7 +31,7 @@ to land. Update it when a PRD changes status.
 - **Join order decided** (2026-08-27) - [RFC 0002](rfcs/0002-how-join-order-is-made-unspoofable.md)
   decided as option A (join is a chain entry; seniority is its slot
   position), recorded in [ADR 0005](adrs/0005-join-order-is-slot-position.md);
-  [OQ 58](open-questions.md#oq-58) and [OQ 33](open-questions.md#oq-33) resolved with
+  [OQ 58](prds/0003-membership-and-leadership.md) and [OQ 33](prds/0003-membership-and-leadership.md) resolved with
   the drafted defaults.
 - **Cluster core: membership, election, epochs and merge** (2026-08-27) -
   [PRD 0003](prds/0003-membership-and-leadership.md) phases 1–3: the pure
@@ -42,17 +41,17 @@ to land. Update it when a PRD changes status.
   election, mode_change handover), the `merge` entry with the checkpoint
   settle rule, the re-slot path with the OQ 33 no-op semantics, and the
   survivor rule shared with election.
-- **Deterministic simulator** (2026-08-27) - [OQ 27](open-questions.md#oq-27): a
+- **Deterministic simulator** (2026-08-27) - [OQ 27](prds/0003-membership-and-leadership.md): a
   seeded, single-threaded world of in-memory nodes driving
   the pure fold/election/merge functions with partitions, crashes, clock
   skew and reordered delivery. Scenarios: partition-heal-merge (G7 core),
   partitioned joins with deterministic seniority (RFC 0002), leader crash,
   reorder, configured + stall (G4 core), clock skew. Pins the merge
   discipline: on heal every node re-folds from the last common slot
-  ([OQ 44](open-questions.md#oq-44)).
+  ([OQ 44](prds/0002-ttl-and-staleness.md)).
 - **Membership and leadership: wire, node loop, e2e** (2026-08-27) -
   [PRD 0003](prds/0003-membership-and-leadership.md) phases 4–6, on
-  [OQ 19](open-questions.md#oq-19) decided (own binary framing over one TCP
+  [OQ 19](prds/0003-membership-and-leadership.md) decided (own binary framing over one TCP
   connection):
   - the replication wire (`src/net/` - framing, the message set, and a
     transport seam with TCP and an in-memory hub implementation),
@@ -84,7 +83,7 @@ to land. Update it when a PRD changes status.
 
 The same binary and settings schema at every tier; what changes is which
 mechanisms are on. The numbers are design intent, to be replaced by
-measurement ([OQ 54](open-questions.md#oq-54)). Detail: [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md).
+measurement ([OQ 54](research/0007-tier-number-measurements.md)). Detail: [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md).
 
 | Tier | Instances | What it is |
 |---|---|---|
@@ -102,12 +101,12 @@ the phases.
 1. **First host integration (clanker)** - PRD 0005 phase 5: a clanker branch
    with `ck_state` over coppiz, one stream replicated between two instances,
    measured against its spike note's three journeys. A second, unrelated
-   host example follows to keep the API general ([OQ 46](open-questions.md#oq-46)).
-2. **First public release** - reopened claims ([OQ 40](open-questions.md#oq-40),
-   resolved 2026-08-27), CI ([OQ 45]), rolling-upgrade procedure ([OQ 26]),
-   backup runbook ([OQ 39]). The licence is Apache-2.0
+   host example follows to keep the API general ([OQ 46](rfcs/0021-host-shapes.md)).
+2. **First public release** - reopened claims ([OQ 40](research/0001-evidence-carried-from-the-state-store-survey.md)),
+   resolved 2026-08-27), CI (OQ 45), rolling-upgrade procedure (OQ 26),
+   backup runbook (OQ 39). The licence is Apache-2.0
    ([ADR 0006](adrs/0006-the-library-is-apache-2-0-licensed.md),
-   [OQ 18](open-questions.md#oq-18) resolved); the name is `coppiz`
+   [OQ 18](adrs/0006-the-library-is-apache-2-0-licensed.md) resolved); the name is `coppiz`
    ([ADR 0004](adrs/0004-the-product-is-named-coppiz.md)).
 
 ## Later
@@ -121,8 +120,38 @@ the phases.
   for clusters at n ≥ 3 that want a strict single sequencer without stalling;
   also the only case in which a federation would need an uneven group count
   (OQ 49, resolved: groups use the shipped modes, no count constraint).
-- Archival checkpoints so slot count can be bounded ([OQ 24]).
+- Archival checkpoints so slot count can be bounded (OQ 24).
 - Service API and/or observer clients (RFC 0001 options B/D), C ABI.
-- Leader-star or gossip topology past 32 members ([OQ 25]).
-- Wire encryption off private networks ([OQ 23]).
-- Blob shape (chunked or content-addressed) for large payloads ([OQ 36]).
+- Leader-star or gossip topology past 32 members (OQ 25).
+- Wire encryption off private networks (OQ 23).
+- Blob shape (chunked or content-addressed) for large payloads (OQ 36).
+
+### Not yet shaped
+
+Ideas without a home in any PRD; promote one to an RFC or research note when
+it becomes concrete.
+
+- **Multi-tenancy / namespacing** across unrelated consumers sharing one
+  cluster - or is "one cluster per consumer" the rule?
+- **Quota and fairness** between authors (a runaway writer filling every
+  member's disk).
+- **Journal-level access control** - may every member append to every
+  journal?
+- **Time travel API** (`at_slot`) exposure and cost.
+- **Entry payload validation hooks** - a host-supplied predicate the leader
+  runs before slotting, so a consumer can enforce its own schema at the
+  journal boundary (would make refusal a chain-wide rule only if every
+  member runs the same hook, which brings the trust question back,
+  [RFC 0009](rfcs/0009-trust-model.md)).
+- **Migration story off JSONL** for clanker's existing streams (import with
+  original timestamps preserved in `author_ts_ms`?).
+- **Graceful shutdown and drain** - a leaving leader hands over *before*
+  exiting, so no epoch churn on a planned restart.
+- **Windows/macOS support** - `std.Io` covers them; flock semantics and
+  fsync guarantees differ; untested.
+- **Locality and placement** - which group a consumer's appends go to when
+  several could own a new journal; geography-aware placement is a federation
+  policy nobody has specified.
+- **Cross-group stale marks and checkpoints** - a `stale` is authored where
+  the author lives, but the journal lives in its owning group; forwarding
+  makes it work, but the checkpoint cadence is the owner's clock.

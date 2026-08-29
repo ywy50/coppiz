@@ -13,7 +13,7 @@ preserving every link `partition` closed; regression test added.
 
 ## Symptom and impact
 
-The simulator is the deterministic driver for pure logic ([OQ 27](../../open-questions.md#oq-27)); its liveness views (`stateOf` → `.lost`), the broadcast gate (`linkOpen`, used by `slotAndBroadcast`), and `heal` all key off `links`. `growLinks` silently heals the world underneath them.
+The simulator is the deterministic driver for pure logic ([OQ 27](../../prds/0003-membership-and-leadership.md)); its liveness views (`stateOf` → `.lost`), the broadcast gate (`linkOpen`, used by `slotAndBroadcast`), and `heal` all key off `links`. `growLinks` silently heals the world underneath them.
 
 ## Reproduction
 

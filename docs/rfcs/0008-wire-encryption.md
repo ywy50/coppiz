@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 23](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 23 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -183,7 +183,7 @@ reversal.
 
 ## References
 
-- [OQ 23](../open-questions.md) - the register entry this RFC addresses.
+- OQ 23 (historical) - the question this RFC addresses.
 - [ADR 0001](../adrs/0001-zig-0-16-standard-library-only-for-the-core.md) -
   the std-only bound that disqualifies TLS-in-the-library.
 - [PRD 0003](../prds/0003-membership-and-leadership.md) - member keys and

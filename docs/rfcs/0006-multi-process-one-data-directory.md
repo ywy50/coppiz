@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 47](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 47 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -19,7 +19,7 @@ processes write per-session databases directly while `serve` runs (PRD 0005,
 *Example host*). coppiz v1 takes the opposite shape: `open` flocks the data
 directory to one process, and a second process gets `locked`; short-lived
 processes fall back to speaking the replication wire to the long-lived node
-(the CLI's wire client, [OQ 47](../open-questions.md)).
+(the CLI's wire client, OQ 47).
 
 **Decision to make.** Is the SQLite habit - several processes opening one
 data directory natively - important enough to hosts to become a v1 property
@@ -215,7 +215,7 @@ additive transport in the seam; B to A is removing it.
 
 ## References
 
-- [OQ 47](../open-questions.md) - the register entry this RFC addresses.
+- OQ 47 (historical) - the question this RFC addresses.
 - [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md) - the
   multi-process paragraph and the wire fallback.
 - [ADR 0003](../adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md) -

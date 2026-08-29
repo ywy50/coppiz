@@ -7,8 +7,8 @@ Accepted - 2026-08-27.
 ## Context
 
 The working name `spine` came from clanker's RFC 0019 ("the spine"). It is
-generic enough to collide on package indexes and search, and [OQ
-16](../open-questions.md) blocked the first public release on choosing a
+generic enough to collide on package indexes and search, and OQ
+16 blocked the first public release on choosing a
 name before publishing: the `.name` in `build.zig.zon` and the module name
 change with it.
 

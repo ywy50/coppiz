@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 8](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 8 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -143,7 +143,7 @@ machinery) without foreclosing B.
 
 ## References
 
-- [OQ 8](../open-questions.md) - the register entry this RFC addresses.
+- OQ 8 (historical) - the question this RFC addresses.
 - [PRD 0003](../prds/0003-membership-and-leadership.md) - the election
   modes and the single-epoch fold.
 - [PRD 0006](../prds/0006-scaling-to-groups-sharding-and-parity.md) - the

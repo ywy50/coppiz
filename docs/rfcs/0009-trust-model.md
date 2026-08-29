@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 1](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 1 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -48,7 +48,7 @@ every member (PRD 0001). A member cannot impersonate another, cannot
 rewrite history, and cannot fake its join position (RFC 0002, ADR 0005).
 The failure modes treat writers as defective, not malicious: "one operator,
 authenticated members, defective-not-malicious writers" (PRD 0001
-non-goals, [OQ 1](../open-questions.md)).
+non-goals, OQ 1).
 
 ## Options considered
 
@@ -162,7 +162,7 @@ that reverses the core's consensus-free property.
 
 ## References
 
-- [OQ 1](../open-questions.md) - the register entry this RFC addresses.
+- OQ 1 (historical) - the question this RFC addresses.
 - [PRD 0001](../prds/0001-journal-core.md) - the trust non-goal.
 - [ADR 0002](../adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md) -
   the consensus-free foundation the model rests on.

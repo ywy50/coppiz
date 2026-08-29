@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 50](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 50 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -132,7 +132,7 @@ verifiable, and the trigger (C) decides when the trade is worth it.
 
 ## References
 
-- [OQ 50](../open-questions.md) - the register entry this RFC addresses.
+- OQ 50 (historical) - the question this RFC addresses.
 - [PRD 0006](../prds/0006-scaling-to-groups-sharding-and-parity.md) - the
   parity draft and trigger.
 - [RFC 0028](0028-cross-group-routing.md) - the read semantics parity

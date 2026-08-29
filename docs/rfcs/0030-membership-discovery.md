@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 53](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 53 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -129,7 +129,7 @@ the fleet outgrows seed lists; placement stays operator policy in both.
 
 ## References
 
-- [OQ 53](../open-questions.md) - the register entry this RFC addresses.
+- OQ 53 (historical) - the question this RFC addresses.
 - [PRD 0006](../prds/0006-scaling-to-groups-sharding-and-parity.md) - the
   federation's control journal.
 - [ADR 0003](../adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md) -

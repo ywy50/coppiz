@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 38](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 38 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -185,11 +185,11 @@ schema is not frozen on this question.
 
 ## References
 
-- [OQ 38](../open-questions.md) - the register entry this RFC addresses.
+- OQ 38 (historical) - the question this RFC addresses.
 - [ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md) - the
   service API's deferral and wrapper shape.
 - [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md) - the
   service API sketch and failure modes.
 - [RFC 0006](0006-multi-process-one-data-directory.md) - the sibling
   question (short-lived processes beside the node), same reuse argument.
-- [OQ 23](../open-questions.md) - the TLS-server gap that bounds option D.
+- [OQ 23](0008-wire-encryption.md) - the TLS-server gap that bounds option D.

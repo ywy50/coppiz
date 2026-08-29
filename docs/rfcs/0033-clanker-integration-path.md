@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 30](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 30 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -130,7 +130,7 @@ the answer is "does not fit".
 
 ## References
 
-- [OQ 30](../open-questions.md) - the register entry this RFC addresses.
+- OQ 30 (historical) - the question this RFC addresses.
 - [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md) -
   phase 5 and the first-consumer plan.
 - research 0001 - the spike note and its journeys.

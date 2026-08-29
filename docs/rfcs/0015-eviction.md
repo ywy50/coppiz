@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 20](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 20 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -142,7 +142,7 @@ with the trust cost.
 
 ## References
 
-- [OQ 20](../open-questions.md) - the register entry this RFC addresses.
+- OQ 20 (historical) - the question this RFC addresses.
 - [PRD 0003](../prds/0003-membership-and-leadership.md) - eviction, the
   failure detector, and the election path.
 - [RFC 0014](0014-offline-reconfigure.md) - the offline path for the

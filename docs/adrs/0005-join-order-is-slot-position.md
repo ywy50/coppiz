@@ -44,7 +44,7 @@ this.
   is one fold lookup, and join validation is one control-entry rule.
 - The admitter decides *when* to write a `join`, so it can order concurrent
   joins (never ahead of an already-slotted member). That discretion is
-  [OQ 58](../open-questions.md#oq-58), open with the drafted default (receipt
+  [OQ 58](../prds/0003-membership-and-leadership.md), open with the drafted default (receipt
   order); removing it is one fold rule.
 - A member admitted on the losing side of a partition ends up junior to
   everyone admitted on the winning side during it: the merge re-slots the

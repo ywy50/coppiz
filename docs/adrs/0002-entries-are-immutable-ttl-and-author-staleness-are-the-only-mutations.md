@@ -34,7 +34,7 @@ position.
 Whether either cause is active, and whether expiry marks or
 deletes, are per-journal settings stored in the chain ([PRD 0002](../prds/0002-ttl-and-staleness.md),
 [PRD 0004](../prds/0004-settings.md)) - the schema gates both causes, after
-[OQ 57](../open-questions.md#oq-57) was resolved (2026-08-27) by adding
+[OQ 57](../prds/0002-ttl-and-staleness.md) was resolved (2026-08-27) by adding
 `stale.enforce` (default `off`) and defaulting `stale.cleanup` to `keep`.
 Slots are never removed; at most an
 entry's payload (and, under `ttl.retain = none`, its header) is.
@@ -50,9 +50,9 @@ entry's payload (and, under `ttl.retain = none`, its header) is.
 - The hash chain survives cleanup because slots stay and entry hashes stay;
   the cost is that the slot sequence only grows, and a very long-lived,
   high-churn journal eventually needs an archival checkpoint
-  ([OQ 24](../open-questions.md#oq-24)).
+  ([OQ 24](../rfcs/0032-archival-checkpoint.md)).
 - Author-only staleness means a compromised or defective member can hide its
   own history but nobody else's; extending the right to a leader or operator
-  is a later, separate decision ([OQ 6](../open-questions.md#oq-6)).
+  is a later, separate decision ([OQ 6](../rfcs/0031-stale-who.md)).
 - "Delete" is not secure erasure: removed payloads linger in un-compacted
   segments and in backups until rewritten.

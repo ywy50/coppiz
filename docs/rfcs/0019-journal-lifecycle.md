@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 34](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 34 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -12,7 +12,7 @@ and link it from References.
 
 ## Overview
 
-[OQ 34](../open-questions.md) is partially resolved: `create_journal` is
+OQ 34 is partially resolved: `create_journal` is
 leader-only in v1 (PRD 0001's status records the decision; the enforcement
 has an open bypass, tracked as a bug). The remaining half: can a journal
 be *dropped* - the only non-chain deletion - or only frozen (no further
@@ -151,7 +151,7 @@ would be new); after, B is a versioned addition.
 
 ## References
 
-- [OQ 34](../open-questions.md) - the register entry this RFC addresses.
+- OQ 34 (historical) - the question this RFC addresses.
 - [PRD 0001](../prds/0001-journal-core.md) - the control-entry model and
   the registry.
 - [ADR 0002](../adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md) -

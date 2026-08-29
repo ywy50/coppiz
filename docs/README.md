@@ -9,8 +9,11 @@ a decision that has been made is an [ADR](adrs/) ([index](adrs/README.md)).
 Operational bugs and evidence-led investigations go in [docs/reports/](reports/),
 recurring recovery procedures in [docs/runbooks/](runbooks/),
 and what we learn from an external project in [docs/digests/](digests/).
-Cross-cutting unknowns are numbered in [open-questions.md](open-questions.md);
-terms are defined once in [glossary.md](glossary.md).
+A question is filed where it will be settled: decision-shaped (candidates and
+a recommendation) in an [RFC](rfcs/), measurement-shaped ("what does the
+data say?") in a [research](research/) note, an observed failure in a
+[report](reports/README.md). Terms are defined once in
+[glossary.md](glossary.md).
 
 The operator's original brief (2026-08-21), quoted as "the brief" wherever a
 record refers to it, is [brief.md](brief.md) in this directory. Clarified the same day, in conversation: coppiz is for anyone facing
@@ -36,7 +39,7 @@ shipped narrative (that is the roadmap).
 | where settings live and why not in a config file | [PRD 0004](prds/0004-settings.md) |
 | how a program embeds it, with clanker as the worked example | [PRD 0005](prds/0005-embedding-the-library-as-the-product.md), [RFC 0001](rfcs/0001-library-first-or-service-first.md) |
 | how it gets to 1,000 or 100,000 instances | [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md) - groups, ownership, parity, and what the core must get right now |
-| what is not decided | [open-questions.md](open-questions.md) |
+| what is not decided | the [RFCs](rfcs/README.md) (a decision with options), the [research](research/README.md) notes awaiting measurement |
 
 ## Architecture (implemented down to the node loop and the embedded write path; federation is next)
 
@@ -108,7 +111,7 @@ first non-Zig consumer ([ADR 0007](adrs/0007-the-library-is-the-primary-surface.
 (PRD 0005); `src/federation/` (later) group membership, ownership, routing,
 parity. Pure logic (codecs, fold, election, merge, expiry) is kept I/O-free
 so it can be unit-tested and driven by a deterministic simulator
-([OQ 27](open-questions.md#oq-27)).
+([OQ 27](prds/0003-membership-and-leadership.md)).
 
 ## Hosts
 

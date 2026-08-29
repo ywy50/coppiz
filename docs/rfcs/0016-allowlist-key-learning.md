@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 21](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 21 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -138,7 +138,7 @@ ergonomics is the only downside.
 
 ## References
 
-- [OQ 21](../open-questions.md) - the register entry this RFC addresses.
+- OQ 21 (historical) - the question this RFC addresses.
 - [PRD 0003](../prds/0003-membership-and-leadership.md) - admission modes
   and the trust boundary.
 - [RFC 0008](0008-wire-encryption.md) - the TLS stance that rules out

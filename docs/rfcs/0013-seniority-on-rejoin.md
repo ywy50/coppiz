@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 4](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 4 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -130,7 +130,7 @@ chain concept - effectively irreversible without a format change.
 
 ## References
 
-- [OQ 4](../open-questions.md) - the register entry this RFC addresses.
+- OQ 4 (historical) - the question this RFC addresses.
 - [RFC 0002](../rfcs/0002-how-join-order-is-made-unspoofable.md) / ADR 0005 -
   seniority as slot position.
 - [PRD 0003](../prds/0003-membership-and-leadership.md) - the leave and

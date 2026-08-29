@@ -11,7 +11,7 @@ and how confident the finding is. The decision that follows belongs in an
 ## Question
 
 Is `storage.fsync = every` on the leader acceptable at clanker's write rates
-(tens of appends per second, not thousands)? [OQ 14](../open-questions.md#oq-14)
+(tens of appends per second, not thousands)? OQ 14
 blocks no phase - the default shipped with PRD 0001 phase 3 - but whether the
 default is right stayed open for measurement. What the knob governs is
 decided separately ([ADR 0008](../adrs/0008-storage-fsync-governs-the-queue.md)).
@@ -77,7 +77,7 @@ its value.
 
 ## References
 
-- [OQ 14](../open-questions.md#oq-14) - the question this measurement settles.
+- OQ 14 - the question this measurement settles.
 - [ADR 0008](../adrs/0008-storage-fsync-governs-the-queue.md) - what the
   knob governs.
 - [PRD 0001](../prds/0001-journal-core.md) - the write path and the fsync
