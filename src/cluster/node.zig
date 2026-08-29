@@ -2697,8 +2697,16 @@ pub const ClusterNode = struct {
             // of refusing on the author check (bug
             // 2026-08-29-merge-data-reslot-refusals).
             try self.node.applyReplicated(jid, &sl, &e, true, null);
+            // The broadcast has to describe what this member just did. It
+            // said `false`, so every other member folded the same records
+            // through the live rule and refused the journal-scoped ones
+            // `NotLeader` - their author is the *losing* branch's leader.
+            // Unlike the control chain, `applyDataChecked` cannot infer the
+            // re-slot from authorship, so the flag on the wire is the only
+            // signal there is (bug
+            // 2026-08-30-merge-data-broadcast-reslotted-false).
             self.broadcastToMembers(.{ .slot = .{
-                .reslotted = false,
+                .reslotted = true,
                 .record = &.{},
                 .sl = sl,
                 .en = e,
@@ -5297,4 +5305,112 @@ test "a chainless member drops a peer's merge_offer instead of aborting" {
     try std.testing.expectEqual(@as(?u64, null), cn.merging_to);
     try std.testing.expect(cn.node.control.epoch == null);
     try std.testing.expect(cn.conns.getPtr(9).?.closing);
+}
+
+test "a merge data re-slot is broadcast as a re-slot, not as a live record" {
+    // `doMergeData` applied the losing branch with `reslotted = true` and
+    // then broadcast the very same records with `reslotted = false`. The
+    // flag is the wire's only signal - `applyDataChecked` has no
+    // author-based inference for data journals, unlike `applyControl` - so
+    // every other member folded the re-slots through the live rule.
+    //
+    // For a journal-scoped `settings`, `checkpoint` or `stale` that means
+    // `applyJournalSettings`/`applyCheckpoint` -> `checkAuthorIsLeader`
+    // against an author who is the *losing* branch's leader -> `NotLeader`,
+    // which `onSlot` drops as an ordinary chain refusal. The survivor's fold
+    // advances and no other member's does: the exact divergence
+    // 2026-08-29-merge-data-reslot-refusals fixed on the survivor's own
+    // apply and left standing on the wire (bug
+    // 2026-08-30-merge-data-broadcast-reslotted-false).
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    var jit = node.control.journals.keyIterator();
+    const data_id = (jit.next() orelse return error.NoDataJournal).*;
+
+    // A conn that keeps what the loop broadcasts, so the flag on the wire
+    // can be read back rather than inferred.
+    const Recorder = struct {
+        var sent: std.ArrayListUnmanaged([]u8) = .empty;
+
+        fn send(ctx: *anyopaque, _: std.Io, body: []const u8) net.transport.SendError!void {
+            _ = ctx;
+            const copy = test_alloc.dupe(u8, body) catch return error.SendFailed;
+            sent.append(test_alloc, copy) catch {
+                test_alloc.free(copy);
+                return error.SendFailed;
+            };
+        }
+        fn recv(
+            _: *anyopaque,
+            _: std.Io,
+            _: std.mem.Allocator,
+        ) net.transport.RecvError![]u8 {
+            return error.EndOfStream;
+        }
+        fn nop(_: *anyopaque, _: std.Io) void {}
+    };
+    Recorder.sent = .empty;
+    defer {
+        for (Recorder.sent.items) |b| test_alloc.free(b);
+        Recorder.sent.deinit(test_alloc);
+    }
+    var rec_ctx: u8 = 0;
+    try cn.conns.put(test_alloc, 9, .{
+        .conn = .{
+            .ctx = &rec_ctx,
+            .recv_frame = Recorder.recv,
+            .send_frame = Recorder.send,
+            .shutdown_fn = Recorder.nop,
+            .close_fn = Recorder.nop,
+        },
+        .member_id = [_]u8{5} ** 16,
+    });
+
+    // One record waiting to be re-slotted, in the shape the branch fetch
+    // leaves it: an on-disk record in `merge_buffers`.
+    const en = try cn.signedEntry(.data, data_id, "from the losing branch", 0);
+    try cn.noteBuilt(data_id, en.author_seq);
+    const branch_sl = try cn.reslot(&en, [_]u8{0} ** 32, 1, 0);
+    {
+        // Ownership passes to `merge_buffers`, which `cn.deinit` frees; the
+        // errdefer covers only the window before the put succeeds.
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer buf.deinit(test_alloc);
+        try buf.resize(test_alloc, segment.recordSize(&branch_sl, &en));
+        segment.encodeRecord(&branch_sl, &en, buf.items);
+        try cn.merge_buffers.put(test_alloc, data_id, buf);
+    }
+
+    try cn.doMergeData(9, data_id);
+
+    // Exactly one slot went out, and it says what the local apply did.
+    try std.testing.expectEqual(@as(usize, 1), Recorder.sent.items.len);
+    var msg = try message.decode(test_alloc, Recorder.sent.items[0]);
+    defer msg.deinit(test_alloc);
+    try std.testing.expect(msg.slot.reslotted);
 }
