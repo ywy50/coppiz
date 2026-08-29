@@ -129,6 +129,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   review-stack merges (a `Hub.deinit` arity drift at three test sites, and
   the CLI test root requiring libc for `std.c.getpid()`); the shipped binary
   still links no libc.
+- `zig build test` is green again. The crashed-compaction recovery test
+  formatted its snapshot paths into a `[64]u8` buffer and then passed the
+  whole array to `createFile` instead of the 50-byte slice `bufPrint`
+  returned, so 14 undefined bytes were part of the file name and macOS
+  refused it with `BadPathName`. The test now keeps the returned slice.
 
 ### Changed
 
