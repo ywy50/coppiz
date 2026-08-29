@@ -17,6 +17,7 @@
 
 const std = @import("std");
 const entry = @import("entry.zig");
+const store = @import("store.zig");
 
 pub const magic: [4]u8 = "CPPQ".*;
 pub const version: u16 = 1;
@@ -54,6 +55,7 @@ pub const Queue = struct {
         const file = dir.createFile(io, "unslotted.queue", .{
             .read = true,
             .truncate = false,
+            .permissions = store.data_file_perm,
         }) catch |err| blk: {
             if (err != error.PathAlreadyExists) return err;
             break :blk try dir.openFile(io, "unslotted.queue", .{ .mode = .read_write });

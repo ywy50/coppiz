@@ -37,6 +37,12 @@ pub const Fsync = enum {
 /// one); constant for now.
 pub const seal_threshold_default: u64 = 64 * 1024 * 1024;
 
+/// Owner-only mode for the store's data files (segments, and the queue and
+/// pending-admission records the node writes beside them). `default_file`
+/// is 0o666 masked by umask, which would leave the journal's contents
+/// group- and world-readable — the same exposure `member.key` opts out of.
+pub const data_file_perm: std.Io.File.Permissions = .fromMode(0o600);
+
 pub const OpenOptions = struct {
     fsync: Fsync = .every,
     seal_threshold: u64 = seal_threshold_default,
@@ -200,6 +206,7 @@ pub const Store = struct {
         const first_file = try sub.createFile(self.io, "seg-00000001", .{
             .read = true,
             .truncate = false,
+            .permissions = data_file_perm,
         });
         errdefer first_file.close(self.io);
         try first_file.writePositionalAll(self.io, &header_buf, 0);
@@ -305,7 +312,10 @@ pub const Store = struct {
         jd.next_ordinal += 1;
         const name_buf = try std.fmt.allocPrint(self.allocator, "seg-{d:0>8}", .{ordinal});
         defer self.allocator.free(name_buf);
-        const file = try jd.dir.createFile(self.io, name_buf, .{ .read = true });
+        const file = try jd.dir.createFile(self.io, name_buf, .{
+            .read = true,
+            .permissions = data_file_perm,
+        });
         errdefer file.close(self.io);
 
         const header = try self.readSegmentHeader(&jd.segments.items[0]);
@@ -473,6 +483,7 @@ pub const Store = struct {
             const file = try jd.dir.createFile(self.io, name_buf, .{
                 .read = true,
                 .truncate = true,
+                .permissions = data_file_perm,
             });
             // Adopt immediately: the shared errdefer above closes every
             // segment in the list once, whichever iteration errored (a
@@ -614,7 +625,10 @@ pub const Store = struct {
                 try jd.dir.deleteFile(self.io, dirent.name);
             }
         }
-        const file = try jd.dir.createFile(self.io, "seg-00000001", .{ .read = true });
+        const file = try jd.dir.createFile(self.io, "seg-00000001", .{
+            .read = true,
+            .permissions = data_file_perm,
+        });
         errdefer file.close(self.io);
         var header_buf: [segment.header_len]u8 = undefined;
         segment.encodeHeader(header, &header_buf);

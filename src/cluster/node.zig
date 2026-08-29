@@ -30,6 +30,7 @@ const chain = @import("../journal/chain.zig");
 const entry = @import("../journal/entry.zig");
 const slot = @import("../journal/slot.zig");
 const segment = @import("../journal/segment.zig");
+const store = @import("../journal/store.zig");
 const schema = @import("../settings/schema.zig");
 const settings_fold = @import("../settings/fold.zig");
 const validate = @import("../settings/validate.zig");
@@ -1408,6 +1409,7 @@ pub const ClusterNode = struct {
         const file = try self.node.store.data_dir.createFile(self.io, "pending.admit", .{
             .read = true,
             .truncate = false,
+            .permissions = store.data_file_perm,
         });
         defer file.close(self.io);
         const len = try file.length(self.io);
