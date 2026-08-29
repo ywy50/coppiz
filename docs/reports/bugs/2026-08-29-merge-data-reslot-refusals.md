@@ -3,7 +3,7 @@
 ## TL;DR
 
 - **What failed:** `doMergeData` re-slots *every* record of the losing data branch through `applyData`, which has no re-slotted variant: a journal-scoped `settings` or `checkpoint` entry is refused (`checkAuthorIsLeader` — the author is the losing leader), and a `stale` entry can refuse under a differing `stale.enforce`. The refusal propagates and aborts the merge; every retry fails identically. A re-slotted `leave` that removed a data author makes that branch's data fail `UnknownAuthor` — the branch is silently dropped instead.
-- **Impact:** The partition-merge feature ([PRD 0003](docs/prds/0003-membership-and-leadership.md) phase 3) never converges when the losing branch contains such records, or converges without the losing side's data (silent data loss).
+- **Impact:** The partition-merge feature ([PRD 0003](../../prds/0003-membership-and-leadership.md) phase 3) never converges when the losing branch contains such records, or converges without the losing side's data (silent data loss).
 - **Resolution:** Still open. Statically validated.
 
 ## Status

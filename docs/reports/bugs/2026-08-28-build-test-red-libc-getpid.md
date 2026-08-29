@@ -43,7 +43,7 @@ Expected: the gate runs the unit tests and lint gates and exits 0. Actual: compi
 const pid: u32 = @intCast(@as(i64, std.c.getpid()));
 ```
 
-`std.c` is the libc namespace; calling it requires the test binary to link libc. The project is standard-library-only ([ADR 0001](docs/adrs/0001-zig-0-16-standard-library-only-for-the-core.md)) and no libc is linked anywhere in `build.zig` (verified: no `linkLibC` call in the script). The binary itself never references `testAddr`, so the exe compiles; only the test root — where `testAddr` is analyzed — hits the error. `std.posix.getpid()` would work without libc (it uses the raw syscall path), which is the likely fix; not applied here.
+`std.c` is the libc namespace; calling it requires the test binary to link libc. The project is standard-library-only ([ADR 0001](../../adrs/0001-zig-0-16-standard-library-only-for-the-core.md)) and no libc is linked anywhere in `build.zig` (verified: no `linkLibC` call in the script). The binary itself never references `testAddr`, so the exe compiles; only the test root — where `testAddr` is analyzed — hits the error. `std.posix.getpid()` would work without libc (it uses the raw syscall path), which is the likely fix; not applied here.
 
 ## Resolution
 

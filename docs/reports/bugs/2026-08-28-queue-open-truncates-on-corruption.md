@@ -14,7 +14,7 @@ byte mid-file.
 
 ## Symptom and impact
 
-The unslotted queue is durable (`src/journal/queue.zig`); entries the node accepted from clients sit here until slotted. On restart, `Queue.open` replays the file. If any record mid-file fails to decode (bit rot, partial overwrite, torn write beyond the tail), the open path truncates the file at the failure point and **drops every queued entry after it** — including ones that were fsynced before the corruption happened. The store, by contrast, distinguishes a torn tail from mid-file corruption (`findValidRecordAfter`, `store.zig:743`) and refuses mid-file damage with `Corrupt` ([G3](docs/glossary.md)).
+The unslotted queue is durable (`src/journal/queue.zig`); entries the node accepted from clients sit here until slotted. On restart, `Queue.open` replays the file. If any record mid-file fails to decode (bit rot, partial overwrite, torn write beyond the tail), the open path truncates the file at the failure point and **drops every queued entry after it** — including ones that were fsynced before the corruption happened. The store, by contrast, distinguishes a torn tail from mid-file corruption (`findValidRecordAfter`, `store.zig:743`) and refuses mid-file damage with `Corrupt` ([G3](../../glossary.md)).
 
 ## Reproduction
 

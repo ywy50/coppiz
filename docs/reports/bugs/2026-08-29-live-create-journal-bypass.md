@@ -3,7 +3,7 @@
 ## TL;DR
 
 - **What failed:** The sweep-1 fix routed reslotted `create_journal` to a variant that skips the author check — but the reslotted/live decision is author-based inference (`chain.zig:311-312`), and `onForward` lets any member forward any entry. A member's self-signed `create_journal` is now accepted by every fold; before the fix it was refused `NotLeader`.
-- **Impact:** The leader-only `create_journal` authorization ([PRD 0003](docs/prds/0003-membership-and-leadership.md)) is bypassed: any member can grow the journal registry (bounded only by `max_journals` and the name/payload checks). Same inference silently converts a live non-leader control `settings`/`stale`/`checkpoint` into a no-op instead of a refusal.
+- **Impact:** The leader-only `create_journal` authorization ([PRD 0003](../../prds/0003-membership-and-leadership.md)) is bypassed: any member can grow the journal registry (bounded only by `max_journals` and the name/payload checks). Same inference silently converts a live non-leader control `settings`/`stale`/`checkpoint` into a no-op instead of a refusal.
 - **Resolution:** Still open. Statically validated (fix regression).
 
 ## Status

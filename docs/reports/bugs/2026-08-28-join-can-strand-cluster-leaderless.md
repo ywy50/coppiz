@@ -13,7 +13,7 @@ count and rolls the member back on refusal; regression test added.
 
 ## Symptom and impact
 
-The n=1 exception is deliberate ([PRD 0003](docs/prds/0003-membership-and-leadership.md): "list self, or empty list = self"); the `n = 1` early return in `election.leader` (`election.zig:161`) makes a lone member its own leader under every mode. But `validateState`'s `empty_ok` (`validate.zig:89-92`) is the *only* place the empty-authorities rule is enforced, and it sees `member_count` at settings-apply time only:
+The n=1 exception is deliberate ([PRD 0003](../../prds/0003-membership-and-leadership.md): "list self, or empty list = self"); the `n = 1` early return in `election.leader` (`election.zig:161`) makes a lone member its own leader under every mode. But `validateState`'s `empty_ok` (`validate.zig:89-92`) is the *only* place the empty-authorities rule is enforced, and it sees `member_count` at settings-apply time only:
 
 - At genesis (n=1): `configured` + `fallback = stall` + empty authorities is accepted.
 - A `join` appends the member (`membership.zig:86-103`) and **does not** re-run `validateState`.

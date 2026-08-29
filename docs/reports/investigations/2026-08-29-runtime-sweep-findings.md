@@ -8,7 +8,7 @@
   pure same-semantics refactors and are implemented across four stacked PRs
   (this report links each to its investigation report); the rest are
   durability, format, or contract trade-offs that need an RFC or a reviewer —
-  led by the append fsync discipline ([RFC 0003](../rfcs/0003-append-durability-fsync-policy.md)).
+  led by the append fsync discipline ([RFC 0003](../../rfcs/0003-append-durability-fsync-policy.md)).
 - **Resolution:** four implementation PRs, one RFC PR, plus this record of
   the full sweep.
 
@@ -55,7 +55,7 @@ fixed before merge).
 
 | # | Site | Why deferred | Next step |
 |---|---|---|---|
-| 13 | append pays 3 fsyncs; queue ignores `storage.fsync`; `clear` barrier redundant | durability trade-off | [RFC 0003](../rfcs/0003-append-durability-fsync-policy.md) — recommended: knob governs the queue, `clear` never syncs |
+| 13 | append pays 3 fsyncs; queue ignores `storage.fsync`; `clear` barrier redundant | durability trade-off | [RFC 0003](../../rfcs/0003-append-durability-fsync-policy.md) — recommended: knob governs the queue, `clear` never syncs |
 | 14 | `Queue.remove` rewrites the whole file per trim (O(k²) I/O on a burst) | on-disk format change (tombstone/watermark/batched drain) | separate RFC, linked from RFC 0003's out-of-scope |
 | 15 | per-frame decode dupes every variable-length part | the owning-decoder contract is a documented invariant (`message.zig:6-8`) with tests | RFC; benchmark the win before proposing the borrow change |
 | 16 | leader re-encodes for broadcast what it wrote to store | touches every broadcast call site; the follower-side win (#7) landed first | reviewer pass, or fold into the message-layer work in #15 |
@@ -91,6 +91,6 @@ fixed before merge).
   [journal read](2026-08-29-runtime-sweep-journal-read.md),
   [queue and wire](2026-08-29-runtime-sweep-queue-wire.md),
   [sim and micro](2026-08-29-runtime-sweep-sim-micro.md)
-- [RFC 0003 — what does `storage.fsync` govern?](../rfcs/0003-append-durability-fsync-policy.md)
+- [RFC 0003 — what does `storage.fsync` govern?](../../rfcs/0003-append-durability-fsync-policy.md)
 - [OQ 62 — the cluster e2e CPU spin](../../open-questions.md)
 - Prior art: [2026-08-28 — making `zig build test` faster without dropping tests](2026-08-28-test-suite-quick-wins.md)

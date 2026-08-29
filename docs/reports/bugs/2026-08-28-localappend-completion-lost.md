@@ -3,7 +3,7 @@
 ## TL;DR
 
 - **What failed:** When a follower's `localAppend` is forwarded while the member is backfilling (`syncing`) or merging, the completion is registered in `pending_locals` but no code path ever posts it: `onSlot` drops the broadcast under the sync guard, the sync-page apply never resolves `pending_locals`, and `reforwardQueue` removes the queued entry via `entryKnown` without completing. The host thread's `completion.sem.wait(io)` at `node.zig:383` blocks indefinitely.
-- **Impact:** The embedded-host write path ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)) deadlocks permanently for the natural "append right after join/startup" flow; wire clients hit the same gap (never acked).
+- **Impact:** The embedded-host write path ([PRD 0005](../../prds/0005-embedding-the-library-as-the-product.md)) deadlocks permanently for the natural "append right after join/startup" flow; wire clients hit the same gap (never acked).
 - **Resolution:** Still open. Statically validated by enumerating every resolution site.
 
 ## Status

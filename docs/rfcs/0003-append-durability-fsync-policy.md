@@ -96,8 +96,8 @@ fsync option; `Queue.append` and `Queue.clear` sync unconditionally
 - **Cost to leave:** trivial — the change is internal; nothing on disk or the
   wire changes.
 - **Evidence:** the 2026-08-29 sweep reports measure the mechanism
-  ([write-path data flow](2026-08-29-runtime-sweep-queue-wire.md),
-  [settings and checkpoint paths](2026-08-29-runtime-sweep-settings-checkpoint.md));
+  ([write-path data flow](../reports/investigations/2026-08-29-runtime-sweep-queue-wire.md),
+  [settings and checkpoint paths](../reports/investigations/2026-08-29-runtime-sweep-settings-checkpoint.md));
   the queue's replay idempotency is documented at `queue.zig:1-9` and
   `journal.zig:719-729`; the 3-barrier path was verified by reading
   `journal.zig:229-268` (append) and `queue.zig:124-134, 194-198`. The
@@ -218,11 +218,11 @@ call sites). There is no format, wire, or API point of no return.
 ## References
 
 - Investigation reports (the evidence this RFC rests on):
-  - [2026-08-29 — write-path data flow](2026-08-29-runtime-sweep-queue-wire.md)
-  - [2026-08-29 — settings key resolution and checkpoint removal sets](2026-08-29-runtime-sweep-settings-checkpoint.md)
-  - [2026-08-29 — range reads and open-time discovery](2026-08-29-runtime-sweep-journal-read.md)
-  - [2026-08-29 — simulator leader evaluation and TCP page writes](2026-08-29-runtime-sweep-sim-micro.md)
-  - [2026-08-29 — runtime speedup sweep findings](2026-08-29-runtime-sweep-findings.md)
+  - [2026-08-29 — write-path data flow](../reports/investigations/2026-08-29-runtime-sweep-queue-wire.md)
+  - [2026-08-29 — settings key resolution and checkpoint removal sets](../reports/investigations/2026-08-29-runtime-sweep-settings-checkpoint.md)
+  - [2026-08-29 — range reads and open-time discovery](../reports/investigations/2026-08-29-runtime-sweep-journal-read.md)
+  - [2026-08-29 — simulator leader evaluation and TCP page writes](../reports/investigations/2026-08-29-runtime-sweep-sim-micro.md)
+  - [2026-08-29 — runtime speedup sweep findings](../reports/investigations/2026-08-29-runtime-sweep-findings.md)
 - Code: `src/config/local.zig` (knob parse), `src/main.zig` (threading),
   `src/journal/journal.zig` (append, options), `src/journal/queue.zig`,
   `src/journal/store.zig` (fsync policy)

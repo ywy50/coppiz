@@ -8,7 +8,7 @@
 
 ## Status
 
-Open. The rule itself is correct ([PRD 0002](docs/prds/0002-ttl-and-staleness.md), OQ 60); its only automatic caller treats its refusal as fatal.
+Open. The rule itself is correct ([PRD 0002](../../prds/0002-ttl-and-staleness.md), OQ 60); its only automatic caller treats its refusal as fatal.
 
 ## Symptom and impact
 
