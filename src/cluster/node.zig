@@ -276,7 +276,10 @@ pub const ClusterNode = struct {
     /// Whether a sync request is in flight (one at a time).
     sync_in_flight: bool = false,
     /// Whether this member is backfilling (never leader-eligible).
-    syncing: bool = false,
+    /// Written by the loop, read by tests and by the loop's own thread;
+    /// atomic so a test poll is not a data race (bug
+    /// 2026-08-28-sweep3-test-waits-cross-thread-race).
+    syncing: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     next_conn_id: u64 = 1,
     /// The first slot of my current branch (the epoch that opened it), and
@@ -337,7 +340,7 @@ pub const ClusterNode = struct {
         try self.syncMembersFromFold();
         try self.resetMySeq();
         // A member with no chain is a joiner: it syncs before it may lead.
-        self.syncing = node.control.head == null;
+        self.syncing.store(node.control.head == null, .release);
         return self;
     }
 
@@ -943,7 +946,7 @@ pub const ClusterNode = struct {
     }
 
     fn runElection(self: *ClusterNode) !void {
-        if (self.syncing) {
+        if (self.syncing.load(.acquire)) {
             return; // never eligible, never elected
         }
         const fold = &self.node.control;
@@ -965,7 +968,7 @@ pub const ClusterNode = struct {
     }
 
     fn driveBackfill(self: *ClusterNode) !void {
-        if (!self.syncing or self.sync_in_flight) return;
+        if (!self.syncing.load(.acquire) or self.sync_in_flight) return;
         // Pick the next journal to sync, control first, then each data
         // journal the fold knows.
         const control_id = self.node.control.journal_id;
@@ -989,7 +992,7 @@ pub const ClusterNode = struct {
         // a tick that beats the handshake must not clear syncing and strand
         // it permanently (bug 2026-08-28-sweep3-joiner-syncing-race).
         if (self.node.control.head == null) return;
-        self.syncing = false;
+        self.syncing.store(false, .release);
         try self.reforwardQueue();
     }
 
@@ -1522,7 +1525,7 @@ pub const ClusterNode = struct {
             });
         }
         // A chainless member was admitted: backfill from the responder.
-        if (self.syncing) {
+        if (self.syncing.load(.acquire)) {
             if (!self.sync_cursors.contains(self.node.control.journal_id)) {
                 try self.sync_cursors.put(
                     self.allocator,
@@ -1900,7 +1903,7 @@ pub const ClusterNode = struct {
         const jid = en.journal;
         // Sync pages carry everything; broadcasts are dropped while
         // backfilling or merging (the loser is still slotting its branch).
-        if (self.syncing or self.merging_from != null) return;
+        if (self.syncing.load(.acquire) or self.merging_from != null) return;
 
         // The epoch's liveness half: a member that disagrees keeps its
         // previous view — a partition, resolved by the merge.
@@ -2181,7 +2184,7 @@ pub const ClusterNode = struct {
             self.completePendingFor(&e);
             off += rec.next_offset;
         }
-        if (self.syncing) {
+        if (self.syncing.load(.acquire)) {
             // Advance the cursor; a page that served nothing marks the
             // journal done.
             if (p.records.len > 0) {
@@ -2296,7 +2299,7 @@ pub const ClusterNode = struct {
                 if (slot.Position.order(ms.head, my_head) != .lt) ms.state = .member;
             }
         }
-        self.syncing = true;
+        self.syncing.store(true, .release);
         try self.sync_cursors.put(
             self.allocator,
             self.node.control.journal_id,
@@ -2318,7 +2321,7 @@ pub const ClusterNode = struct {
         }
         try self.node.refold();
         try self.resetMySeq();
-        self.syncing = true;
+        self.syncing.store(true, .release);
         var dit = self.node.control.journals.iterator();
         while (dit.next()) |kv| {
             const jid = kv.key_ptr.*;
@@ -2752,7 +2755,7 @@ pub const ClusterNode = struct {
     /// merge re-slot at the current epoch number is a no-op the inference
     /// applies regardless of who it claims.
     fn epochAccepted(self: *ClusterNode, en: *const entry.Entry, sl: *const slot.Slot) bool {
-        if (self.syncing) return true;
+        if (self.syncing.load(.acquire)) return true;
         if (sl.epoch == self.node.control.epoch.?.number) return true;
         const payload = epoch.decodeEpochPayload(en.payload) catch return false;
         const inputs = self.electionInputs();
@@ -2784,7 +2787,7 @@ pub const ClusterNode = struct {
         for (fold.members.items, 0..) |member, i| {
             const is_me = std.mem.eql(u8, &member.id, &self.node.member_id);
             const state: election.State = if (is_me)
-                if (self.syncing) .syncing else .member
+                if (self.syncing.load(.acquire)) .syncing else .member
             else if (self.members.get(member.id)) |ms|
                 ms.state
             else
@@ -3122,7 +3125,7 @@ test "e2e (b): partition a 2-member seniority cluster, write on both sides, heal
         const deadline = wallMs(tio) + 10_000;
         var synced = false;
         while (wallMs(tio) < deadline) {
-            if (!cn_b.syncing) {
+            if (!cn_b.syncing.load(.acquire)) {
                 synced = true;
                 break;
             }
@@ -3313,6 +3316,26 @@ fn triNodeStop(t: *const TriNode) void {
     tmp.cleanup();
 }
 
+/// Whether `en` is a settings entry setting leadership.mode to
+/// "configured" — the wire-safe observation the e2e (c) test polls for
+/// (bug 2026-08-28-sweep3-test-waits-cross-thread-race).
+fn checkModeSetting(f: *bool, en: ?*const entry.Entry) anyerror!void {
+    const e = en orelse return;
+    if (e.kind != .settings) return;
+    const mode_key = schema.keyIndex("leadership.mode").?;
+    // The settings entry's payload is the full scope+journal+changes
+    // encoding, not the bare change list.
+    var payload = settings_fold.decodePayload(test_alloc, e.payload) catch return;
+    defer payload.deinit(test_alloc);
+    for (payload.changes) |change| {
+        if (change.key == mode_key and
+            change.value.enum_value == schema.enumValue(mode_key, "configured").?)
+        {
+            f.* = true;
+        }
+    }
+}
+
 test "e2e (c): configured leadership with a stall fallback never elects without its authority" {
     // A founds with open admission and fast failure detection; B and C join.
     const admission_key = schema.keyIndex("cluster.admission").?;
@@ -3377,17 +3400,53 @@ test "e2e (c): configured leadership with a stall fallback never elects without 
         try std.testing.expectEqual(@as(usize, 0), reply.refusal.len);
         // The settings must land on B and C before the partition severs
         // them; wait for the actual value on both control folds instead of
-        // a fixed guess at the broadcast time (a poll is also robust on
-        // slow machines — it waits until the broadcast has really landed).
+        // a fixed guess at the broadcast time. The fold is read through the
+        // loop's own local_read (thread-safe), not directly — a test-thread
+        // fold read races the loop's settings swap (bug
+        // 2026-08-28-sweep3-test-waits-cross-thread-race).
         {
             const deadline = wallMs(tio) + 10_000;
             var landed = false;
             while (wallMs(tio) < deadline) {
-                const b_mode = b.node.control.settings.getEnum(mode_key);
-                const c_mode = c.node.control.settings.getEnum(mode_key);
-                if (std.mem.eql(u8, b_mode, "configured") and
-                    std.mem.eql(u8, c_mode, "configured"))
-                {
+                var landed_b = false;
+                var landed_c = false;
+                try b.cn.localReadRange(
+                    tio,
+                    b.node.control.journal_id,
+                    null,
+                    null,
+                    true,
+                    true,
+                    &landed_b,
+                    struct {
+                        fn cb(
+                            f: *bool,
+                            _: *const slot.Slot,
+                            en: ?*const entry.Entry,
+                        ) anyerror!void {
+                            try checkModeSetting(f, en);
+                        }
+                    }.cb,
+                );
+                try c.cn.localReadRange(
+                    tio,
+                    c.node.control.journal_id,
+                    null,
+                    null,
+                    true,
+                    true,
+                    &landed_c,
+                    struct {
+                        fn cb(
+                            f: *bool,
+                            _: *const slot.Slot,
+                            en: ?*const entry.Entry,
+                        ) anyerror!void {
+                            try checkModeSetting(f, en);
+                        }
+                    }.cb,
+                );
+                if (landed_b and landed_c) {
                     landed = true;
                     break;
                 }
@@ -3641,7 +3700,10 @@ fn ttlTrioInit(
         const deadline = wallMs(tio) + 10_000;
         var settled = false;
         while (wallMs(tio) < deadline) {
-            if (!trio.a.cn.syncing and !trio.b.cn.syncing and !trio.c.cn.syncing) {
+            if (!trio.a.cn.syncing.load(.acquire) and
+                !trio.b.cn.syncing.load(.acquire) and
+                !trio.c.cn.syncing.load(.acquire))
+            {
                 settled = true;
                 break;
             }
@@ -3971,7 +4033,7 @@ test "e2e: a newly elected leader slots its own queued entries" {
         const deadline = wallMs(tio) + 10_000;
         var synced = false;
         while (wallMs(tio) < deadline) {
-            if (!b.cn.syncing) {
+            if (!b.cn.syncing.load(.acquire)) {
                 synced = true;
                 break;
             }
@@ -4066,7 +4128,7 @@ test "embedded host appends through the loop from its own thread (PRD 0005)" {
         const settle_deadline = wallMs(tio) + 10_000;
         var settled = false;
         while (wallMs(tio) < settle_deadline) {
-            if (!b.cn.syncing and !c.cn.syncing) {
+            if (!b.cn.syncing.load(.acquire) and !c.cn.syncing.load(.acquire)) {
                 settled = true;
                 break;
             }
@@ -4157,7 +4219,7 @@ test "embedded host reads through the loop from its own thread (PRD 0005)" {
         const settle_deadline = wallMs(tio) + 10_000;
         var settled = false;
         while (wallMs(tio) < settle_deadline) {
-            if (!b.cn.syncing) {
+            if (!b.cn.syncing.load(.acquire)) {
                 settled = true;
                 break;
             }
