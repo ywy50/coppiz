@@ -7,6 +7,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The connection reader task no longer reads the node's connection table
+  from a pool thread while the loop thread inserts into it. It takes the
+  connection value it needs at spawn time instead, so every access to that
+  table is now on the loop thread.
+
 - The survivor of a healed partition no longer records a merge whose request
   for the loser's branch was never sent. `requestSync` sends nothing while
   another sync is in flight, and the merge was committed regardless, which

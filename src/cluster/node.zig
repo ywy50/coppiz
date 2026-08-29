@@ -776,8 +776,19 @@ pub const ClusterNode = struct {
         }
     }
 
-    fn readerMain(self: *ClusterNode, conn_id: u64) error{Canceled}!void {
-        const conn = self.conns.get(conn_id).?.conn;
+    /// Takes the `Conn` by value rather than looking it up: this runs as its
+    /// own `std.Io.Group` task, on a pool thread, and every other access to
+    /// `self.conns` is on the loop thread. The lookup was the one exception,
+    /// unsynchronised against the `put` in `onConnReady` that can grow and
+    /// reallocate the table (bug 2026-08-29-readermain-conns-map-race). The
+    /// value is in hand at the spawn site and outlives the reader: every
+    /// close path only shuts the conn down, and `onPeerGone` - which is what
+    /// finally closes and removes it - runs from this task's own last act.
+    fn readerMain(
+        self: *ClusterNode,
+        conn_id: u64,
+        conn: net.transport.Conn,
+    ) error{Canceled}!void {
         while (true) {
             const body = conn.recv(self.io, self.allocator) catch {
                 break;
@@ -796,7 +807,7 @@ pub const ClusterNode = struct {
         self.next_conn_id += 1;
         errdefer conn.close(self.io);
         try self.conns.put(self.allocator, conn_id, .{ .conn = conn, .outbound = outbound });
-        self.group.async(self.io, readerMain, .{ self, conn_id });
+        self.group.async(self.io, readerMain, .{ self, conn_id, conn });
     }
 
     fn onPeerGone(self: *ClusterNode, conn_id: u64) void {
