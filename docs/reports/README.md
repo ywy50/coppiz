@@ -111,6 +111,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - four `closeFn`s guard against a second close with a flag that lives in the allocation the first close freed (latent)](bugs/2026-08-29-close-guard-in-freed-allocation.md)
 - [2026-08-29 - `readerMain` reads the `conns` map from a pool thread while the loop thread mutates it (latent, not fixed)](bugs/2026-08-29-readermain-conns-map-race.md)
 - [2026-08-30 - a member's redial backoff ratchets to 8 s and never comes back down](bugs/2026-08-30-redial-backoff-never-resets.md)
+- [2026-08-30 - a `members_page` address at the u16 maximum aborts the node before admission](bugs/2026-08-30-members-page-addr-len-narrow-int.md)
 
 ### Investigations
 

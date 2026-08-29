@@ -66,6 +66,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   connection to that member is established, on both the inbound and the
   outbound handshake. Repeated failures still widen it to the same ceiling.
 
+- A `members_page` frame carrying a 65535-byte address no longer aborts the
+  node. The decoder's per-member cursor advance computed `34 + addr_len` in
+  the length field's own `u16`, which overflows: a panic in a safe build, and
+  in a release build a wrapped cursor that refuses a well-formed page. The
+  frame is decoded before any role or admission check, so the abort needed
+  nothing but a connection to the listen port. The earlier narrow-int sweep
+  had excluded this decoder on the strength of its outer `usize` cursor.
+
 ### Added
 
 - A fourth example host, `examples/short-process/`: the command-line shape

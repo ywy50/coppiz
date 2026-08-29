@@ -688,7 +688,14 @@ pub fn decodeMembersPage(
     var off: usize = 26;
     while (done < count) : (done += 1) {
         if (off + 34 > bytes.len) return error.InvalidLength;
-        const addr_len = std.mem.readInt(u16, bytes[off + 32 ..][0..2], .little);
+        // `usize`, not the field's own `u16`: `off += 34 + addr_len` below
+        // is a standalone sum, so the literal would coerce down to `u16` and
+        // a maximal address (34 + 65535) would overflow the cursor rather
+        // than advance it - an abort in a safe build, a wrapped cursor and a
+        // bogus `InvalidLength` in a release one. The bounds check on the
+        // next line is safe either way, because `off + 32` already promotes
+        // it (bug 2026-08-30-members-page-addr-len-narrow-int).
+        const addr_len: usize = std.mem.readInt(u16, bytes[off + 32 ..][0..2], .little);
         if (off + 34 + addr_len > bytes.len) return error.InvalidLength;
         members[done] = .{
             .id = bytes[off..][0..16].*,
@@ -1266,6 +1273,38 @@ test "a length field at its type's maximum is refused, not overflowed" {
         @memset(body[2 + c.field_off ..][0..c.field_bytes], 0xFF);
         try std.testing.expectError(error.InvalidLength, decode(test_alloc, body));
     }
+}
+
+test "a members_page address at the u16 maximum decodes, not overflows the cursor" {
+    // The per-member cursor advance was `off += 34 + addr_len` with
+    // `addr_len` left at the field's own `u16`. The 34 coerces down, so a
+    // page carrying a maximal 65535-byte address overflowed the sum: an
+    // abort in a safe build, and in a release build a cursor wrapped to 33
+    // that refuses a well-formed page as `InvalidLength`.
+    //
+    // The reachability is the worst in the file. `node.zig`'s `onFrame`
+    // decodes before `frameAllowed` runs, and `frameAllowed` admits
+    // `.members_page` from any role anyway, so the whole body is 65,597
+    // bytes - well under `framing.max_body_bytes` - written by a peer with
+    // no key, no genesis hash and no allowlist entry.
+    //
+    // The sibling sweep in 2026-08-29-wire-length-checks-narrow-int missed
+    // it: that report checked the *outer* `var off: usize = 26` and
+    // concluded this decoder "was already right".
+    const addr_len: usize = std.math.maxInt(u16);
+    const body = try test_alloc.alloc(u8, 2 + 26 + 34 + addr_len);
+    defer test_alloc.free(body);
+    @memset(body, 0);
+    body[0] = version;
+    body[1] = @intFromEnum(Kind.members_page);
+    writeU16(body[2 + 24 ..][0..2], 1); // one member
+    writeU16(body[2 + 26 + 32 ..][0..2], addr_len);
+    @memset(body[2 + 26 + 34 ..], 'a');
+
+    var msg = try decode(test_alloc, body);
+    defer msg.deinit(test_alloc);
+    try std.testing.expectEqual(@as(usize, 1), msg.members_page.members.len);
+    try std.testing.expectEqual(addr_len, msg.members_page.members[0].address.len);
 }
 
 const FuzzCtx = struct {
