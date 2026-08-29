@@ -102,6 +102,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-28 - sweep3: `slotQueuedEntries` propagates a per-entry refusal to `fatal()`](bugs/2026-08-28-sweep3-slotqueued-refusal-fatal.md)
 - [2026-08-29 - the in-memory hub's `pipes` list is appended without a lock: concurrent dials leak its backing buffer](bugs/2026-08-29-hub-pipes-append-unsynchronised.md)
 - [2026-08-29 - the 1 -> 2 -> 3 growth e2e intermittently times out waiting for the last replicated entry](bugs/2026-08-29-growth-e2e-last-broadcast-timeout.md)
+- [2026-08-29 - a `slot` whose record carries trailing junk decodes as valid, and the follower's fold advances past the store write that refuses it](bugs/2026-08-29-slot-record-trailing-bytes.md)
 
 ### Investigations
 
