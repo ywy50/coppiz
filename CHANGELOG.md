@@ -137,6 +137,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   advance (`protocol_error`) instead of asserting on it: the cursor is the
   peer's, so a bad one was a panic in a safe build and an unbounded request
   loop in a release build.
+- A chainless member no longer aborts on a peer's control record.
+  `FoldState.applyControl` and `applyControlReslotted` read
+  `self.epoch.?.leader` after a journal-id check that a member with no folded
+  genesis passes: its control fold's journal id is all zeros, and so is the
+  record's. Both now refuse with the new `no_epoch` refusal, before any
+  signature is checked. `Node.epoch()` returns `?u64` instead of unwrapping,
+  exactly as `Node.leader()` does, and `slotFor` turns the absent case into
+  `error.NoEpoch` rather than a panic on the whole write path.
 - `zig build test` is green again. The crashed-compaction recovery test
   formatted its snapshot paths into a `[64]u8` buffer and then passed the
   whole array to `createFile` instead of the 50-byte slice `bufPrint`
