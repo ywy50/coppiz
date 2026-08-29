@@ -7,6 +7,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A `[[peers]]` entry that carries only a `public_key` no longer becomes a
+  dial target. That entry is how an admitter authorizes a newcomer it has
+  no address for, and `coppiz serve` seeded its empty address, so the node
+  redialed `""` for the life of the process. An entry now joins the dial
+  set only when it names an address, and a `[[peers]]` entry with neither
+  an address nor a key is refused at startup, named by its position,
+  instead of being silently ignored.
+
 - A `coppiz.toml` scalar value whose quotes do not balance is now refused at
   startup instead of being stored with the stray quote in it. `data_dir =
   "/var/lib/coppiz` with the closing quote forgotten used to name a
