@@ -41,6 +41,7 @@ operator's values (OQ 36, OQ 55).
 | `cluster.suspect_after_ms` | cluster | u64 | 5000 | always | a member missed for this long is unreachable (placeholder, OQ 37) |
 | `membership.evict_after_ms` | cluster | u64 | 0 | always | convert an unreachable member to a leave after this long; 0 = never |
 | `merge.settle_ms` | cluster | u64 | 30000 | always | no checkpoint for slots newer than a merge until this passes (OQ 60) |
+| `journal.allow_append` | journal | bool | true | always | whether the journal accepts new data entries; false freezes it (RFC 0019) |
 | `journal.max_entry_bytes` | journal | u64 | 16777216 *(provisional)* | always | largest payload an append may carry; refused too_large (OQ 36 provisional) |
 | `ttl.enforce` | journal | enum | off | always | which entries expire: none, only TTL-carrying ones, or every entry |
 | `ttl.default_ms` | journal | u64 | 0 | always | TTL for entries without one under enforce=all; 0 there is an error |

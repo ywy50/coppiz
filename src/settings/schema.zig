@@ -171,6 +171,14 @@ pub const keys = [_]Key{
     },
     // --- journal scope ---
     .{
+        .name = "journal.allow_append",
+        .scope = .journal,
+        .value_type = .boolean,
+        .default_bool = true,
+        .live_rule = .always,
+        .description = "whether the journal accepts new data entries; false freezes it (RFC 0019)",
+    },
+    .{
         .name = "journal.max_entry_bytes",
         .scope = .journal,
         .value_type = .u64,

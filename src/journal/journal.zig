@@ -320,6 +320,13 @@ pub const Node = struct {
         const js = self.journals.get(journal_id) orelse return error.UnknownJournal;
         const fold = &js.fold;
 
+        // Both bounds are mirrored from the fold's own rules and checked
+        // before anything is queued or stored: this path stores the record
+        // before it folds, so a refusal that only fired in the fold would
+        // leave the segment one record ahead of it.
+        if (!fold.settings.getBool(schema.keyIndex("journal.allow_append").?)) {
+            return error.JournalFrozen;
+        }
         const max_bytes = fold.settings.getU64(schema.keyIndex("journal.max_entry_bytes").?);
         if (payload.len > max_bytes) return error.TooLarge;
 
@@ -1598,6 +1605,71 @@ test "an entry stamped delete is still removable after ttl.enforce goes back to 
     test_now = 5_000;
     try node.checkpoint(other);
     try std.testing.expectEqual(other_head, node.head(other).?);
+}
+
+test "a frozen journal refuses appends and keeps serving reads (RFC 0019)" {
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    const allow_append = schema.keyIndex("journal.allow_append").?;
+    {
+        var node = try openNode(&env);
+        defer node.deinit();
+        const j = node.journalIdByName("main").?;
+        _ = try node.append(j, "before the freeze", 0);
+        const head_before = node.head(j).?;
+
+        try node.changeSettings(j, &[_]validate.Change{
+            .{ .key = allow_append, .value = .{ .boolean = false } },
+        });
+
+        // Refused before the queue and the store are touched: this path
+        // writes the record before folding, so the fold's refusal alone
+        // would leave the segment ahead of the fold.
+        try std.testing.expectError(error.JournalFrozen, node.append(j, "after", 0));
+        try std.testing.expectEqual(
+            @as(?slot.Position, .{ .epoch = 1, .seq = head_before.seq + 1 }),
+            node.head(j),
+        );
+
+        // Reads are unaffected: freezing stops writing, not reading. The
+        // range also carries the journal-scoped `settings` record that did
+        // the freezing - it lives in this journal's own chain (PRD 0004) -
+        // so only the data entries are counted.
+        var seen: usize = 0;
+        try node.readRange(j, null, null, false, false, &seen, struct {
+            fn on(
+                c: *usize,
+                _: *const slot.Slot,
+                en: ?*const entry.Entry,
+            ) anyerror!void {
+                const e = en orelse return;
+                if (e.kind != .data) return;
+                try std.testing.expectEqualStrings("before the freeze", e.payload);
+                c.* += 1;
+            }
+        }.on);
+        try std.testing.expectEqual(@as(usize, 1), seen);
+    }
+
+    // The freeze is chain state, so it survives a reopen, and unfreezing is
+    // an ordinary settings change.
+    {
+        var node = try openNode(&env);
+        defer node.deinit();
+        const j = node.journalIdByName("main").?;
+        try std.testing.expect(!node.journals.get(j).?.fold.settings.getBool(allow_append));
+        try std.testing.expectError(error.JournalFrozen, node.append(j, "still frozen", 0));
+
+        try node.changeSettings(j, &[_]validate.Change{
+            .{ .key = allow_append, .value = .{ .boolean = true } },
+        });
+        _ = try node.append(j, "thawed", 0);
+    }
 }
 
 test "retain = none compaction leaves a journal that folds on reopen" {
