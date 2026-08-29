@@ -520,7 +520,11 @@ pub const Node = struct {
         // settings nothing can ever be removed, so the O(entries) candidates
         // pass is skipped here too (a checkpoint's removal set is computed
         // on this path once per checkpoint per journal per node).
-        if (!expiry.canRemoveAnything(&fold.settings)) return &.{};
+        if (!expiry.canRemoveAnything(
+            &fold.settings,
+            fold.may_expire_delete,
+            fold.may_remove_stale,
+        )) return &.{};
         const candidates = try fold.expiryCandidates(self.allocator);
         defer self.allocator.free(candidates);
         const set = try expiry.removalSet(
@@ -1536,6 +1540,64 @@ test "checkpoint removes expired entries and compaction keeps the chain verifiab
     try std.testing.expect(info2.removed);
     const fold_hash2 = try node2.journals.get(s.jid).?.fold.hash(test_alloc);
     try std.testing.expectEqualSlices(u8, &s.fold_hash, &fold_hash2);
+}
+
+test "an entry stamped delete is still removable after ttl.enforce goes back to off" {
+    // Bug 2026-08-30-removal-guard-reads-live-settings: the fast path that
+    // skips the removal-set computation read ttl.enforce from the current
+    // settings, while removalSet decides from the expires_at/ttl_action
+    // stamped on each entry when it was slotted. Turning enforcement off
+    // after an entry was stamped therefore made that entry permanently
+    // expired-but-never-removed: hidden from every default read, its bytes
+    // never reclaimed, and no checkpoint ever emitted for the journal.
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    var node = try openNode(&env);
+    defer node.deinit();
+    const j = node.journalIdByName("main").?;
+    const enforce = schema.keyIndex("ttl.enforce").?;
+    const ttl_default = schema.keyIndex("ttl.default_ms").?;
+    const ttl_action = schema.keyIndex("ttl.action").?;
+
+    test_now = 2_000;
+    try node.changeSettings(j, &[_]validate.Change{
+        .{ .key = enforce, .value = .{ .enum_value = schema.enumValue(enforce, "all").? } },
+        .{ .key = ttl_default, .value = .{ .u64 = 1000 } },
+        .{
+            .key = ttl_action,
+            .value = .{ .enum_value = schema.enumValue(ttl_action, "delete").? },
+        },
+    });
+    // Stamped at t=2000 with expires_at = 3000 and ttl_action = delete.
+    const expiring = try node.append(j, "expiring", 0);
+
+    // The operator turns enforcement off. The entry's stamp does not move:
+    // reads still hide it as expired.
+    test_now = 2_500;
+    try node.changeSettings(j, &[_]validate.Change{
+        .{ .key = enforce, .value = .{ .enum_value = schema.enumValue(enforce, "off").? } },
+    });
+
+    test_now = 4_000;
+    const before = node.head(j).?;
+    try node.checkpoint(j);
+    const info = node.journals.get(j).?.fold.entries.get(expiring).?;
+    try std.testing.expect(info.removed);
+    try std.testing.expect(slot.Position.order(node.head(j).?, before) == .gt);
+
+    // And the fast path still holds for a journal that never had a TTL: no
+    // stamp can be acted on, so no checkpoint is emitted.
+    const other = try node.createJournal("plain", &.{});
+    _ = try node.append(other, "kept", 0);
+    const other_head = node.head(other).?;
+    test_now = 5_000;
+    try node.checkpoint(other);
+    try std.testing.expectEqual(other_head, node.head(other).?);
 }
 
 test "retain = none compaction leaves a journal that folds on reopen" {

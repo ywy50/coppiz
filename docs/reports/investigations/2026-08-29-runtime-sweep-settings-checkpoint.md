@@ -100,6 +100,15 @@ indices at the same call sites, and an identical (empty) removal set.
   is skipped and the empty set returned (a zero-length free is a no-op in
   `std.mem.Allocator.free`, so the existing callers' deinit paths are
   unchanged).
+  - **Correction, 2026-08-30.** That form of the guard was not
+    semantics-preserving: `removalSet` decides per entry from the
+    `expires_at`/`ttl_action` stamped at slot time, so reading the *current*
+    `ttl.enforce` skipped a pass that would have found something on a
+    journal whose enforcement was later turned off. The guard now answers
+    from the fold's own stamps and the skip is exact -
+    [2026-08-30 - the removal-set fast path reads live settings](../bugs/2026-08-30-removal-guard-reads-live-settings.md).
+    The measurement above is unaffected: the default-configuration journal
+    the number was taken on has no stamped entries either way.
 
 Verification: `zig build test` on this machine - 261/261 pass, exit 0
 (lib_tests 170, exe_tests 13, build_tests 75, examples 3). Gate duration
