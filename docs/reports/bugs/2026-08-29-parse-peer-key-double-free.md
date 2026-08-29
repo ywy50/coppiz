@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -35,7 +35,7 @@ Free-before-validate: the field must be re-assigned (or cleared) before any refu
 
 ## Resolution
 
-Not yet fixed. Suggested fix: validate first, dupe into a local, then free the old and assign - or clear the field (`peer.public_key = null`) before returning the error. A regression test should parse a duplicate-key block with a malformed second value under `std.testing.allocator` and complete `deinit` without aborting.
+Fixed: `parsePeerKey` validates and dupes the new value before freeing the old one, so a refusal leaves no dangling pointer; regression test covers the duplicate-key-with-malformed-second-value case.
 
 ## Verification
 

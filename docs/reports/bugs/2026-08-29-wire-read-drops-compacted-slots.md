@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -24,7 +24,7 @@ Not dynamically reproduced; statically certain. A journal with enforcement + `re
 
 ## Resolution
 
-Not yet fixed. Suggested direction: encode a slot-only record into the page (or a `(removed)` marker) so wire and local reads agree. A regression test should read over the wire after a `retain = none` compaction and compare with the local read.
+Fixed: `onReadReq` encodes slot-only markers for `retain = none` compacted slots, so wire reads render them like the local read's `(removed)` rows.
 
 ## Verification
 

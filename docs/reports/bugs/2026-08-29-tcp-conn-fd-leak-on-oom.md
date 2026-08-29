@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -32,7 +32,7 @@ The sweep-1 fix ("allocate before container insert") was applied to the hub path
 
 ## Resolution
 
-Not yet fixed. Suggested fix: `errdefer stream.close(io);` after the accept/connect (before the create). A regression test should fail the `TcpConn` allocation and assert the fd count is unchanged (or drive it under `FailingAllocator`).
+Fixed: `TcpListener.acceptFn` and `TcpTransport.connectFn` close the OS stream via errdefer when the `TcpConn` allocation fails.
 
 ## Verification
 

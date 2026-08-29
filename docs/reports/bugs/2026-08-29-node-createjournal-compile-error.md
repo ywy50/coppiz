@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -36,7 +36,7 @@ A field-access typo in a never-analyzed method. The gate coverage that catches d
 
 ## Resolution
 
-Not yet fixed. Suggested fix: pass `group_id` (drop `.entry_hash`). A regression guard would need a reference to the method (e.g., a compile-time `@TypeOf(Node.createJournal)` reference) so the body is analyzed.
+Fixed: `Node.createJournal` passes `group_hash` directly (the `.entry_hash` field access on a `[32]u8` was a compile error no gate analyzed); a new test calls the method, forcing its body through analysis and checking the journal registers and survives reopen.
 
 ## Verification
 

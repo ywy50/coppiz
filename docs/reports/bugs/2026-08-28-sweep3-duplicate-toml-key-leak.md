@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -24,7 +24,7 @@ Assign-without-free on keys that can legally appear once per file but are not re
 
 ## Resolution
 
-Not yet fixed. Suggested fix: reject duplicate keys with a named error (matching the parser's strictness) or free the prior value on re-assign. A regression test should parse a duplicated top-level key under `std.testing.allocator` and assert no leak.
+Fixed: duplicate top-level keys (`data_dir`, `member.key_file`, `listen`, `log.level`) are refused with a named `DuplicateKey` error instead of leaking the previous value.
 
 ## Verification
 

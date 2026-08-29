@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -30,7 +30,7 @@ The accept bound (16 MiB fold setting) and the wire bound (8 MiB frame) are not 
 
 ## Resolution
 
-Not yet fixed. Suggested direction: refuse appends whose encoded record would exceed the frame cap (`max_body_bytes`), or raise the frame cap to cover `max_entry_bytes` (and validate the setting against the cap). A regression test should append an ~9 MiB payload to a 2-member cluster and assert it either replicates to both or is refused with a named error.
+Fixed: the frame cap now clears the 16 MiB `max_entry_bytes` default plus record overhead, and `validateState` refuses a `max_entry_bytes` that leaves no room in a frame.
 
 ## Verification
 

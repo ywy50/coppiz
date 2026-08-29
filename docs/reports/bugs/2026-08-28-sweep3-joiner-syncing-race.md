@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -31,7 +31,7 @@ The "at head" decision treats an empty cursor map as "nothing left to sync", but
 
 ## Resolution
 
-Not yet fixed. Suggested direction: only clear `syncing` when the member has a chain (`control.head != null`) and every cursor drained; or seed the control cursor unconditionally on hello (not gated on `syncing`). A regression test should start a joiner whose first tick precedes its hello_ack (a delayed admitter) and assert it eventually reaches a chain.
+Fixed: `driveBackfill` no longer clears `syncing` for a chainless joiner whose first tick beats its handshake — the hello_ack still seeds the backfill cursor.
 
 ## Verification
 

@@ -8,7 +8,7 @@
 
 ## Status
 
-Open. Regression window introduced by `f401606` (the sweep-1 fix added `completePendingFor` to the *known*-entry branch of `reforwardQueue` but not to its two leader-slot branches).
+Resolved. Regression window introduced by `f401606` (the sweep-1 fix added `completePendingFor` to the *known*-entry branch of `reforwardQueue` but not to its two leader-slot branches).
 
 ## Symptom and impact
 
@@ -31,7 +31,7 @@ The `f401606` fix enumerated the completion sites (`onSlot`, `onSyncPage`, `slot
 
 ## Resolution
 
-Not yet fixed. Suggested fix: in `reforwardQueue`'s leader branch, call `self.completePendingFor(&en)` on both the success (`:569`) and error (`:564`) paths in addition to the `pending_clients` handling. A regression test should run a local append during a leaderless window, elect the member, and assert the completion posts.
+Fixed: `reforwardQueue`'s leader-slot branches resolve `pending_locals` — `completePendingFor` on success and the refusal name on error — so an embedded host's `localAppend` no longer hangs when its entry is slotted by a newly-elected leader.
 
 ## Verification
 

@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -35,7 +35,7 @@ The length check and the slice are computed in the same overflowing type instead
 
 ## Resolution
 
-Not yet fixed. Suggested fix: `if (body_len > bytes.len -| record_prefix_len) return error.Truncated;` (or widen the sum to usize) at every decode site - `segment.zig:146`, `queue.zig:239-243`, `store.zig:312`, `chain.zig:999`, `message.zig` slot decode. A regression test should feed a length prefix of `0xFFFFFFF8` and expect `error.Truncated`.
+Fixed: `decodeRecord` computes the record total in usize, so a body_len near max u32 is refused `Truncated` instead of wrapping to a start-past-end slice; regression test added.
 
 ## Verification
 
