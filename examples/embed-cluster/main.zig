@@ -25,7 +25,13 @@ pub fn main() !void {
     // page_allocator is thread-safe (the node loops allocate on the io's
     // workers) and needs no setup or teardown — right for a demo host.
     const gpa = std.heap.page_allocator;
-    var io_state = std.Io.Threaded.init(gpa, .{});
+    // Three nodes need more async slots than `Io.Threaded`'s default gives:
+    // each `ClusterNode` holds three permanently (loop, timer, accept) plus
+    // one reader per connection, so a three-member mesh holds 15 while the
+    // default limit is `cpu_count - 1`. Past the limit `groupAsync` runs the
+    // task eagerly on the calling thread, and the third `start()` never
+    // returns (bug 2026-08-29-embed-cluster-async-limit-deadlock).
+    var io_state = std.Io.Threaded.init(gpa, .{ .async_limit = .limited(64) });
     defer io_state.deinit();
     const io = io_state.io();
     try runDemo(gpa, io);
@@ -33,7 +39,13 @@ pub fn main() !void {
 
 test "embed-cluster: three embedded nodes join, host appends, a partition heals into one chain" {
     const gpa = std.heap.page_allocator;
-    var io_state = std.Io.Threaded.init(gpa, .{});
+    // Three nodes need more async slots than `Io.Threaded`'s default gives:
+    // each `ClusterNode` holds three permanently (loop, timer, accept) plus
+    // one reader per connection, so a three-member mesh holds 15 while the
+    // default limit is `cpu_count - 1`. Past the limit `groupAsync` runs the
+    // task eagerly on the calling thread, and the third `start()` never
+    // returns (bug 2026-08-29-embed-cluster-async-limit-deadlock).
+    var io_state = std.Io.Threaded.init(gpa, .{ .async_limit = .limited(64) });
     defer io_state.deinit();
     const io = io_state.io();
     try runDemo(gpa, io);

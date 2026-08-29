@@ -3182,6 +3182,14 @@ fn triNodeInit(
     founded: ?std.testing.TmpDir,
     now: ?*const fn (std.Io) i64,
 ) !TriNode {
+    // Three nodes need more async slots than `Io.Threaded`'s default gives:
+    // each ClusterNode holds three for its whole life (loop, timer, accept)
+    // plus one reader per connection, while the default limit is
+    // `cpu_count - 1`. Past the limit `groupAsync` runs the task eagerly on
+    // the calling thread, so `start()` never returns and the test hangs
+    // rather than failing (bug 2026-08-29-embed-cluster-async-limit-deadlock).
+    // Idempotent, so every triNode may set it.
+    std.testing.io_instance.setAsyncLimit(.limited(64));
     var tmp = if (founded) |ft| ft else std.testing.tmpDir(.{});
     tmp.dir.createDir(tio, "data", .default_dir) catch {};
     const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
