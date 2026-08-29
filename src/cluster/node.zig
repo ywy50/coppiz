@@ -2517,7 +2517,24 @@ pub const ClusterNode = struct {
         };
         self.node.readRange(jid, from, null, r.include_stale, r.include_expired, &ctx, struct {
             fn cb(c: *Ctx, sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
-                const e = en orelse return;
+                const e = en orelse {
+                    // A retain=none compacted slot has no entry: emit the
+                    // slot-only marker so the wire read matches the local
+                    // read's (removed) row instead of silently dropping the
+                    // position (bug 2026-08-29-wire-read-drops-compacted-slots).
+                    const size = segment.slotOnlyRecordSize();
+                    if (c.bytes > 0 and c.bytes + size > @as(usize, c.max_bytes)) {
+                        c.stopped = true;
+                        return;
+                    }
+                    const buf = try c.self.allocator.alloc(u8, size);
+                    defer c.self.allocator.free(buf);
+                    segment.encodeSlotOnlyRecord(sl, buf);
+                    try c.records.appendSlice(c.self.allocator, buf);
+                    c.bytes += size;
+                    c.next = sl.position().next();
+                    return;
+                };
                 c.self.encodeRecordIntoPage(c.records, sl, e, &c.bytes, c.max_bytes) catch |err| {
                     if (err == error.StopServing) c.stopped = true;
                     return err;
