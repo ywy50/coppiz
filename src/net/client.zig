@@ -175,6 +175,9 @@ pub const Client = struct {
                 .read_page => |p| p,
                 else => return error.ProtocolError,
             };
+            // The wire equivalent of the local read's UnknownJournal (bug
+            // 2026-08-28-sweep3-wire-read-unknown-journal).
+            if (page.refusal.len > 0) return error.UnknownJournal;
             var off: usize = 0;
             while (off < page.records.len) {
                 const rec = segment.decodeRecord(page.records[off..]) catch

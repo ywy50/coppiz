@@ -567,11 +567,19 @@ pub const ClusterNode = struct {
             }
             if (self.isLeader()) {
                 _ = self.slotAndBroadcast(&en, false) catch |err| {
+                    // The embedded host's completion and the wire client's
+                    // ack are resolved on both outcomes, with the refusal on
+                    // the error path — otherwise the host hangs (bug
+                    // 2026-08-29-reforward-queue-loses-local-completion).
                     if (self.pending_clients.fetchRemove(en.id())) |kv| {
                         self.ackClient(kv.value, en.id(), clientRefusalName(err)) catch {};
                     }
+                    if (self.pending_locals.fetchRemove(en.id())) |kv| {
+                        completeLocal(kv.value, self.io, undefined, clientRefusalName(err));
+                    }
                     continue;
                 };
+                self.completePendingFor(&en);
                 if (self.pending_clients.fetchRemove(en.id())) |kv| {
                     self.ackClient(kv.value, en.id(), "") catch {};
                 }
@@ -2373,7 +2381,7 @@ pub const ClusterNode = struct {
         var seq = authored.sl.seq + 1;
         for (decoded.items) |*d| {
             const en = d.en;
-            const sl = try self.reslot(&en, prev_hash, seq);
+            const sl = try self.reslot(&en, prev_hash, seq, self.node.control.last_slot_ts_ms);
             try self.node.applyReplicated(control_id, &sl, &en, true, null);
             self.broadcastToMembers(.{ .slot = .{
                 .reslotted = true,
@@ -2410,7 +2418,7 @@ pub const ClusterNode = struct {
             const rec = segment.decodeRecord(buf.items[off..]) catch
                 return error.CorruptMergeBranch;
             const e = rec.entry orelse return error.CorruptMergeBranch;
-            const sl = try self.reslot(&e, prev_hash, seq);
+            const sl = try self.reslot(&e, prev_hash, seq, fold.last_slot_ts_ms);
             try self.node.applyReplicated(jid, &sl, &e, false, null);
             self.broadcastToMembers(.{ .slot = .{
                 .reslotted = false,
@@ -2450,11 +2458,21 @@ pub const ClusterNode = struct {
     /// A merge re-slot: the losing entry's unchanged bytes in a new slot
     /// signed by me, chained to `prev_hash` at `seq` (the simulator's
     /// reslot, PRD 0003 *Partition and merge*).
-    fn reslot(self: *ClusterNode, en: *const entry.Entry, prev_hash: [32]u8, seq: u64) !slot.Slot {
+    fn reslot(
+        self: *ClusterNode,
+        en: *const entry.Entry,
+        prev_hash: [32]u8,
+        seq: u64,
+        last_ts: u64,
+    ) !slot.Slot {
         var sl = slot.Slot{
             .epoch = self.node.control.epoch.?.number,
             .seq = seq,
-            .slot_ts_ms = self.nowMs(),
+            // The live slot path clamps to the fold's last timestamp; a
+            // regressed clock must not produce a re-slotted record older
+            // than the fold's head (bug
+            // 2026-08-29-merge-reslot-timestamp-unclamped).
+            .slot_ts_ms = @max(self.nowMs(), last_ts),
             .entry_hash = entry.entryHash(en),
             .prev_slot_hash = prev_hash,
             .leader = self.node.member_id,
@@ -2468,9 +2486,13 @@ pub const ClusterNode = struct {
 
     fn onReadReq(self: *ClusterNode, conn_id: u64, r: message.ReadReq) !void {
         const jid = self.node.journalIdByName(r.journal) orelse {
+            // Refuse with a named refusal, matching the local read's
+            // UnknownJournal, instead of answering with silent empty output
+            // (bug 2026-08-28-sweep3-wire-read-unknown-journal).
             try self.sendMessage(conn_id, .{ .read_page = .{
                 .next = .{ .epoch = 0, .seq = 0 },
                 .records = &.{},
+                .refusal = "unknown_journal",
             } });
             return;
         };

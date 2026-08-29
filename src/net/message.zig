@@ -509,30 +509,42 @@ pub fn decodeReadReq(allocator: std.mem.Allocator, bytes: []const u8) DecodeErro
     };
 }
 
-/// A page of records for a read. `next` (0, 0) means the stream is done.
+/// A page of records for a read. `next` (0, 0) means the stream is done; a
+/// non-empty `refusal` means the request was refused (e.g. an unknown
+/// journal name) and the page carries no records — the wire equivalent of
+/// the local read's named error (bug
+/// 2026-08-28-sweep3-wire-read-unknown-journal).
 pub const ReadPage = struct {
     next: slot.Position,
     /// Owned after decode; records use the segment record codec.
     records: []const u8,
+    refusal: []const u8 = "",
 };
 
 pub fn readPageLen(p: ReadPage) usize {
-    return 8 + 8 + 4 + p.records.len;
+    return 8 + 8 + 4 + p.records.len + 2 + p.refusal.len;
 }
 
 pub fn encodeReadPage(p: ReadPage, buf: []u8) void {
     writePosition(buf[0..16], p.next);
     writeU32(buf[16..20], p.records.len);
-    @memcpy(buf[20..], p.records);
+    const off = 20 + p.records.len;
+    @memcpy(buf[20..off], p.records);
+    writeU16(buf[off .. off + 2], p.refusal.len);
+    @memcpy(buf[off + 2 ..], p.refusal);
 }
 
 pub fn decodeReadPage(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!ReadPage {
     if (bytes.len < 20) return error.InvalidLength;
     const rec_len = std.mem.readInt(u32, bytes[16..20], .little);
-    if (20 + rec_len != bytes.len) return error.InvalidLength;
+    const off = 20 + rec_len;
+    if (off + 2 > bytes.len) return error.InvalidLength;
+    const refusal_len = std.mem.readInt(u16, bytes[off .. off + 2], .little);
+    if (off + 2 + refusal_len != bytes.len) return error.InvalidLength;
     return .{
         .next = readPosition(bytes[0..16]),
-        .records = try allocator.dupe(u8, bytes[20..]),
+        .records = try allocator.dupe(u8, bytes[20..off]),
+        .refusal = try allocator.dupe(u8, bytes[off + 2 ..]),
     };
 }
 
@@ -730,7 +742,10 @@ pub const Message = union(enum) {
             .slot => |v| allocator.free(v.record),
             .sync_page => |v| allocator.free(v.records),
             .read_req => |v| allocator.free(v.journal),
-            .read_page => |v| allocator.free(v.records),
+            .read_page => |v| {
+                allocator.free(v.records);
+                allocator.free(v.refusal);
+            },
             .settings => |v| {
                 allocator.free(v.journal);
                 allocator.free(v.changes);
@@ -1006,6 +1021,17 @@ test "read_req and read_page round-trip" {
     var page = try roundTrip(.{ .read_page = .{ .next = test_pos, .records = "recordbytes" } });
     defer page.deinit(test_alloc);
     try std.testing.expectEqualStrings("recordbytes", page.read_page.records);
+    try std.testing.expectEqual(@as(usize, 0), page.read_page.refusal.len);
+
+    // A refused read carries the refusal through the same codec (bug
+    // 2026-08-28-sweep3-wire-read-unknown-journal).
+    var refused = try roundTrip(.{ .read_page = .{
+        .next = test_pos,
+        .records = "",
+        .refusal = "unknown_journal",
+    } });
+    defer refused.deinit(test_alloc);
+    try std.testing.expectEqualStrings("unknown_journal", refused.read_page.refusal);
 }
 
 test "settings round-trips the change-list bytes" {

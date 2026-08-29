@@ -143,17 +143,22 @@ pub fn decodeRecord(bytes: []const u8) RecordError!Record {
     if (bytes.len < record_prefix_len) return error.Truncated;
     const body_len = std.mem.readInt(u32, bytes[0..4], .little);
     if (body_len < slot.encoded_len) return error.BadCrc;
-    if (record_prefix_len + body_len > bytes.len) return error.Truncated;
-    const body = bytes[record_prefix_len .. record_prefix_len + body_len];
+    // usize arithmetic: record_prefix_len is a comptime_int, so a bare
+    // `record_prefix_len + body_len` computes in u32 and a body_len near
+    // max u32 wraps the sum, passes the bounds check, and slices with a
+    // start past the end (bug 2026-08-28-sweep3-record-length-overflow).
+    const total = @as(usize, body_len) + record_prefix_len;
+    if (total > bytes.len) return error.Truncated;
+    const body = bytes[record_prefix_len..total];
     const want_crc = std.mem.readInt(u32, bytes[4..8], .little);
     if (std.hash.crc.Crc32.hash(body) != want_crc) return error.BadCrc;
     const sl = slot.decode(body[0..slot.encoded_len]);
     if (body_len == slot.encoded_len) {
-        return .{ .slot = sl, .entry = null, .next_offset = record_prefix_len + body_len };
+        return .{ .slot = sl, .entry = null, .next_offset = total };
     }
     if (body_len < slot.encoded_len + entry.header_len) return error.BadCrc;
     const en = try entry.decode(body[slot.encoded_len..]);
-    return .{ .slot = sl, .entry = en, .next_offset = record_prefix_len + body_len };
+    return .{ .slot = sl, .entry = en, .next_offset = total };
 }
 
 /// The hash a sealed segment records: SHA-256 over the whole record region.
@@ -310,4 +315,14 @@ const FuzzCtx = struct {
 
 test "record decoder fuzzes over untrusted bytes" {
     try std.testing.fuzz(FuzzCtx{}, FuzzCtx.fuzzOne, .{});
+}
+
+test "a length prefix near max u32 is Truncated, not a wrap-around slice" {
+    // Bug 2026-08-28-sweep3-record-length-overflow: the sum computed in
+    // u32, so body_len = 0xFFFFFFF8 wrapped past the bounds check and the
+    // slice had a start past its end — a panic in safe modes. It must be
+    // refused like any over-long record.
+    var buf: [record_prefix_len + slot.encoded_len + 8]u8 = undefined;
+    std.mem.writeInt(u32, buf[0..4], 0xFFFF_FFF8, .little);
+    try std.testing.expectError(error.Truncated, decodeRecord(&buf));
 }
