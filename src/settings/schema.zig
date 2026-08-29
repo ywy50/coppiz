@@ -531,8 +531,14 @@ pub const SettingsState = struct {
     pub fn clone(self: *const SettingsState) !SettingsState {
         const values = try self.allocator.alloc(Value, key_count);
         errdefer self.allocator.free(values);
+        // A mid-loop clone failure (OOM on a string_list dupe) must not
+        // leak the values already cloned; the fold clones the whole state
+        // on every settings entry (bug 2026-08-30-settings-clone-leak).
+        var cloned: usize = 0;
+        errdefer for (values[0..cloned]) |*v| v.deinit(self.allocator);
         for (0..key_count) |i| {
             values[i] = try self.values[i].clone(self.allocator);
+            cloned += 1;
         }
         return .{ .allocator = self.allocator, .values = values };
     }
