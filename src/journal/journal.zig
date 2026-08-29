@@ -203,6 +203,80 @@ pub const Node = struct {
         return &js.fold.settings;
     }
 
+    /// The cluster-scoped settings as they stood at `at` (PRD 0004 *Reading
+    /// settings*). `settings()` reads the live fold at the head; this
+    /// re-folds the control chain from the start and stops after the last
+    /// slot at or before `at`, so a caller can answer "what was
+    /// `cluster.admission` when this slot was written?" without standing up
+    /// a second node. A position before the genesis yields the schema
+    /// defaults, and a position past the head yields the head state.
+    ///
+    /// The caller owns the returned state and must `deinit` it. Cost is one
+    /// full scan of the control chain, so this is a diagnostic path, not a
+    /// hot one.
+    pub fn settingsAt(self: *Node, at: slot.Position) !schema.SettingsState {
+        if (std.mem.eql(u8, &self.control.journal_id, &([_]u8{0} ** 16))) {
+            // A chainless member has folded nothing; the defaults are the
+            // only honest answer, and they are what a fresh fold starts from.
+            return schema.SettingsState.initDefaults(self.allocator);
+        }
+        var fold = try chain.FoldState.init(self.allocator, true, self.control.journal_id);
+        defer fold.deinit();
+        try self.foldThrough(&fold, self.control.journal_id, at);
+        return fold.settings.clone();
+    }
+
+    /// A journal's settings (cluster scope merged over journal scope) as they
+    /// stood at `at` in that journal's own chain - the historical twin of
+    /// `journalSettings`. Null when the journal is unknown.
+    ///
+    /// Journal-scoped `settings` entries live in the data journal, so the
+    /// position is a position in *that* chain, not the control chain. The
+    /// records are validated against the current control fold, exactly as
+    /// `foldJournal` does at open: the historical view is of the settings,
+    /// not of the membership that authorised them.
+    ///
+    /// The caller owns the returned state and must `deinit` it.
+    pub fn journalSettingsAt(
+        self: *Node,
+        journal_id: [16]u8,
+        at: slot.Position,
+    ) !?schema.SettingsState {
+        if (!self.journals.contains(journal_id)) return null;
+        var fold = try chain.FoldState.init(self.allocator, false, journal_id);
+        defer fold.deinit();
+        try self.foldThrough(&fold, journal_id, at);
+        return try fold.settings.clone();
+    }
+
+    /// Replays `journal_id` into `fold`, stopping after the last slot at or
+    /// before `at`. `Store.scan` has no early exit, so the stop is a sentinel
+    /// error raised from the callback and swallowed here; every other error
+    /// propagates.
+    fn foldThrough(
+        self: *Node,
+        fold: *chain.FoldState,
+        journal_id: [16]u8,
+        at: slot.Position,
+    ) !void {
+        const Ctx = struct { node: *Node, fold: *chain.FoldState, at: slot.Position };
+        var ctx = Ctx{ .node = self, .fold = fold, .at = at };
+        self.store.scan(journal_id, &ctx, struct {
+            fn cb(c: *Ctx, sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
+                const pos = slot.Position{ .epoch = sl.epoch, .seq = sl.seq };
+                if (pos.order(c.at) == .gt) return error.ScanPastPosition;
+                const e = en orelse return c.fold.advanceHead(sl);
+                if (c.fold.is_control) return c.fold.applyControl(sl, e);
+                if (c.node.control.epoch == null or
+                    sl.epoch > c.node.control.epoch.?.number) return;
+                try c.fold.applyData(&c.node.control, sl, e);
+            }
+        }.cb) catch |err| switch (err) {
+            error.ScanPastPosition => {},
+            else => return err,
+        };
+    }
+
     /// Resolves a journal name to its id (the control fold's registry).
     pub fn journalIdByName(self: *const Node, name: []const u8) ?[16]u8 {
         // "__cluster__" is the control journal's canonical name (the CLI's
@@ -1879,4 +1953,69 @@ test "a chainless node reports no epoch and refuses to slot instead of panicking
         .payload = "x",
     };
     try std.testing.expectError(error.NoEpoch, node.slotFor(&node.control, &en));
+}
+
+test "settingsAt reads the settings in force at a slot, not the ones in force now" {
+    // PRD 0004 *Reading settings*: `settings()` and `journalSettings()` read
+    // the fold at the head; the historical view answers "what was in force
+    // when this slot was written?" from the same chain.
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    var node = try openNode(&env);
+    defer node.deinit();
+    const jid = node.journalIdByName("main").?;
+    const cid = node.control.journal_id;
+
+    // Cluster scope: `allowlist` (the schema default) then `prompt`, with
+    // the head captured between the two so the older value is addressable.
+    const admission = schema.keyIndex("cluster.admission").?;
+    const allowlist = schema.enumValue(admission, "allowlist").?;
+    const prompt = schema.enumValue(admission, "prompt").?;
+    const before_change = node.head(cid).?;
+    try node.changeSettings(cid, &.{.{ .key = admission, .value = .{ .enum_value = prompt } }});
+    const after_change = node.head(cid).?;
+
+    try std.testing.expectEqual(prompt, node.settings().get(admission).enum_value);
+
+    var then = try node.settingsAt(before_change);
+    defer then.deinit();
+    try std.testing.expectEqual(allowlist, then.get(admission).enum_value);
+
+    var now = try node.settingsAt(after_change);
+    defer now.deinit();
+    try std.testing.expectEqual(prompt, now.get(admission).enum_value);
+
+    // A position past the head is the head state, and one before the genesis
+    // is the schema defaults - neither is an error.
+    var past = try node.settingsAt(.{ .epoch = after_change.epoch, .seq = after_change.seq + 99 });
+    defer past.deinit();
+    try std.testing.expectEqual(prompt, past.get(admission).enum_value);
+    var pre = try node.settingsAt(.{ .epoch = 0, .seq = 0 });
+    defer pre.deinit();
+    try std.testing.expectEqual(allowlist, pre.get(admission).enum_value);
+
+    // Journal scope: the same shape in the data journal's own chain.
+    const ttl_default = schema.keyIndex("ttl.default_ms").?;
+    const before_ttl = node.head(jid) orelse slot.Position{ .epoch = 0, .seq = 0 };
+    try node.changeSettings(jid, &.{.{ .key = ttl_default, .value = .{ .u64 = 5000 } }});
+    const after_ttl = node.head(jid).?;
+
+    var ttl_then = (try node.journalSettingsAt(jid, before_ttl)).?;
+    defer ttl_then.deinit();
+    try std.testing.expectEqual(@as(u64, 0), ttl_then.getU64(ttl_default));
+    var ttl_now = (try node.journalSettingsAt(jid, after_ttl)).?;
+    defer ttl_now.deinit();
+    try std.testing.expectEqual(@as(u64, 5000), ttl_now.getU64(ttl_default));
+
+    // An unknown journal is null, not an error.
+    try std.testing.expectEqual(
+        @as(?schema.SettingsState, null),
+        try node.journalSettingsAt([_]u8{7} ** 16, after_ttl),
+    );
 }

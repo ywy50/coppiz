@@ -11,6 +11,13 @@ application), `render.zig` (the operator reference), `src/config/local.zig`
 (`coppiz.toml` parsing with a closed key set), and `docs/configuration.md`
 (the generated reference, pinned by a test so it cannot drift).
 
+The *Reading settings* design's historical view followed on 2026-08-29:
+`Node.settingsAt(position)` and `Node.journalSettingsAt(id, position)`
+re-fold the chain and stop after the last slot at or before the position,
+so "what was in force when this slot was written?" is answerable from one
+node (`src/journal/journal.zig`). They are diagnostic paths - one full scan
+of the chain each - and the caller owns the returned state.
+
 Acceptance criteria: **G3** (a `settings` entry touching `leadership.mode`
 is refused on every member while `reconfigurable = false`, accepted while
 true), **G4** (every cross-key rule has refusing and accepting tests; a

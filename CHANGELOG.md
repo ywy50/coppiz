@@ -21,6 +21,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   under 700 characters (split at sentence and thought boundaries; long
   roadmap bullets became sub-bullets). `docs-check` passes with zero
   failures.
+- The historical settings view PRD 0004 *Reading settings* names:
+  `Node.settingsAt(position)` for cluster scope and
+  `Node.journalSettingsAt(id, position)` for a journal's merged view. The
+  live accessors read the fold at the head; these re-fold the chain and stop
+  after the last slot at or before the position, so a caller can ask what
+  was in force when a given slot was written without standing up a second
+  node. A position before the genesis yields the schema defaults and one
+  past the head yields the head state; the caller owns the returned state.
 
 ### Fixed
 
