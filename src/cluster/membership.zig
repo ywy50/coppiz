@@ -96,12 +96,25 @@ pub fn applyJoin(
     const derived = chain.deriveMemberId(payload.public_key);
     if (!std.mem.eql(u8, &payload.member_id, &derived)) return error.BadJoin;
     if (fold.memberById(payload.member_id) != null) return error.AlreadyMember;
-    try fold.members.append(fold.allocator, .{
-        .id = payload.member_id,
-        .public_key = payload.public_key,
-        .seniority = sl.position(),
-        .address = try fold.allocator.dupe(u8, payload.address),
-    });
+    // The dupe is a separate step so its failure path is nameable: as an
+    // argument to `append` it was allocated first and orphaned when `append`
+    // itself failed. Once the member is in the table, `removeMember` is what
+    // frees the address, so the errdefer hands over at that point.
+    const address = try fold.allocator.dupe(u8, payload.address);
+    {
+        errdefer fold.allocator.free(address);
+        try fold.members.append(fold.allocator, .{
+            .id = payload.member_id,
+            .public_key = payload.public_key,
+            .seniority = sl.position(),
+            .address = address,
+        });
+    }
+    // Every failure from here rolls the member back. `validateState` did so
+    // explicitly; `memberViews` did not, and an allocation failure there
+    // left a member in the fold that the chain has no entry for - a
+    // divergence from every peer that did not fail.
+    errdefer removeMember(fold, payload.member_id);
     // The whole-state rules are count-dependent (PRD 0004's n = 1
     // exception): a join that grows the cluster past them would leave a
     // state no leader can ever be elected under — an empty authority list,
@@ -113,10 +126,8 @@ pub fn applyJoin(
     // invalid at the new count.
     const views = try fold.memberViews(fold.allocator, null);
     defer fold.allocator.free(views);
-    validate.validateState(&fold.settings, fold.memberCount(), views) catch {
-        removeMember(fold, payload.member_id);
+    validate.validateState(&fold.settings, fold.memberCount(), views) catch
         return error.InvalidSettings;
-    };
 }
 
 /// Applies a re-slotted `join` after a merge — the same validation and the
@@ -283,16 +294,23 @@ const Fix = struct {
 
     /// A control fold with genesis folded and the founder as leader.
     fn cluster(self: *const Fix) !chain.FoldState {
-        var fold = try chain.FoldState.init(test_alloc, true, [_]u8{0} ** 16);
+        return self.clusterIn(test_alloc);
+    }
+
+    /// `cluster`, on a caller-chosen allocator - the OOM tests build the
+    /// fold on a `FailingAllocator` so the fold's own allocations are the
+    /// ones that fail.
+    fn clusterIn(self: *const Fix, allocator: std.mem.Allocator) !chain.FoldState {
+        var fold = try chain.FoldState.init(allocator, true, [_]u8{0} ** 16);
         errdefer fold.deinit();
-        const payload = try test_alloc.alloc(
+        const payload = try allocator.alloc(
             u8,
             chain.genesisPayloadLen(.{
                 .founder_key = self.founder.public_key.toBytes(),
                 .changes = &.{},
             }),
         );
-        defer test_alloc.free(payload);
+        defer allocator.free(payload);
         chain.encodeGenesisPayload(
             .{ .founder_key = self.founder.public_key.toBytes(), .changes = &.{} },
             payload,
@@ -920,4 +938,62 @@ test "re-slots validate like live entries: join bad id refused, leave idempotent
         const again_sl = try fix.nextSlot(&fold, entry.entryHash(&again), 1003);
         try fold.applyControlReslotted(&again_sl, &again);
     }
+}
+
+test "a join that runs out of memory leaves the fold exactly as it found it" {
+    // `applyJoin` mutates the member table and *then* runs the whole-state
+    // rule. The `validateState` refusal always rolled the member back; an
+    // allocation failure did not, so an OOM in `memberViews` left the fold
+    // holding a member the chain has no entry for - a permanent divergence
+    // from every peer whose allocation succeeded. The address dupe had the
+    // matching hole: built as an argument to `append`, it was orphaned when
+    // `append` itself failed.
+    //
+    // The sweep fails each of the join's own allocations in turn. The fold
+    // is built first with the allocator not yet failing, so only the join's
+    // allocations are in the window.
+    var fix = Fix.init();
+    const info = JoinPayload{
+        .member_id = fix.second_id,
+        .public_key = fix.second.public_key.toBytes(),
+        .address = "10.0.0.2:3939",
+    };
+    const payload = try test_alloc.alloc(u8, joinPayloadLen(info));
+    defer test_alloc.free(payload);
+    encodeJoinPayload(info, payload);
+
+    var failed_at_least_once = false;
+    var k: usize = 0;
+    while (k < 8) : (k += 1) {
+        var failing = std.testing.FailingAllocator.init(test_alloc, .{});
+        const fa = failing.allocator();
+        var fold = try fix.clusterIn(fa);
+        defer fold.deinit();
+        try std.testing.expectEqual(@as(usize, 1), fold.members.items.len);
+
+        failing.fail_index = failing.alloc_index + k;
+        const en = try fix.entryFor(
+            fix.founder,
+            .join,
+            fix.control_id,
+            nextAuthorSeq(&fold, fix.founder_id),
+            payload,
+        );
+        const sl = try fix.nextSlot(&fold, entry.entryHash(&en), 1001);
+        if (applyJoin(&fold, &sl, &en)) |_| {
+            // The allocation the sweep aimed at was past the join's last
+            // one; the member is in, as it should be.
+            try std.testing.expectEqual(@as(usize, 2), fold.members.items.len);
+        } else |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            failed_at_least_once = true;
+            // The fold is untouched: still only the founder, and the
+            // testing allocator behind the failing one reports no leak.
+            try std.testing.expectEqual(@as(usize, 1), fold.members.items.len);
+            try std.testing.expect(fold.memberById(fix.second_id) == null);
+        }
+        failing.fail_index = std.math.maxInt(usize);
+    }
+    // The sweep is only meaningful if it actually induced failures.
+    try std.testing.expect(failed_at_least_once);
 }
