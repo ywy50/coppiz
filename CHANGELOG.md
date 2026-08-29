@@ -7,6 +7,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A refused open of a damaged data directory no longer leaks the journal
+  state it had already built. Refusing a corrupt, truncated or
+  wrong-version segment lost the journal's index table, its segment list,
+  one descriptor per segment already adopted, and - for every journal
+  loaded before the failing one - that journal whole. A supervisor
+  retrying `coppiz serve` leaked a little more on every attempt.
+
 - A `[[peers]]` entry that carries only a `public_key` no longer becomes a
   dial target. That entry is how an admitter authorizes a newcomer it has
   no address for, and `coppiz serve` seeded its empty address, so the node
