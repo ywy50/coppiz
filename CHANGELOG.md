@@ -379,7 +379,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 - The glossary defines **brief**: seven records cite "the brief (2026-08-21)"
   and only docs/README's prose named what that is (the operator's founding
-  notes, [qnd-notes.md](qnd-notes.md)) — a reader starting from a PRD or RFC
+  notes, [brief.md](docs/brief.md)) — a reader starting from a PRD or RFC
   had no pointer to the file the quotes come from, against the
   define-once rule the glossary itself states.
 
@@ -959,7 +959,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   need. Renames the PRD 0001 file and slug (`0001-journal-core.md`), the
   planned `src/journal/` layout, the settings keys (`journal.max_entry_bytes`,
   `cluster.max_journals`), the API sketch (`node.journal(name)`), and the
-  glossary term. The brief's own word is kept in qnd-notes.md and in verbatim
+  glossary term. The brief's own word is kept in docs/brief.md and in verbatim
   citations of the brief; clanker's "improve ledger" and the industry "ledger
   family" are untouched.
 

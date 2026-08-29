@@ -84,4 +84,4 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **parity** | k-of-m erasure coding of sealed segments across groups; any k groups reconstruct | PRD 0006 |
 | **tier** | which scaling mechanisms are on: 0 (one process), 1 (one group), 2 (groups), 3 (groups of groups), parity | PRD 0006, ROADMAP |
 | **OQ n** | open question *n* in [open-questions.md](open-questions.md) | — |
-| **brief** | the operator's founding notes of 2026-08-21, [qnd-notes.md](../qnd-notes.md); records cite them as "the brief"; what was clarified in conversation the same day is recorded in the record that rests on it ([ADR 0003](adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)) | docs/README.md |
+| **brief** | the operator's founding notes of 2026-08-21, [brief.md](brief.md); records cite them as "the brief"; what was clarified in conversation the same day is recorded in the record that rests on it ([ADR 0003](adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)) | docs/README.md |
