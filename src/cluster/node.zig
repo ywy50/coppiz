@@ -567,11 +567,19 @@ pub const ClusterNode = struct {
             }
             if (self.isLeader()) {
                 _ = self.slotAndBroadcast(&en, false) catch |err| {
+                    // The embedded host's completion and the wire client's
+                    // ack are resolved on both outcomes, with the refusal on
+                    // the error path — otherwise the host hangs (bug
+                    // 2026-08-29-reforward-queue-loses-local-completion).
                     if (self.pending_clients.fetchRemove(en.id())) |kv| {
                         self.ackClient(kv.value, en.id(), clientRefusalName(err)) catch {};
                     }
+                    if (self.pending_locals.fetchRemove(en.id())) |kv| {
+                        completeLocal(kv.value, self.io, undefined, clientRefusalName(err));
+                    }
                     continue;
                 };
+                self.completePendingFor(&en);
                 if (self.pending_clients.fetchRemove(en.id())) |kv| {
                     self.ackClient(kv.value, en.id(), "") catch {};
                 }
