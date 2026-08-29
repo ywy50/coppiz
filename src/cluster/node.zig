@@ -1357,7 +1357,17 @@ pub const ClusterNode = struct {
                 .last_heard_ms = self.elapsedMs(),
                 .state = .member,
             });
-            try self.admitNewcomer(h);
+            self.admitNewcomer(h) catch {
+                // A refused or undeliverable join must not leave a phantom
+                // member: every later hello from the same member would take
+                // the known-member branch and never re-author the join (bug
+                // 2026-08-28-sweep3-follower-admitter-join-fails).
+                const phantom = self.members.get(h.member_id);
+                if (phantom) |ms| self.allocator.free(ms.address);
+                _ = self.members.remove(h.member_id);
+                self.closeConn(conn_id);
+                return;
+            };
         }
     }
 
@@ -1442,7 +1452,19 @@ pub const ClusterNode = struct {
             .{ .member_id = h.member_id, .public_key = h.public_key, .address = h.address },
             payload,
         );
-        _ = try self.authorControl(.join, payload);
+        if (self.isLeader()) {
+            _ = try self.authorControl(.join, payload);
+            return;
+        }
+        // A follower cannot slot the join (the fold's leader check on the
+        // slot); the leader slots it, and the fold's re-slot inference
+        // (author != leader) applies the validated join — so a joiner whose
+        // only reachable peer is a follower can still join (bug
+        // 2026-08-28-sweep3-follower-admitter-join-fails). Refuse when no
+        // leader is reachable so the joiner retries.
+        if (self.leaderConnId() == null) return error.NoLeader;
+        const en = try self.signedEntry(.join, self.node.control.journal_id, payload, 0);
+        try self.sendForward(&en);
     }
 
     fn recordPendingAdmit(self: *ClusterNode, h: message.Hello) !void {
@@ -1659,13 +1681,16 @@ pub const ClusterNode = struct {
             self.closeConn(conn_id);
             return;
         };
-        // Only data entries are forwarded. Control entries are
-        // leader-authored directly; accepting a member's self-signed
+        // Only data entries and joins are forwarded. Other control entries
+        // are leader-authored directly; accepting a member's self-signed
         // control entry here would route it through the fold's re-slot
         // inference (author != leader) and bypass the leader checks — a
         // member could create journals or no-op their way past settings
-        // (bug 2026-08-29-live-create-journal-bypass).
-        if (en.kind != .data) {
+        // (bug 2026-08-29-live-create-journal-bypass). A join is the one
+        // control entry a follower legitimately authors (its hello admitted
+        // the newcomer — PRD 0003) and the fold's re-slot path validates it
+        // (bug 2026-08-28-sweep3-follower-admitter-join-fails).
+        if (en.kind != .data and en.kind != .join) {
             self.closeConn(conn_id);
             return;
         }
