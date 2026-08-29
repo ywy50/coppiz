@@ -35,6 +35,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A merge whose deferred `leave` re-slots refuse part way through no longer
+  leaves freed payloads in the pending list. `reSlotDeferredLeaves` freed each
+  payload in its loop but cleared the list only at the end, so an error left
+  already-freed entries in it and the next free - node shutdown, a peer
+  disconnect, or the next merge - was a double free. The loop drains from the
+  front now, so an entry is in the list exactly while its payload is owned.
+
 - `coppiz init` refuses a data directory that has already been bootstrapped,
   with `already_initialized`, instead of replacing its `member.key` and
   appending a second control chain. Replacing the key changed the member's

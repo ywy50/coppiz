@@ -2438,6 +2438,7 @@ pub const ClusterNode = struct {
             if (d.en.kind == .leave) {
                 var copy = d.en;
                 copy.payload = try self.allocator.dupe(u8, d.en.payload);
+                errdefer self.allocator.free(copy.payload);
                 try self.merge_pending_leaves.append(self.allocator, copy);
                 continue;
             }
@@ -2537,7 +2538,15 @@ pub const ClusterNode = struct {
             if (h.epoch == self.node.control.epoch.?.number) h.seq + 1 else 1
         else
             1;
-        for (self.merge_pending_leaves.items) |en| {
+        // Drain from the front: an entry is in the list exactly while its
+        // payload is still owned, so an error part-way through leaves the
+        // rest of the list intact and no freed payload behind it. Freeing
+        // in the loop while clearing only at the end left every already
+        // freed entry in the list, and the next free of it - `deinit`,
+        // `onPeerGone`, or the next `doMergeControl` - was a double free
+        // (bug 2026-08-29-merge-deferred-leaves-double-free).
+        while (self.merge_pending_leaves.items.len > 0) {
+            const en = self.merge_pending_leaves.items[0];
             const sl = try self.reslot(&en, prev_hash, seq, self.node.control.last_slot_ts_ms);
             try self.node.applyReplicated(control_id, &sl, &en, true, null);
             self.broadcastToMembers(.{ .slot = .{
@@ -2548,9 +2557,9 @@ pub const ClusterNode = struct {
             } });
             prev_hash = slot.slotHash(&sl);
             seq += 1;
+            _ = self.merge_pending_leaves.orderedRemove(0);
             self.allocator.free(en.payload);
         }
-        self.merge_pending_leaves.clearRetainingCapacity();
     }
 
     /// A merge re-slot: the losing entry's unchanged bytes in a new slot
@@ -4341,4 +4350,66 @@ test "(PRD 0005 G5) no thread exists before start(), and the size-1 path needs n
         std.Io.sleep(oio, std.Io.Duration.fromMilliseconds(10), .awake) catch break;
     }
     try std.testing.expect(threads > 0);
+}
+
+test "a deferred leave that refuses leaves no freed payload in the list" {
+    // `reSlotDeferredLeaves` used to free each entry's payload inside the
+    // loop and clear the list only after the loop finished. An error part
+    // way through therefore returned with the already-freed entries still
+    // in `merge_pending_leaves`, and the next free of that list - `deinit`,
+    // `onPeerGone`, or the next `doMergeControl` - was a double free.
+    //
+    // The trigger here is the shape the merge itself produces: two leaves
+    // from the losing branch, the first of which removes their author. The
+    // second then fails `checkEntrySignature` with `UnknownAuthor`, because
+    // the fold no longer knows the member that signed it.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    // Two self-leaves by the founder. The list owns each payload, exactly
+    // as `doMergeControl` hands them over.
+    var leave_buf: [16]u8 = undefined;
+    membership.encodeLeavePayload(.{ .member_id = node.member_id }, &leave_buf);
+    var i: usize = 0;
+    while (i < 2) : (i += 1) {
+        var en = try cn.signedEntry(.leave, node.control.journal_id, &leave_buf, 0);
+        en.payload = try test_alloc.dupe(u8, &leave_buf);
+        errdefer test_alloc.free(en.payload);
+        try cn.merge_pending_leaves.append(test_alloc, en);
+    }
+
+    // The first re-slot removes the founder - who is also the fold's leader
+    // - so the second has no leader to validate its slot signature against
+    // and is refused with `NotLeader`.
+    try std.testing.expectError(error.NotLeader, cn.reSlotDeferredLeaves());
+
+    // The refused entry is still in the list and still owns its payload;
+    // the applied one is gone from it. Before the fix both were in the list
+    // and the first one's payload was already freed, so the `deinit` in this
+    // test's teardown double-freed it and the testing allocator aborted.
+    try std.testing.expectEqual(@as(usize, 1), cn.merge_pending_leaves.items.len);
 }
