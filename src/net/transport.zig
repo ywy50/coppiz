@@ -106,12 +106,30 @@ pub const TcpConn = struct {
     allocator: std.mem.Allocator,
     stream: net.Stream,
     closed: bool = false,
+    /// The read buffer and the reader over it belong to the connection, not
+    /// to one `recvFrame` call. A socket read is greedy: `Stream.Reader`
+    /// hands the kernel both the caller's slice and its own buffer, and
+    /// keeps whatever came back beyond what was asked for
+    /// (`std.Io.net`'s `readVec`: `if (n > data_size) r.interface.end +=
+    /// n - data_size`). TCP coalesces frames freely - the leader's tick
+    /// sends a heartbeat and a slot broadcast back to back - so those extra
+    /// bytes are routinely the start of the next frame. A per-call stack
+    /// buffer threw them away *after* they had already been consumed from
+    /// the socket: a whole frame lost is silent replication loss, and half a
+    /// frame lost desynchronizes the stream, because the next read takes
+    /// four arbitrary body bytes for a length prefix (bug
+    /// 2026-08-29-tcp-recvframe-drops-buffered-bytes).
+    ///
+    /// `TcpConn` is always heap-allocated, so `read_buf`'s address is
+    /// stable for the reader that points into it. The reader is built on
+    /// first use because that is the first call that has an `Io`.
+    read_buf: [4096]u8 = undefined,
+    reader: ?net.Stream.Reader = null,
 
     fn recvFrame(ctx: *anyopaque, io: std.Io, allocator: std.mem.Allocator) framing.ReadError![]u8 {
         const self: *TcpConn = @ptrCast(@alignCast(ctx));
-        var buf: [4096]u8 = undefined;
-        var reader = self.stream.reader(io, &buf);
-        return framing.readFrame(allocator, &reader.interface);
+        if (self.reader == null) self.reader = self.stream.reader(io, &self.read_buf);
+        return framing.readFrame(allocator, &self.reader.?.interface);
     }
 
     fn sendFrame(ctx: *anyopaque, io: std.Io, body: []const u8) !void {
@@ -896,4 +914,56 @@ test "an empty pushed body is data, not a close" {
     var buf: [3]u8 = undefined;
     try std.testing.expectEqual(@as(usize, 3), try dir.readInto(tio, &buf));
     try std.testing.expectEqualStrings("abc", &buf);
+}
+
+/// Dials `address` and writes two frames with a single flush, so the kernel
+/// delivers them to the server in one read.
+fn twoFramesInOneSend(address: []const u8) error{Canceled}!void {
+    const addr = net.IpAddress.parseLiteral(address) catch return;
+    const stream = addr.connect(tio, .{ .mode = .stream }) catch return;
+    defer stream.close(tio);
+    var buf: [256]u8 = undefined;
+    var writer = stream.writer(tio, &buf);
+    framing.writeFrame(&writer.interface, "frame-one") catch return;
+    framing.writeFrame(&writer.interface, "frame-two") catch return;
+    writer.interface.flush() catch return;
+    // Hold the connection open until the reader has both frames; a close
+    // here would be graceful anyway, but waiting keeps the failure mode of
+    // the test unambiguous.
+    std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(200), .awake) catch {};
+}
+
+test "a TCP conn keeps the bytes its socket read past the current frame" {
+    // A socket read is greedy: the reader hands the kernel its own buffer
+    // alongside the caller's slice and keeps whatever comes back beyond what
+    // was asked for. When that buffer belonged to one `recvFrame` call, the
+    // surplus was consumed from the socket and then dropped on return - and
+    // TCP coalesces frames freely, so the surplus is routinely the next
+    // frame. Two frames written with one flush reproduce it.
+    var address_buf: [32]u8 = undefined;
+    var address: []const u8 = undefined;
+    var listener: Listener = undefined;
+    // A fixed base with a linear probe: whatever else holds a port (an
+    // aborted earlier run, a parallel checkout), the next one is free.
+    var port: u16 = 29876;
+    while (true) : (port += 1) {
+        if (port > 29876 + 64) return error.NoFreeLoopbackPort;
+        address = try std.fmt.bufPrint(&address_buf, "127.0.0.1:{d}", .{port});
+        listener = tcpListen(test_alloc, tio, address) catch continue;
+        break;
+    }
+    defer listener.close(tio);
+
+    var group: std.Io.Group = .init;
+    group.async(tio, twoFramesInOneSend, .{address});
+
+    const conn = try listener.accept(tio);
+    defer conn.close(tio);
+    const first = try conn.recv(tio, test_alloc);
+    defer test_alloc.free(first);
+    const second = try conn.recv(tio, test_alloc);
+    defer test_alloc.free(second);
+    try std.testing.expectEqualSlices(u8, "frame-one", first);
+    try std.testing.expectEqualSlices(u8, "frame-two", second);
+    try group.await(tio);
 }
