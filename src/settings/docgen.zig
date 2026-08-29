@@ -1,4 +1,4 @@
-//! `coppiz docs` — regenerates `docs/configuration.md` from the settings
+//! `coppiz docs` - regenerates `docs/configuration.md` from the settings
 //! schema (PRD 0004 phase 5). Invoked by `zig build docs`, which passes the
 //! target path; the rendered reference is byte-compared against the
 //! checked-in file by the pinned test in render.zig (G5).
