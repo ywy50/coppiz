@@ -7,6 +7,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A member no longer discards a committed suffix of its chain because it once
+  saw an ordinary failover. Every new epoch set the "my branch" facts and
+  nothing cleared them, so the loser of any later divergence truncated back
+  to the slot before that failover, even when it had no branch of its own.
+  The loser now acts only when its branch opened at or after the epoch the
+  divergence is about, and the facts are cleared when a merge ends.
+
 - A member no longer truncates its data journals because an arbitrary peer
   asked it to. `merge_ack` carries no body, and the handler discarded the
   connection it arrived on, so any admitted member could roll every data
