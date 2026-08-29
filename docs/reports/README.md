@@ -105,6 +105,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - `onMergeAck` truncates every data journal for any peer that asks](bugs/2026-08-29-merge-ack-unauthenticated.md)
 - [2026-08-29 - a `slot` whose record carries trailing junk decodes as valid, and the follower's fold advances past the store write that refuses it](bugs/2026-08-29-slot-record-trailing-bytes.md)
 - [2026-08-29 - an ordinary failover leaves `becomeLoser` truncating a committed suffix](bugs/2026-08-29-branch-facts-never-reset.md)
+- [2026-08-29 - `beginMerge` records a merge whose branch request never went out](bugs/2026-08-29-begin-merge-commits-on-a-dropped-sync.md)
 
 ### Investigations
 

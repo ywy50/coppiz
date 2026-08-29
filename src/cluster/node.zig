@@ -1005,14 +1005,14 @@ pub const ClusterNode = struct {
         const control_id = self.node.control.journal_id;
         if (self.sync_cursors.get(control_id)) |from| {
             const conn_id = self.syncPeerConn() orelse return;
-            try self.requestSync(conn_id, control_id, from);
+            _ = try self.requestSync(conn_id, control_id, from);
             return;
         }
         var it = self.node.control.journals.iterator();
         while (it.next()) |kv| {
             if (self.sync_cursors.get(kv.key_ptr.*)) |from| {
                 const conn_id = self.syncPeerConn() orelse return;
-                try self.requestSync(conn_id, kv.key_ptr.*, from);
+                _ = try self.requestSync(conn_id, kv.key_ptr.*, from);
                 return;
             }
         }
@@ -1930,7 +1930,7 @@ pub const ClusterNode = struct {
                     std.mem.eql(u8, &m.sl.leader, &my_leader.?) and
                     !self.entryKnown(jid, en.id()))
                 {
-                    try self.requestSync(conn_id, jid, self.headFor(jid).next());
+                    _ = try self.requestSync(conn_id, jid, self.headFor(jid).next());
                     return;
                 }
                 try self.onDivergence(conn_id, m.sl.leader, m.sl.epoch);
@@ -1994,20 +1994,25 @@ pub const ClusterNode = struct {
         // Gap catch-up: the peer is ahead of me.
         if (slot.Position.order(hb.head, my_head) == .gt) {
             const conn = ms.conn_id orelse return;
-            self.requestSync(conn, self.node.control.journal_id, my_head.next()) catch {};
+            _ = self.requestSync(conn, self.node.control.journal_id, my_head.next()) catch false;
         }
     }
 
     // -- sync ----------------------------------------------------------------
 
     /// Requests one page of `journal_id` from `from` on the peer's conn.
+    /// Returns whether the request actually went out: only one sync is in
+    /// flight at a time, so this is a no-op while another is outstanding,
+    /// and the conn can die under the send. A caller that commits state on
+    /// the strength of the request must check (bug
+    /// 2026-08-29-begin-merge-commits-on-a-dropped-sync).
     fn requestSync(
         self: *ClusterNode,
         conn_id: u64,
         journal_id: [16]u8,
         from: slot.Position,
-    ) !void {
-        if (self.sync_in_flight) return;
+    ) !bool {
+        if (self.sync_in_flight) return false;
         self.sync_in_flight = true;
         self.sendMessage(conn_id, .{ .sync_req = .{
             .journal_id = journal_id,
@@ -2016,7 +2021,9 @@ pub const ClusterNode = struct {
         } }) catch {
             // The conn died mid-request; the failure detector will redial.
             self.sync_in_flight = false;
+            return false;
         };
+        return true;
     }
 
     fn onSyncReq(self: *ClusterNode, conn_id: u64, r: message.SyncReq) !void {
@@ -2225,9 +2232,19 @@ pub const ClusterNode = struct {
     /// slot (every branch opens at `(branch_epoch, 1)`).
     fn beginMerge(self: *ClusterNode, conn_id: u64, branch_epoch: u64) !void {
         if (self.merging_from != null) return;
-        self.merging_from = conn_id;
         const from: slot.Position = .{ .epoch = branch_epoch, .seq = 1 };
-        try self.requestSync(conn_id, self.node.control.journal_id, from);
+        // The merge is only begun once the request for the branch is on the
+        // wire. `requestSync` is a silent no-op while another sync is in
+        // flight - the heartbeat gap catch-up can have one out when a
+        // diverging broadcast lands - and it also fails quietly on a dead
+        // conn. Committing `merging_from` regardless left the member with a
+        // merge that nothing would ever advance: `onSlot` drops every
+        // record while it is set, so replication stopped until the conn
+        // died, and the earlier sync's page arriving on that same conn was
+        // then read as branch records (bug
+        // 2026-08-29-begin-merge-commits-on-a-dropped-sync).
+        if (!try self.requestSync(conn_id, self.node.control.journal_id, from)) return;
+        self.merging_from = conn_id;
     }
 
     /// The loser's side of the merge: offer my branch to the survivor,
@@ -2406,7 +2423,7 @@ pub const ClusterNode = struct {
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.appendSlice(self.allocator, p.records);
         if (p.records.len > 0) {
-            try self.requestSync(conn_id, p.journal_id, p.next);
+            _ = try self.requestSync(conn_id, p.journal_id, p.next);
             return;
         }
         const is_control = std.mem.eql(u8, &p.journal_id, &self.node.control.journal_id);
@@ -2581,7 +2598,7 @@ pub const ClusterNode = struct {
         else
             self.node.control.epoch.?.number;
         const from: slot.Position = .{ .epoch = common_epoch + 1, .seq = 1 };
-        try self.requestSync(conn_id, jid, from);
+        _ = try self.requestSync(conn_id, jid, from);
     }
 
     /// Re-slots the control `leave` entries deferred by doMergeControl,
@@ -4665,4 +4682,74 @@ test "an ordinary failover is not a branch: becomeLoser truncates nothing" {
     try std.testing.expectEqual(@as(u64, 1), cn.node.control.head.?.epoch);
     try std.testing.expect(cn.syncing);
     try std.testing.expectEqual(@as(?u64, 9), cn.merging_to);
+}
+
+test "beginMerge commits nothing when the branch request never goes out" {
+    // `beginMerge` set `merging_from` and then called `requestSync`, which
+    // is a silent no-op while another sync is in flight. The member was left
+    // believing it was merging with nothing outstanding to advance it, and
+    // `onSlot` drops every record while `merging_from` is set.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    const Sink = struct {
+        fn send(_: *anyopaque, _: std.Io, _: []const u8) net.transport.SendError!void {}
+        fn recv(
+            _: *anyopaque,
+            _: std.Io,
+            _: std.mem.Allocator,
+        ) net.transport.RecvError![]u8 {
+            return error.EndOfStream;
+        }
+        fn nop(_: *anyopaque, _: std.Io) void {}
+    };
+    var sink_ctx: u8 = 0;
+    try cn.conns.put(test_alloc, 9, .{ .conn = .{
+        .ctx = &sink_ctx,
+        .recv_frame = Sink.recv,
+        .send_frame = Sink.send,
+        .shutdown_fn = Sink.nop,
+        .close_fn = Sink.nop,
+    } });
+
+    // A sync is already outstanding (the heartbeat gap catch-up shape), so
+    // the branch request is dropped on the floor.
+    cn.sync_in_flight = true;
+    try cn.beginMerge(9, 2);
+    try std.testing.expectEqual(@as(?u64, null), cn.merging_from);
+
+    // No conn 77 exists, so the send fails and clears the in-flight flag.
+    cn.sync_in_flight = false;
+    try cn.beginMerge(77, 2);
+    try std.testing.expectEqual(@as(?u64, null), cn.merging_from);
+    try std.testing.expect(!cn.sync_in_flight);
+
+    // The request goes out: now the merge is begun.
+    try cn.beginMerge(9, 2);
+    try std.testing.expectEqual(@as(?u64, 9), cn.merging_from);
+    try std.testing.expect(cn.sync_in_flight);
 }
