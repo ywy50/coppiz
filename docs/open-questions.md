@@ -27,8 +27,10 @@ Ordering inside each section is by what blocks implementation first.
    writes. The brief's "2 instances … define a specific one who is the
    leader" suggests the second is what an operator reaches for at n = 2; the
    drafted default mode is `seniority`. *Blocks:* none — the drafted default
-   shipped with PRD 0003; the operator's confirmation is still owed.
-   *Answer from:* the operator.
+   shipped with PRD 0003.
+   **Resolved 2026-08-29** (operator): `seniority` stays the default — the
+   AP-with-merge posture at n = 2 is accepted, with `configured` + `stall`
+   available per cluster as the CP alternative.
 3. **Default `write.ack`: `local` or `slotted`?** `local` keeps a partitioned
    member writing (AP); `slotted` waits for a position (CP-ish, and even then
    a position can move once at merge unless the mode forbids two leaders).
@@ -95,8 +97,9 @@ Ordering inside each section is by what blocks implementation first.
     freezes the evaluation at election. Is the extra mode worth its
     definition cost, given `syncing` members are already excluded? *Blocks:*
     none — the mode shipped with the `seniority` default and election-time
-    freezing; the operator's confirmation stays open. *Answer from:* the
-    operator (it was in the brief as a "perhaps").
+    freezing.
+    **Resolved 2026-08-29** (operator): `freshest` stays a selectable
+    `tiebreak` value with the shipped election-time semantics.
 31. **Read consistency.** Reads are local. Is "read your own writes" enough,
     or do consumers need a linearizable read (ask the leader for its head
     and wait for it)? clanker's board fold is tolerant; a claim/lease
@@ -268,6 +271,9 @@ Ordering inside each section is by what blocks implementation first.
     the schema, marked provisional (OQ 36); the right value from measurement
     stays open. *Blocks:* none — phase 4 shipped with the provisional
     default.
+    **Resolved 2026-08-29** (operator): the value stays operator-configurable
+    — the key is a live-changeable journal setting — and the provisional
+    16 MiB default stands until measurement replaces it.
 39. **Backup and restore.** A data directory copied while the node runs may
     hold a torn tail (recovered at open) — is `cp -r` a supported backup, or
     does `coppiz export` exist? Restoring a member from backup must not
@@ -286,6 +292,10 @@ Ordering inside each section is by what blocks implementation first.
     when the cluster is already at the cap. Sibling of OQ 36. *Blocks:*
     none — the bounds shipped and G6 trips them; the values stay
     provisional.
+    **Resolved 2026-08-29** (operator): the bounds are operator-configurable
+    — the journal cap and entry size are chain settings, the queue bound a
+    local-config key — and the provisional defaults stand until measurement.
+    The `genesis`-at-cap refusal question stays open.
 56. **The `sync.*` knobs have no layer and no values.** Three settings are
     named in the PRDs but appear in no settings table: `sync.page_bytes`
     (backfill page bound, PRD 0001 *Backfill*), `sync.lag_slots` (when a
@@ -300,6 +310,10 @@ Ordering inside each section is by what blocks implementation first.
     which suggests local — and what is the default? Sibling of OQ 55.
     *Blocks:* none — backfill and member states shipped with the provisional
     values.
+    (Operator, 2026-08-29: `sync.page_bytes` must be operator-configurable,
+    not a hardcoded constant — a local-config key replaces
+    `provisional_page_bytes`; that is a code change. `lag_slots` and
+    `gap_timeout_ms` stay open.)
 
 61. **What bounds per-process memory?** [PRD 0001](prds/0001-journal-core.md)
     goal 6 requires entry size, journal count *and per-process memory* to be
@@ -412,6 +426,7 @@ Ordering inside each section is by what blocks implementation first.
     ([bug 2026-08-29 — live create-journal bypass](reports/bugs/2026-08-29-live-create-journal-bypass.md)) —
     so "leader-only" is the intended rule, not yet the enforced one.
     *Blocks:* none — phase 4 shipped; the bypass is a code fix.
+    (Operator, 2026-08-29: track the fix — the bug stays the enforcement gap.)
 35. **TOML parser for `coppiz.toml`.** Vendor clanker's (same toolchain,
     already patched for 0.16) or hand-roll the subset the local config
     needs. ADR 0001 allows vendoring, not fetching. *Blocks:* PRD 0004
@@ -513,6 +528,9 @@ Ordering inside each section is by what blocks implementation first.
     the most likely place for a subtle divergence. *Blocks:* none — phase 5
     acceptance shipped; the determinism claim is still reasoned, not pinned
     by a merge-with-checkpoints scenario.
+    **Resolved 2026-08-29** (operator): schedule the merge-with-checkpoints
+    scenario in the simulator (OQ 27's second half); the determinism claim is
+    pinned by that scenario when it lands.
 45. **CI and toolchain pin.** Which Zig build to pin in CI (0.16.0 release),
     and whether to test musl and glibc targets there. The merge-gate half of
     this question is settled in-tree rather than in CI: `zig build test` runs
