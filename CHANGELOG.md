@@ -129,6 +129,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   review-stack merges (a `Hub.deinit` arity drift at three test sites, and
   the CLI test root requiring libc for `std.c.getpid()`); the shipped binary
   still links no libc.
+- A chainless member no longer aborts on a peer's control record.
+  `FoldState.applyControl` and `applyControlReslotted` read
+  `self.epoch.?.leader` after a journal-id check that a member with no folded
+  genesis passes: its control fold's journal id is all zeros, and so is the
+  record's. Both now refuse with the new `no_epoch` refusal, before any
+  signature is checked. `Node.epoch()` returns `?u64` instead of unwrapping,
+  exactly as `Node.leader()` does, and `slotFor` turns the absent case into
+  `error.NoEpoch` rather than a panic on the whole write path.
 
 ### Changed
 
