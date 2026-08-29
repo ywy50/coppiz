@@ -59,6 +59,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- A fourth example host, `examples/short-process/`: the command-line shape
+  that opens a data directory, appends, reads and closes once per
+  invocation, instead of holding the node open for the life of the process.
+  It is the shape the first host does not exercise, and it is checked
+  rather than asserted - the example fails the build if a later invocation
+  cannot see an earlier one's entries, if `author_seq` restarts across a
+  close, or if the head does not advance by exactly one slot per
+  invocation. `zig build examples` builds and runs it; `zig build test`
+  runs it as a test.
+
 - Election is now a function over an abstract member id, which is what PRD
   0006's "what the core must get right now" table asks the core to settle
   before a federation exists. `election.zig` exposes `Election(Id)` for any

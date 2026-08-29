@@ -24,7 +24,9 @@ carries one host per shape - `embed-single` (size 1, no network),
 `embed-cluster` (three embedded nodes in one process; a partition and
 heal, with the host's writes readable throughout, read through the loop),
 `sidecar` (a host speaking to a node over the wire, embedded and, since
-the G2 pairing, against a real `coppiz serve` over TCP) - built by `zig
+the G2 pairing, against a real `coppiz serve` over TCP), and, since
+2026-08-30, `short-process` (a command-line tool that opens, appends,
+reads and closes once per invocation) - built by `zig
 build examples` and each a test run by `zig build test`. A three-member
 partition that elects a second leader does not yet merge reliably in the
 node loop (its two-member merge is e2e-tested; the three-member case is
@@ -158,9 +160,29 @@ wrapper that calls the library - never a second implementation of any rule.
 **Examples directory.** `examples/` carries one minimal host per shape, each
 built by `zig build examples` and each a test: `embed-single/` (size 1, no
 network), `embed-cluster/` (three embedded nodes in one test process,
-partition and heal), `sidecar/` (a host speaking to a `coppiz` node). These
+partition and heal), `sidecar/` (a host speaking to a `coppiz` node), and
+`short-process/` (a CLI tool in short-lived invocations). These
 are the contract that the library serves hosts in general; a change that
 breaks an example breaks the build.
+
+**Host shapes.** The shapes the design is checked against, and the API
+property each one puts pressure on ([RFC 0021](../rfcs/0021-host-shapes.md)
+option B; the RFC's target-selection half is still open):
+
+| Shape | The host | What it presses on | Example |
+|---|---|---|---|
+| Embedded, long-lived | clanker: one process owns the directory for its life | size-1 cost, no daemon, the host's own `std.Io` | `embed-single/`, `embed-cluster/` |
+| Short process | a CLI tool that runs, does one thing, exits | open/close cost, state that must survive the close (member key, `author_seq`), one-process-per-directory ([OQ 47](../rfcs/0006-multi-process-one-data-directory.md)) | `short-process/` |
+| Separate process over the wire | a host that talks to a node it does not embed | the wire being the same library, not a second implementation | `sidecar/` |
+
+The short-process shape is the one clanker does not exercise, which is why
+it is the second example host the roadmap promised. It is checked, not
+asserted: `short-process/` opens the same directory three times in
+sequence and fails the build if a later invocation cannot see an earlier
+one's entries, if `author_seq` restarts, or if the head does not advance
+by exactly one slot per invocation. What it does *not* cover is two
+processes open at once - that is OQ 47's question, and `open` still takes
+an exclusive lock.
 
 ### Example host: clanker
 
