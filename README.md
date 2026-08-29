@@ -197,7 +197,9 @@ zig build lint
 **Shipped (2026-08-27): the single-member core, the pure cluster core, the
 cluster node loop, TTL cleanup end to end, and the embedded-host write
 path.** One process is a complete journal - append, read, follow, restart -
-with settings, TTL and checkpoint cleanup in the chain. On top of that sits
+with settings, TTL and checkpoint cleanup in the chain.
+
+On top of that sits
 the cluster core of [PRD 0003](docs/prds/0003-membership-and-leadership.md):
 the pure membership fold, election and epoch/merge rules (driven by the
 deterministic simulator, [OQ 27](docs/open-questions.md)), and the node
@@ -205,12 +207,17 @@ loop over the wire - failure detection, election → epoch, admission
 (allowlist/open/prompt), and forward/broadcast/backfill, so real processes
 replicate: `coppiz serve` runs a node, members join live, appends through a
 follower replicate to the leader and back, and a healed partition merges
-deterministically. The leader's checkpoint cadence ([PRD
+deterministically.
+
+The leader's checkpoint cadence ([PRD
 0002](docs/prds/0002-ttl-and-staleness.md) phases 4–5) keeps every member's
-payloads dropping at the same chain position. A host embeds the library and
+payloads dropping at the same chain position.
+
+A host embeds the library and
 writes through its member's loop (`cluster.ClusterNode.localAppend`), and
 `examples/` - `embed-single`, `embed-cluster`, `sidecar` - builds and tests
 each host shape ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)).
+
 `coppiz append`/`read`/`head` talk to a serving node over the wire when the
 data directory is locked ([OQ 47](docs/open-questions.md)); `coppiz status`,
 `coppiz members`, `coppiz doctor`, `coppiz settings set` and `coppiz admit`
