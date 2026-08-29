@@ -7,6 +7,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A member catching up no longer loses the newest record on a journal. A
+  broadcast arriving while it was still backfilling was dropped, and once the
+  backfill had passed that journal nothing ever asked for the record again,
+  so the member served silently stale reads for good. A dropped broadcast now
+  leaves a sync cursor at the missing position. This is the cause of the
+  intermittent growth e2e timeout: the test failed 16 times in 20 runs before
+  the fix and 0 times in 20 after.
+
 - The connection reader task no longer reads the node's connection table
   from a pool thread while the loop thread inserts into it. It takes the
   connection value it needs at spawn time instead, so every access to that
