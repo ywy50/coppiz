@@ -125,11 +125,20 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, config: *Config) Pa
 /// 2026-08-28-toml-parser-quote-unaware).
 fn stripComment(line: []const u8) []const u8 {
     var in_quotes = false;
+    // TOML basic strings escape a quote as `\"`; a quote after an odd run
+    // of backslashes is literal, not a toggle (bug
+    // 2026-08-29-toml-parser-escapes-and-unterminated).
+    var backslash_parity: u1 = 0;
     for (line, 0..) |c, i| {
-        if (c == '"') {
-            in_quotes = !in_quotes;
-        } else if (c == '#' and !in_quotes) {
-            return line[0..i];
+        if (c == '\\') {
+            backslash_parity ^= 1;
+        } else {
+            if (c == '"' and backslash_parity == 0) {
+                in_quotes = !in_quotes;
+            } else if (c == '#' and !in_quotes) {
+                return line[0..i];
+            }
+            backslash_parity = 0;
         }
     }
     return line;
@@ -318,22 +327,56 @@ fn parseStringArray(allocator: std.mem.Allocator, value: []const u8) ParseError!
     }
     var start: usize = 0;
     var in_quotes = false;
+    var backslash_parity: u1 = 0;
     for (body, 0..) |c, i| {
-        if (c == '"') {
+        if (c == '\\') {
+            backslash_parity ^= 1;
+            continue;
+        }
+        if (c == '"' and backslash_parity == 0) {
             in_quotes = !in_quotes;
         } else if (c == ',' and !in_quotes) {
             const item = std.mem.trim(u8, body[start..i], " \t");
-            if (item.len > 0) {
-                try out.append(allocator, try allocator.dupe(u8, unquote(item)));
-            }
+            try appendArrayItem(allocator, &out, item);
             start = i + 1;
         }
+        backslash_parity = 0;
     }
     const last = std.mem.trim(u8, body[start..], " \t");
-    if (last.len > 0) {
-        try out.append(allocator, try allocator.dupe(u8, unquote(last)));
-    }
+    try appendArrayItem(allocator, &out, last);
     return out.toOwnedSlice(allocator);
+}
+
+/// Appends one array item, refusing a malformed one: an item containing a
+/// quote must be exactly one fully-quoted string (escape-aware), so
+/// unterminated quotes (`"b`), mis-nested pairs (`a" "b`) and quotes in
+/// the middle of a bare token are refused instead of emitting garbage
+/// authority entries (bug
+/// 2026-08-29-toml-parser-escapes-and-unterminated).
+fn appendArrayItem(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayListUnmanaged([]const u8),
+    item: []const u8,
+) ParseError!void {
+    if (item.len == 0) return;
+    var in_quotes = false;
+    var backslash_parity: u1 = 0;
+    var quote_count: usize = 0;
+    for (item, 0..) |c, i| {
+        if (c == '\\') {
+            backslash_parity ^= 1;
+            continue;
+        }
+        if (c == '"' and backslash_parity == 0) {
+            quote_count += 1;
+            if (quote_count == 1 and i != 0) return error.InvalidValue;
+            in_quotes = !in_quotes;
+        }
+        backslash_parity = 0;
+    }
+    if (in_quotes) return error.InvalidValue; // unterminated
+    if (quote_count > 0 and quote_count != 2) return error.InvalidValue;
+    try out.append(allocator, try allocator.dupe(u8, unquote(item)));
 }
 
 /// Strips surrounding quotes from a TOML basic string.
@@ -438,6 +481,52 @@ test "a comma inside a quoted array item is data, not a separator" {
     const got = list orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 1), got.len);
     try std.testing.expectEqualStrings("node-a,node-b", got[0]);
+}
+
+test "an escaped quote inside a quoted value does not end the string" {
+    // Bug 2026-08-29-toml-parser-escapes-and-unterminated: the scanner
+    // toggled quote state on every `"`, so `\"` flipped it and a following
+    // `#` or `,` was misparsed.
+    var config = Config{ .allocator = test_alloc };
+    defer config.deinit();
+    try parse(test_alloc, "data_dir = \"/var/lib/coppiz\\\"prod#x\"\n", &config);
+    try std.testing.expectEqualStrings("/var/lib/coppiz\\\"prod#x", config.data_dir.?);
+
+    var config2 = Config{ .allocator = test_alloc };
+    defer config2.deinit();
+    try parse(
+        test_alloc,
+        "[genesis]\nleadership.authorities = [\"node-a\\\"x,node-b\"]\n",
+        &config2,
+    );
+    const authorities = schema.keyIndex("leadership.authorities").?;
+    var list: ?[]const []const u8 = null;
+    for (config2.genesis.items) |change| {
+        if (change.key == authorities) list = change.value.string_list;
+    }
+    const got = list orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), got.len);
+    try std.testing.expectEqualStrings("node-a\\\"x,node-b", got[0]);
+}
+
+test "malformed authority arrays are refused, not silently parsed" {
+    // Bug 2026-08-29-toml-parser-escapes-and-unterminated: unterminated
+    // quotes and mis-nested pairs produced garbage authority entries that
+    // could strand a configured cluster.
+    var config = Config{ .allocator = test_alloc };
+    defer config.deinit();
+    const unterminated = "[genesis]\nleadership.authorities = [\"a\", \"b]\n";
+    try std.testing.expectError(error.InvalidValue, parse(test_alloc, unterminated, &config));
+
+    var config2 = Config{ .allocator = test_alloc };
+    defer config2.deinit();
+    const missing_comma = "[genesis]\nleadership.authorities = [\"a\" \"b\"]\n";
+    try std.testing.expectError(error.InvalidValue, parse(test_alloc, missing_comma, &config2));
+
+    var config3 = Config{ .allocator = test_alloc };
+    defer config3.deinit();
+    const mid_quote = "[genesis]\nleadership.authorities = [\"a\"b\"]\n";
+    try std.testing.expectError(error.InvalidValue, parse(test_alloc, mid_quote, &config3));
 }
 
 test "bad values are refused" {
