@@ -977,6 +977,10 @@ pub const ClusterNode = struct {
         // Nothing left to sync: at head. Broadcasts were dropped while
         // backfilling, so drain the queue now — entries the sync pages
         // already carried are trimmed and their waiters completed.
+        // A chainless joiner has no cursor yet (the hello_ack seeds it), so
+        // a tick that beats the handshake must not clear syncing and strand
+        // it permanently (bug 2026-08-28-sweep3-joiner-syncing-race).
+        if (self.node.control.head == null) return;
         self.syncing = false;
         try self.reforwardQueue();
     }
