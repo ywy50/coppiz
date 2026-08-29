@@ -480,7 +480,13 @@ pub fn decodeValue(
             if (bytes.len < 2) return error.InvalidLength;
             const count = std.mem.readInt(u16, bytes[0..2], .little);
             const items = try allocator.alloc([]const u8, count);
-            errdefer allocator.free(items);
+            // A refusal after some items were duped must free them too, not
+            // just the outer array (bug 2026-08-29-decode-value-string-list-leak).
+            var filled: usize = 0;
+            errdefer {
+                for (items[0..filled]) |item| allocator.free(item);
+                allocator.free(items);
+            }
             var off: usize = 2;
             for (0..count) |i| {
                 if (off + 2 > bytes.len) return error.InvalidLength;
@@ -490,6 +496,7 @@ pub fn decodeValue(
                 off += 2;
                 if (off + len > bytes.len) return error.InvalidLength;
                 items[i] = try allocator.dupe(u8, bytes[off .. off + len]);
+                filled += 1;
                 off += len;
             }
             if (off != bytes.len) return error.InvalidLength;
@@ -702,6 +709,21 @@ test "decodeValue refuses bad enum indices and bad lengths" {
     // A bool value of 2 is invalid.
     const bool_key: u16 = keyIndex("leadership.reconfigurable").?;
     try std.testing.expectError(error.InvalidValue, decodeValue(allocator, bool_key, &[_]u8{2}));
+}
+
+test "decodeValue string_list frees partially-duped items on refusal" {
+    // Bug 2026-08-29-decode-value-string-list-leak: the errdefer freed
+    // only the outer array, so a refusal after some items were duped
+    // (here: item 1's length overruns the buffer) leaked them. The GPA
+    // leak check at test end fails if item 0 leaked.
+    const allocator = std.testing.allocator;
+    const key: u16 = keyIndex("leadership.authorities").?;
+    var buf: [2 + 2 + 8 + 2]u8 = undefined;
+    std.mem.writeInt(u16, buf[0..2], 2, .little); // count
+    std.mem.writeInt(u16, buf[2..4], 8, .little); // item 0 length
+    @memcpy(buf[4..12], "aaaaaaaa"); // item 0
+    std.mem.writeInt(u16, buf[12..14], 100, .little); // item 1 length overruns
+    try std.testing.expectError(error.InvalidLength, decodeValue(allocator, key, &buf));
 }
 
 test "unknown keys are not in the table" {
