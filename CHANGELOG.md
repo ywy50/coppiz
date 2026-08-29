@@ -5,6 +5,23 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
+### Added
+
+- The agents-setup session workflow (project-kit install, never-overwrite
+  fix in the kit itself): `workflows/` (continue, fix, plan, review,
+  handoff, deliver), the plans/handovers/reviews/postmortems/prompts/
+  agent-rules directories with their templates, `docs/WORKFLOW.md`,
+  `docs/locks.md`, the generated `docs/INDEX.md`, and `scripts/`
+  (docs-index.sh, project-kit.py). `zig build docs-check` runs the kit's
+  documentation checks - no em dashes in prose, no paragraph over 700
+  characters, no broken local links, the generated index current - as a
+  standalone step (not part of `zig build test`).
+- Documentation now follows the kit's prose rules: every em dash in prose
+  is a regular dash (fenced code keeps its own), and every paragraph is
+  under 700 characters (split at sentence and thought boundaries; long
+  roadmap bullets became sub-bullets). `docs-check` passes with zero
+  failures.
+
 ### Fixed
 
 - Documentation sweep (2026-08-29): the root README's Status section no
