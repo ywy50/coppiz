@@ -55,7 +55,7 @@ fixed before merge).
 
 | # | Site | Why deferred | Next step |
 |---|---|---|---|
-| 13 | append pays 3 fsyncs; queue ignores `storage.fsync`; `clear` barrier redundant | durability trade-off | [RFC 0003](../../rfcs/0003-append-durability-fsync-policy.md) - recommended: knob governs the queue, `clear` never syncs |
+| 13 | append pays 3 fsyncs; queue ignores `storage.fsync`; `clear` barrier redundant | durability trade-off | Implemented 2026-08-29 - [ADR 0008](../../adrs/0008-storage-fsync-governs-the-queue.md) (RFC 0003 Option A): the queue honors the knob, `remove`/`clear` never sync; barriers 3/2/2 → 2/1/0 (strace-verified) |
 | 14 | `Queue.remove` rewrites the whole file per trim (O(k²) I/O on a burst) | on-disk format change (tombstone/watermark/batched drain) | separate RFC, linked from RFC 0003's out-of-scope |
 | 15 | per-frame decode dupes every variable-length part | the owning-decoder contract is a documented invariant (`message.zig:6-8`) with tests | RFC; benchmark the win before proposing the borrow change |
 | 16 | leader re-encodes for broadcast what it wrote to store | touches every broadcast call site; the follower-side win (#7) landed first | reviewer pass, or fold into the message-layer work in #15 |
@@ -71,11 +71,13 @@ fixed before merge).
 - **The gate is flaky under `zig build test`:** the process-level `status`
   test (via `waitStatus`) intermittently cannot reach the serve within its
   30 s poll; direct runs of the same binary pass. Runs 1, 2, 3, 5 failed;
-  run 4 was green. The serve children's stderr is `.ignore`
-  (`main.zig:922-927`), so a serve crash would be invisible - the leading
-  suspect is startup delay under fsync-heavy concurrent load (every e2e
-  append pays 3 barriers under `.every`), which RFC 0003 directly addresses.
-  Not confirmed; a serve-side stderr capture is the next diagnostic.
+  run 4 was green. The serve children's stderr is now captured to a
+  per-spawn log and dumped on a wait timeout (the 2026-08-29 follow-up
+  stack), so a serve crash is no longer invisible; the fsync-contention
+  suspect was directly addressed by implementing RFC 0003 (item 13 above) -
+  every e2e append now pays 2 barriers under `.every` instead of 3. Still
+  not reproduced on the follow-up machine; the next occurrence should carry
+  the serve logs.
 - **OQ 62 reproduced once:** a lib_tests binary spun at 112% CPU for 9+
   minutes after a failed `zig build test` run (run 2). No stack was
   captured. The report's prior evidence (~20 clean direct runs) stands; the
