@@ -835,6 +835,11 @@ const tio = std.testing.io;
 const BinTest = struct {
     tmp: std.testing.TmpDir,
     dir: []const u8,
+    /// Paths (relative to the build root) of the spawned serves' stderr
+    /// logs, one per spawn; dumped when a wait times out so a serve crash
+    /// is visible instead of silently swallowed (the sweep 2026-08-29
+    /// flagged the status-test flake as invisible for exactly this reason).
+    serve_logs: std.ArrayListUnmanaged([]const u8) = .empty,
 
     fn init() !BinTest {
         var tmp = std.testing.tmpDir(.{});
@@ -846,6 +851,8 @@ const BinTest = struct {
     }
 
     fn deinit(self: *BinTest) void {
+        for (self.serve_logs.items) |path| test_alloc.free(path);
+        self.serve_logs.deinit(test_alloc);
         test_alloc.free(self.dir);
         self.tmp.cleanup();
     }
@@ -911,7 +918,6 @@ const BinTest = struct {
     /// Runs the installed binary as a long-lived process (serve), returning
     /// the child for later killing.
     fn spawn(self: *BinTest, args: []const []const u8) !std.process.Child {
-        _ = self;
         var argv = std.ArrayListUnmanaged([]const u8).empty;
         defer argv.deinit(test_alloc);
         try argv.append(test_alloc, "zig-out/bin/coppiz");
@@ -919,12 +925,34 @@ const BinTest = struct {
         // The children's output must not touch the test runner's own
         // stdout/stderr: under `zig build test` those carry the runner's
         // protocol pipe, and a child writing to it corrupts the stream.
-        return std.process.spawn(tio, .{
+        // The serve's stderr goes to a per-spawn log file instead of
+        // /dev/null, so a crash (the leading suspect for the status-test
+        // flake the 2026-08-29 sweep recorded) is diagnosable.
+        const log_name = try std.fmt.allocPrint(
+            test_alloc,
+            "serve-{d}.log",
+            .{self.serve_logs.items.len},
+        );
+        defer test_alloc.free(log_name);
+        const log_file = try self.tmp.dir.createFile(tio, log_name, .{ .read = false });
+        errdefer log_file.close(tio);
+        const log_path = try std.fmt.allocPrint(
+            test_alloc,
+            ".zig-cache/tmp/{s}/{s}",
+            .{ &self.tmp.sub_path, log_name },
+        );
+        errdefer test_alloc.free(log_path);
+        const child = try std.process.spawn(tio, .{
             .argv = argv.items,
             .stdout = .ignore,
-            .stderr = .ignore,
+            .stderr = .{ .file = log_file },
             .stdin = .ignore,
         });
+        // The child holds its own copy of the fd; the parent's handle is
+        // only needed until the spawn returns.
+        log_file.close(tio);
+        try self.serve_logs.append(test_alloc, log_path);
+        return child;
     }
 };
 
@@ -1139,7 +1167,26 @@ fn waitStatus(bt: *BinTest, needle: []const u8) !void {
         test_alloc.free(res.out);
         std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(150), .awake) catch {};
     }
+    // A serve crash would have been invisible (its stderr went to /dev/null
+    // before the sweep 2026-08-29 flagged the flake); dump the serve logs so
+    // the timeout is diagnosable.
+    dumpServeLogs(bt);
     return error.Timeout;
+}
+
+/// Prints every spawned serve's stderr log (empty logs print nothing).
+fn dumpServeLogs(bt: *BinTest) void {
+    for (bt.serve_logs.items) |path| {
+        const f = std.Io.Dir.cwd().openFile(tio, path, .{}) catch continue;
+        defer f.close(tio);
+        const len = f.length(tio) catch continue;
+        if (len == 0 or len > 4096) continue;
+        var buf: [4096]u8 = undefined;
+        const n = f.readPositionalAll(tio, buf[0..@intCast(len)], 0) catch continue;
+        if (n > 0) {
+            std.debug.print("serve log {s}:\n{s}\n", .{ path, buf[0..n] });
+        }
+    }
 }
 
 /// The founder's member id, from its own status line before anyone joins.

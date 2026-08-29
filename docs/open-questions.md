@@ -352,13 +352,13 @@ Ordering inside each section is by what blocks implementation first.
 
     *Trigger:* the investigation 2026-08-28 (test-build speedup) - see its
     resolution.
-    *Status:* still open. Two gdb-launched repro attempts (gdb as the
-    parent, which can ptrace its child where attaching is blocked) ran the
-    direct binary to completion without the spin; it has not reproduced in
-    ~20 consecutive direct runs since the pass-2 busy-spin removal (the
-    original 3/3 was observed with the busy-spins still in). The correlation
-    is consistent with the spin→sleep change having removed the trigger,
-    but no root cause is established.
+    *Status:* still open. Two gdb-launched repro attempts ran the direct
+    binary to completion without the spin; no reproduction in ~20 direct
+    runs since the pass-2 busy-spin removal (the 3/3 original was observed
+    with the busy-spins still in) - consistent with that change having
+    removed the trigger, but no root cause established.
+    The 2026-08-29 sweep reproduced it once inside a gate run (112% CPU,
+    9+ minutes; no stack) - the only gate-run reproduction to date.
 
     *2026-08-29 - first stack captured.* Reproduced twice in the same day
     under `zig build test` on a machine running the suite twice concurrently
