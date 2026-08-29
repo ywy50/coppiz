@@ -1898,7 +1898,16 @@ pub const ClusterNode = struct {
         const jid = en.journal;
         // Sync pages carry everything; broadcasts are dropped while
         // backfilling or merging (the loser is still slotting its branch).
-        if (self.syncing or self.merging_from != null) return;
+        // A drop while backfilling is not free, though: the backfill can
+        // already have passed this journal's end, and nothing re-requests a
+        // record no later record chains onto. Leave a cursor behind so the
+        // very next `driveBackfill` fetches it (bug
+        // 2026-08-29-syncing-drops-the-newest-broadcast).
+        if (self.syncing) {
+            try self.noteBackfillGap(jid);
+            return;
+        }
+        if (self.merging_from != null) return;
 
         // The epoch's liveness half: a member that disagrees keeps its
         // previous view — a partition, resolved by the merge.
@@ -1999,6 +2008,37 @@ pub const ClusterNode = struct {
     }
 
     // -- sync ----------------------------------------------------------------
+
+    /// Records that a broadcast for `journal_id` was dropped while this
+    /// member was backfilling, by making sure the journal has a sync cursor
+    /// the backfill will drain.
+    ///
+    /// Without it a member can lose a record permanently. The backfill asks
+    /// for a journal from its head, is served an empty page, and drops that
+    /// journal's cursor; the leader then slots a new record and broadcasts
+    /// it; `onSlot` drops the broadcast because `syncing` is still set (it
+    /// is cleared by the next tick's `driveBackfill`, not by the empty
+    /// page). No later record on that journal ever arrives, so the
+    /// `BadPrevHash` re-sync in `onSlot` never fires and `onHeartbeat`'s gap
+    /// catch-up only compares the control head. The member stays one record
+    /// behind for good, serving silently stale reads (bug
+    /// 2026-08-29-syncing-drops-the-newest-broadcast, and the same shape as
+    /// bug 2026-08-28-follower-data-gap-stale).
+    ///
+    /// An existing cursor is never moved: it is at or behind this point
+    /// already, and rewinding it would re-fetch what is folded. A journal
+    /// the fold does not know is skipped - `driveBackfill` only walks the
+    /// journals the fold lists, so a cursor for any other would never be
+    /// drained, and the control chain's own completion seeds it anyway.
+    fn noteBackfillGap(self: *ClusterNode, journal_id: [16]u8) !void {
+        if (self.sync_cursors.contains(journal_id)) return;
+        if (self.foldFor(journal_id) == null) return;
+        try self.sync_cursors.put(
+            self.allocator,
+            journal_id,
+            self.headFor(journal_id).next(),
+        );
+    }
 
     /// Requests one page of `journal_id` from `from` on the peer's conn.
     /// Returns whether the request actually went out: only one sync is in
@@ -4752,4 +4792,73 @@ test "beginMerge commits nothing when the branch request never goes out" {
     try cn.beginMerge(9, 2);
     try std.testing.expectEqual(@as(?u64, 9), cn.merging_from);
     try std.testing.expect(cn.sync_in_flight);
+}
+
+test "a broadcast dropped while backfilling leaves a cursor behind" {
+    // `onSlot` drops every broadcast while `syncing` is set. Nothing used
+    // to be recorded, so a record the backfill had already passed was lost
+    // for good: no later record on that journal ever arrives to trip the
+    // `BadPrevHash` re-sync, and `onHeartbeat`'s gap catch-up only compares
+    // the control head.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    var jit = node.control.journals.keyIterator();
+    const data_id = (jit.next() orelse return error.NoDataJournal).*;
+
+    // One record on the data journal, so the head is real.
+    {
+        const en = try cn.signedEntry(.data, data_id, "one", 0);
+        try cn.noteBuilt(data_id, en.author_seq);
+        _ = try cn.slotAndBroadcast(&en, false);
+    }
+    const head = cn.headFor(data_id);
+
+    // The backfill has already drained every cursor but `syncing` is still
+    // set - the window between the empty sync page and the next tick's
+    // `driveBackfill`. A broadcast landing here is dropped.
+    cn.syncing = true;
+    cn.sync_cursors.clearRetainingCapacity();
+    const en2 = try cn.signedEntry(.data, data_id, "two", 0);
+    const sl2 = slot.Slot{
+        .epoch = head.epoch,
+        .seq = head.seq + 1,
+        .slot_ts_ms = cn.nowMs(),
+        .entry_hash = entry.entryHash(&en2),
+        .prev_slot_hash = cn.headHashFor(data_id),
+        .leader = node.member_id,
+        .signature = undefined,
+    };
+    try cn.onSlot(3, .{ .reslotted = false, .record = &.{}, .sl = sl2, .en = en2 });
+
+    // The record was not folded - that part is unchanged - but the journal
+    // now has a cursor at the missing position, so the next `driveBackfill`
+    // fetches it instead of leaving the member silently one record behind.
+    try std.testing.expectEqual(head, cn.headFor(data_id));
+    const cursor = cn.sync_cursors.get(data_id) orelse return error.NoCursor;
+    try std.testing.expectEqual(head.next(), cursor);
 }

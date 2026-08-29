@@ -4,14 +4,16 @@
 
 - **What failed:** `main.test.process-level: a live cluster grows 1 → 2 → 3 members over TCP` intermittently fails at `pollRead(&c, "m2")` with `error.Timeout` after its 20 s deadline. Every other test in the run passes.
 - **Impact:** `zig build test` is intermittently red. Observed three times in roughly a dozen local runs.
-- **Resolution:** Open. A candidate mechanism is identified statically and is *not* confirmed to be what fires.
+- **Resolution:** Fixed. The candidate mechanism was the mechanism: a broadcast dropped while the receiver is still `syncing`, with nothing that re-requests it. See [2026-08-29-syncing-drops-the-newest-broadcast](2026-08-29-syncing-drops-the-newest-broadcast.md).
 
 ## Status
 
-Open. Filed by the session working `src/journal/`, `src/settings/`,
-`src/config/` and `src/main.zig`. The test lives in `src/main.zig`, but the
-candidate mechanism is in `src/cluster/node.zig`, so no fix is attempted
-here.
+Resolved. Filed by the session working `src/journal/`, `src/settings/`,
+`src/config/` and `src/main.zig`; root-caused and fixed by the
+`src/cluster/` session on 2026-08-29. The defect record is
+[2026-08-29-syncing-drops-the-newest-broadcast](2026-08-29-syncing-drops-the-newest-broadcast.md);
+this record keeps the symptom, its history, and the hypotheses that were
+ruled out.
 
 ## Symptom and impact
 
@@ -141,28 +143,69 @@ sequencing there and a product defect in the missing recovery - the same
 missing recovery the report already names. It says nothing about the `m2`
 step, where C's backfill is proven complete before the append.
 
+## What the capture showed (2026-08-29, `src/cluster/` session)
+
+The recorded next step was run. Two things came out of it, one of them a
+correction to the step itself.
+
+**The serve logs cannot answer the question, and never could.** `serve`
+writes nothing to stderr in normal operation: the only writes in `cmdServe`
+are a startup config error, and a panic. All three logs were empty in every
+failing run. So the capture separates "a serve died" from "everything else"
+and nothing finer. Do not spend another session on it.
+
+**What did separate the hypotheses was polling past the deadline.** With the
+test's own poll extended by 120 s and every node's `read` and `status`
+dumped at the moment of timeout, three failing runs were identical:
+
+```
+[A(leader)] read: 1:1 ... data m1 / 1:2 ... data m2
+[B(appender)] read: 1:1 ... data m1 / 1:2 ... data m2
+[C(target)] read: 1:1 ... data m1
+[C(target)] status: epoch 1, leader <a>
+[A] serve stderr: EMPTY   [B] EMPTY   [C] EMPTY
+NEVER ARRIVED: m2 absent 120 s past the deadline
+```
+
+C is alive, agrees on the epoch and the leader, and is permanently one
+record short. **"Too slow" is dead.** It is a lost record with no recovery,
+which is the shape this report already named as a candidate.
+
+The mechanism is `onSlot` dropping the broadcast while `syncing` is still
+set - `syncing` is cleared by the next tick, not by the empty sync page that
+drained the last cursor - and it is written up as its own defect in
+[2026-08-29-syncing-drops-the-newest-broadcast](2026-08-29-syncing-drops-the-newest-broadcast.md).
+That also explains the `m1` variant recorded above: B has no guard against
+the same window, which is why it is in fact the *more* common of the two.
+
 ## Resolution
 
-Not fixed. The next step is to capture the failing run's three serve
-stderr logs (`BinTest.serve_logs` already collects the paths) and read
-whether A broadcast the slot and whether C's conn to A was live at that
-moment. That separates "lost frame with no recovery trigger" from
-"too slow", and only the first is a product defect.
+Fixed by
+[2026-08-29-syncing-drops-the-newest-broadcast](2026-08-29-syncing-drops-the-newest-broadcast.md):
+a broadcast dropped while backfilling now leaves a sync cursor at the missing
+position, so the next `driveBackfill` fetches it.
 
 ## Verification
 
-None - the defect is open.
+The growth e2e built alone and run in a loop, one run at a time, nothing else
+on the machine:
+
+| tree | runs | failures |
+|---|---|---|
+| `origin/main` at 70c77ee | 20 | 16 (14 at `m1`, 2 at `m2`) |
+| the same tree with the fix | 20 | 0 |
 
 ## Follow-up
 
-While it is open, a lone `pollRead ... error.Timeout` in this test with
-every other test passing is this bug rather than the change under test.
-Re-run and gate an untouched base before investigating a diff.
+None. The reproduction recipe (build the test alone with `--test-filter` and
+loop it) is in the defect record, and it is far faster than looping
+`zig build test`.
 
 ## References
 
 - Investigation: none
 - Code: `src/main.zig` (the growth e2e, `pollRead`),
   `src/cluster/node.zig` (`onHeartbeat`, `onSlot`, `requestSync`)
+- Fix: [2026-08-29 - a backfilling member drops the newest broadcast and never asks for it again](2026-08-29-syncing-drops-the-newest-broadcast.md)
 - Related: [2026-08-28 - a follower that misses one data-journal broadcast is permanently behind](2026-08-28-follower-data-gap-stale.md),
   [2026-08-29 - the in-memory hub's `pipes` list is appended without a lock](2026-08-29-hub-pipes-append-unsynchronised.md)

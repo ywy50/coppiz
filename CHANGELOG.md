@@ -7,6 +7,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A member catching up no longer loses the newest record on a journal. A
+  broadcast arriving while it was still backfilling was dropped, and once the
+  backfill had passed that journal nothing ever asked for the record again,
+  so the member served silently stale reads for good. A dropped broadcast now
+  leaves a sync cursor at the missing position. This is the cause of the
+  intermittent growth e2e timeout: the test failed 16 times in 20 runs before
+  the fix and 0 times in 20 after.
+
 - The survivor of a healed partition no longer records a merge whose request
   for the loser's branch was never sent. `requestSync` sends nothing while
   another sync is in flight, and the merge was committed regardless, which
