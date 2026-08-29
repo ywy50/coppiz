@@ -4,11 +4,20 @@
 
 - **What failed:** `compact` writes the new segment files while the old ones still exist, then closes and deletes the old ones. A crash (or an I/O error in the delete/rebuild walk) between those phases leaves both copies on disk; `loadJournal` scans both, folds the same slots twice, and the node refuses to open. The error path also leaves `jd.segments` empty, so the next append panics.
 - **Impact:** A checkpoint-triggered compaction interrupted mid-way bricks the journal directory (no recovery path - a later compact cannot run because the store won't open).
-- **Resolution:** Still open. Statically validated.
+- **Resolution:** Resolved - `compact`/`truncate` now swap the in-memory segments before deleting the old files (no failure points in the swap, so the empty-`jd.segments` append panic is gone), and `loadJournal` recovers the crashed-compaction on-disk state: a later file whose first record starts the chain marks the newer generation, which wins; the stale generation is deleted at open.
 
 ## Status
 
-Open.
+Resolved - `compact` (store.zig) writes and fsyncs the new generation,
+adopts it in memory (the swap has no failure points, closing the
+empty-`jd.segments` append panic), then deletes the stale old files;
+`truncate` follows the same order with a fresh file at the next monotone
+ordinal. `loadJournal` detects the both-generations crash state: every
+generation's first file opens with the chain start (`prev = genesis_prev`),
+so the last file whose first record starts the chain names the newest
+generation — it is kept and the stale files before it are deleted at open.
+A crash in any compaction/truncate window leaves either the old or the new
+state, never an unfoldable mix.
 
 ## Symptom and impact
 
@@ -31,7 +40,34 @@ The swap is not atomic: the files that make the new state are visible on disk be
 
 ## Resolution
 
-Not yet fixed. Suggested direction: write the new segments under temporary names and atomically rename them over the old ones (or write-then-delete with the in-memory swap held until every filesystem step succeeded, with an errdefer that restores a coherent state). A crash-injection test should kill the process mid-compact and assert the journal still opens (old or new state, never both).
+Fixed in store.zig. The suggested "temporary names + rename" direction
+cannot be atomic across N files (renaming the new generation into place
+while the old one still exists reproduces the both-generations window, and
+deleting first opens a neither-state), so the fix takes the other half of
+the suggestion plus an open-time recovery:
+
+- `compact` reorders to write + fsync the new generation, swap it in memory
+  (the swap has no failure points — `jd.segments` can never be left empty,
+  closing the append panic), then delete the stale files.
+- `truncate` reorders the same way, writing the fresh head at the next
+  monotone ordinal (no more ordinal reset to 2).
+- `loadJournal` recovers the crashed state: compact writes the new
+  generation at ordinals contiguous with the old (monotone `next_ordinal`),
+  so the two generations are indistinguishable by name — but every
+  generation's first file opens with the chain start (`prev = genesis_prev`),
+  which a single generation never repeats mid-chain. The last such file is
+  the newer generation; it is kept and the stale files before it are
+  deleted at open. A crash mid-write of the new generation leaves it a
+  chain prefix that still folds (or, if its first record is torn, the old
+  generation folds); the node re-syncs the tail from the leader.
+
+Regression tests: "open recovers a crashed compaction: the newer generation
+wins, stale files are deleted" (writes the old generation back below a
+compacted one and asserts a single fold plus the stale files gone) and
+"open keeps the older generation when the newer one is still being
+written" (an empty new head folds as an empty segment). The store test
+fixture `testSlot` now chains its prev hashes so the recovery signal is
+exercised realistically.
 
 ## Verification
 

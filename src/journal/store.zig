@@ -552,14 +552,22 @@ pub const Store = struct {
             new_segments.items[new_segments.items.len - 1].records_len = records_len;
         }
 
-        // Swap: close and delete the old files, adopt the new segments. The
-        // closed handles are no longer owned — an error later in this call
-        // (the delete walk, the index rebuild) must not leave them for
-        // deinit to close again; truncate follows the same rule.
+        // Swap: adopt the new segments in memory first — the swap has no
+        // failure points, so `jd.segments` can never be left empty (the
+        // append panic, bug 2026-08-29-compact-not-crash-atomic) — then
+        // delete the stale old files. A delete failure leaves the store in
+        // the new state with stale files on disk; a crash in any window
+        // leaves both generations, which the open-time run recovery resolves
+        // (the new one has the higher ordinals). The closed old handles are
+        // no longer owned — an error later in this call (the delete walk,
+        // the index rebuild) must not leave them for deinit to close again;
+        // truncate follows the same rule.
         for (jd.segments.items) |old| old.file.close(self.io);
-        jd.segments.clearRetainingCapacity();
-        jd.head_records_len = 0;
+        jd.segments.deinit(self.allocator);
+        jd.segments = new_segments;
+        jd.head_records_len = jd.segments.items[jd.segments.items.len - 1].records_len;
         jd.next_ordinal = first_new + old_count;
+        adopted = true;
         var it = jd.dir.iterate();
         while (try it.next(self.io)) |dirent| {
             if (dirent.kind != .file) continue;
@@ -576,10 +584,6 @@ pub const Store = struct {
                 }
             }
         }
-        jd.segments.deinit(self.allocator);
-        jd.segments = new_segments;
-        jd.head_records_len = jd.segments.items[jd.segments.items.len - 1].records_len;
-        adopted = true;
         try self.rebuildIndex(jd);
     }
 
@@ -618,24 +622,16 @@ pub const Store = struct {
             }
         }
 
-        // Rebuild: close and delete the old segment files, then write one
-        // fresh head segment carrying the kept records (the kept bytes were
-        // already read; no old handle is needed after this).
+        // Rebuild: write the fresh head segment before touching anything, so
+        // an error or a crash leaves either the old state or the new one —
+        // never a half-deleted directory (bug
+        // 2026-08-29-compact-not-crash-atomic). The fresh name is the next
+        // monotone ordinal, which no existing file uses at runtime.
         const header = try self.readSegmentHeader(&jd.segments.items[0]);
-        for (jd.segments.items) |old| old.file.close(self.io);
-        // The closed handles are no longer owned; a rebuild error must not
-        // leave them for deinit to close again.
-        jd.segments.clearRetainingCapacity();
-        jd.head_records_len = 0;
-        jd.next_ordinal = 2;
-        var it = jd.dir.iterate();
-        while (try it.next(self.io)) |dirent| {
-            if (dirent.kind != .file) continue;
-            if (std.mem.startsWith(u8, dirent.name, "seg-")) {
-                try jd.dir.deleteFile(self.io, dirent.name);
-            }
-        }
-        const file = try jd.dir.createFile(self.io, "seg-00000001", .{
+        const fresh_ordinal = jd.next_ordinal;
+        const fresh_name = try std.fmt.allocPrint(self.allocator, "seg-{d:0>8}", .{fresh_ordinal});
+        defer self.allocator.free(fresh_name);
+        const file = try jd.dir.createFile(self.io, fresh_name, .{
             .read = true,
             .permissions = data_file_perm,
         });
@@ -652,6 +648,9 @@ pub const Store = struct {
         }
         if (self.fsync != .never) try file.sync(self.io);
 
+        // The in-memory swap has no failure points (bug
+        // 2026-08-29-compact-not-crash-atomic).
+        for (jd.segments.items) |old| old.file.close(self.io);
         var segments = std.ArrayListUnmanaged(Segment).empty;
         try segments.append(self.allocator, .{
             .file = file,
@@ -661,7 +660,21 @@ pub const Store = struct {
         jd.segments.deinit(self.allocator);
         jd.segments = segments;
         jd.head_records_len = @intCast(kept.items.len);
+        jd.next_ordinal = fresh_ordinal + 1;
         adopted = true;
+
+        // Delete the stale files — everything but the fresh one. A failure
+        // here leaves stale files on disk; the open-time run recovery folds
+        // the surviving generation after a crash in any window.
+        var it = jd.dir.iterate();
+        while (try it.next(self.io)) |dirent| {
+            if (dirent.kind != .file) continue;
+            if (std.mem.startsWith(u8, dirent.name, "seg-") and
+                !std.mem.eql(u8, dirent.name, fresh_name))
+            {
+                try jd.dir.deleteFile(self.io, dirent.name);
+            }
+        }
         try self.rebuildIndex(jd);
     }
 
@@ -770,6 +783,26 @@ pub const Store = struct {
         }.lt);
         if (names.items.len == 0) return error.EmptyJournal;
 
+        // A generation's first file always opens with the chain start (prev
+        // = genesis_prev), so a later file whose first record starts the
+        // chain means a crashed compaction left an older generation on disk
+        // ahead of the newer one — compact writes the new generation at the
+        // next monotone ordinals, contiguous with the old, so the two are
+        // indistinguishable by name alone (bug
+        // 2026-08-29-compact-not-crash-atomic). Keep the last such file
+        // onward and delete the stale files before it. The common
+        // single-generation case never pays for the recovery.
+        var gen_start: usize = 0;
+        for (names.items, 0..) |n, i| {
+            if (i == 0) continue;
+            if (try self.fileStartsChain(sub, n)) gen_start = i;
+        }
+        if (gen_start > 0) {
+            for (names.items[0..gen_start]) |n| sub.deleteFile(self.io, n) catch {};
+            for (names.items[0..gen_start]) |n| self.allocator.free(n);
+            names.items = names.items[gen_start..];
+        }
+
         for (names.items, 0..) |seg_name, i| {
             // Read-write: the open scan may need to truncate a torn tail.
             const file = try sub.openFile(self.io, seg_name, .{ .mode = .read_write });
@@ -860,6 +893,31 @@ pub const Store = struct {
         if (!std.mem.eql(u8, &hash, &segment.recordsHash(records))) return .corrupt;
         return .valid;
     }
+
+    /// Whether the file's first record starts the chain (its prev hash is
+    /// the genesis prev) — the signal the open-time generation recovery uses
+    /// (see loadJournal). A torn or empty file is not a generation start.
+    fn fileStartsChain(
+        self: *Store,
+        sub: std.Io.Dir,
+        seg_name: []const u8,
+    ) !bool {
+        const file = try sub.openFile(self.io, seg_name, .{ .mode = .read_write });
+        defer file.close(self.io);
+        const len = try file.length(self.io);
+        const seal = try self.sealStatus(file, len);
+        if (seal == .corrupt) return false;
+        const sealed = seal == .valid;
+        const records_len = len - segment.header_len -
+            if (sealed) @as(u64, segment.seal_len) else 0;
+        if (records_len == 0) return false;
+        const records = try self.allocator.alloc(u8, @intCast(records_len));
+        defer self.allocator.free(records);
+        const n = try file.readPositionalAll(self.io, records, segment.header_len);
+        if (n != records.len) return false;
+        const rec = segment.decodeRecord(records) catch return false;
+        return std.mem.eql(u8, &rec.slot.prev_slot_hash, &slot.genesis_prev);
+    }
 };
 
 /// Whether any valid record begins at or after `from` — the test that tells
@@ -933,13 +991,20 @@ const TestEnv = struct {
     }
 };
 
+/// A synthetic slot chained from the previous one (only seq 1 starts the
+/// chain), so the fixtures model a real journal — the open-time generation
+/// recovery reads the first record's prev hash, and an all-zeros prev on
+/// every slot would make every file look like a generation start.
 fn testSlot(seq: u64) slot.Slot {
     return .{
         .epoch = 1,
         .seq = seq,
         .slot_ts_ms = 1000,
         .entry_hash = [_]u8{0xAB} ** 32,
-        .prev_slot_hash = [_]u8{0} ** 32,
+        .prev_slot_hash = if (seq > 1) blk: {
+            const prev = testSlot(seq - 1);
+            break :blk slot.slotHash(&prev);
+        } else slot.genesis_prev,
         .leader = "fedcba9876543210".*,
         .signature = [_]u8{0} ** 64,
     };
@@ -1244,6 +1309,135 @@ test "compact then seal and a second compact never collide with segment names" {
         }
     }.cb);
     try std.testing.expectEqualSlices(u64, &.{ 1, 2, 4, 6, 7 }, seen.items);
+}
+
+test "open recovers a crashed compaction: the newer generation wins, stale files are deleted" {
+    // Bug 2026-08-29-compact-not-crash-atomic: a crash between writing the
+    // compacted generation and deleting the old one leaves both on disk,
+    // and loadJournal used to fold both copies of the same slots (refusing
+    // the open). The generation recovery keeps the newer generation — the
+    // later file whose first record starts the chain — and deletes the
+    // stale files before it.
+    var env = TestEnv.init();
+    defer env.deinit();
+    const journal_id = "0123456789abcdef".*;
+
+    var snap_names: [8][64]u8 = undefined;
+    var snap_bytes: [8][]u8 = undefined;
+    var snap_count: usize = 0;
+    defer for (snap_bytes[0..snap_count]) |b| test_alloc.free(b);
+    {
+        const data_dir = try env.dataDir();
+        const store = try Store.open(test_alloc, tio, data_dir, .{ .seal_threshold = 200 });
+        defer store.deinit();
+        try store.createJournal(journal_id, [_]u8{0} ** 32);
+        try appendN(store, journal_id, 5);
+        // Snapshot the pre-compaction generation (ordinals 1..k).
+        const jd = store.journals.get(journal_id).?;
+        for (jd.segments.items, 0..) |seg, i| {
+            const len = try seg.file.length(tio);
+            const buf = try test_alloc.alloc(u8, @intCast(len));
+            const n = try seg.file.readPositionalAll(tio, buf, 0);
+            try std.testing.expectEqual(@as(usize, @intCast(len)), n);
+            snap_bytes[i] = buf;
+            snap_names[i] = undefined;
+            _ = try std.fmt.bufPrint(
+                &snap_names[i],
+                "data/{x}/seg-{d:0>8}",
+                .{ journal_id, i + 1 },
+            );
+            snap_count = i + 1;
+        }
+        // A live compaction rewrites the generation to the next monotone
+        // ordinals and deletes the originals. The crash we simulate is the
+        // moment between those two steps, so the old generation is written
+        // back below.
+        try store.compact(journal_id, &.{}, .none);
+    }
+
+    for (snap_bytes[0..snap_count], 0..) |bytes, i| {
+        const file = try env.tmp.dir.createFile(tio, &snap_names[i], .{
+            .read = true,
+            .truncate = true,
+            .permissions = data_file_perm,
+        });
+        defer file.close(tio);
+        try file.writePositionalAll(tio, bytes, 0);
+    }
+
+    const store = try env.openStore();
+    defer store.deinit();
+    var seen = std.ArrayListUnmanaged(u64).empty;
+    defer seen.deinit(test_alloc);
+    try store.scan(journal_id, &seen, struct {
+        fn cb(
+            list: *std.ArrayListUnmanaged(u64),
+            sl: *const slot.Slot,
+            en: ?*const entry.Entry,
+        ) anyerror!void {
+            if (en != null) try list.append(test_alloc, sl.seq);
+        }
+    }.cb);
+    // Each record folded exactly once — not the double-fold that refused
+    // the open before the recovery.
+    try std.testing.expectEqualSlices(u64, &.{ 1, 2, 3, 4, 5 }, seen.items);
+    // The stale old generation was deleted: the on-disk file count equals
+    // the surviving generation's segment count.
+    const jd = store.journals.get(journal_id).?;
+    var file_count: usize = 0;
+    var it = jd.dir.iterate();
+    while (try it.next(tio)) |f| {
+        if (f.kind != .file) continue;
+        if (std.mem.startsWith(u8, f.name, "seg-")) file_count += 1;
+    }
+    try std.testing.expectEqual(jd.segments.items.len, file_count);
+}
+
+test "open keeps the older generation when the newer one is still being written" {
+    // Bug 2026-08-29-compact-not-crash-atomic: a crash right after the new
+    // generation's first file is created leaves an empty segment ahead of
+    // the complete old one. It does not start the chain, so the recovery
+    // keeps the old generation and the empty file folds as an empty head.
+    var env = TestEnv.init();
+    defer env.deinit();
+    const journal_id = "0123456789abcdef".*;
+
+    var next_ordinal: u64 = undefined;
+    const group_id = [_]u8{0} ** 32;
+    {
+        const data_dir = try env.dataDir();
+        const store = try Store.open(test_alloc, tio, data_dir, .{ .seal_threshold = 200 });
+        defer store.deinit();
+        try store.createJournal(journal_id, [_]u8{0} ** 32);
+        try appendN(store, journal_id, 5);
+        next_ordinal = store.journals.get(journal_id).?.next_ordinal;
+    }
+
+    const path = try std.fmt.allocPrint(
+        test_alloc,
+        "data/{x}/seg-{d:0>8}",
+        .{ journal_id, next_ordinal },
+    );
+    defer test_alloc.free(path);
+    const file = try env.tmp.dir.createFile(tio, path, .{
+        .read = true,
+        .truncate = true,
+        .permissions = data_file_perm,
+    });
+    defer file.close(tio);
+    var header_buf: [segment.header_len]u8 = undefined;
+    segment.encodeHeader(.{ .journal_id = journal_id, .group_id = group_id }, &header_buf);
+    try file.writePositionalAll(tio, &header_buf, 0);
+
+    const store = try env.openStore();
+    defer store.deinit();
+    var count: usize = 0;
+    try store.scan(journal_id, &count, struct {
+        fn cb(c: *usize, _: *const slot.Slot, _: ?*const entry.Entry) anyerror!void {
+            c.* += 1;
+        }
+    }.cb);
+    try std.testing.expectEqual(@as(usize, 5), count);
 }
 
 test "journal dir names are lowercase hex and round-trip" {
