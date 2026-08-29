@@ -73,6 +73,31 @@ pub fn renderTable(writer: anytype) !void {
     }
 }
 
+/// One live value, written the way an operator typed it into `coppiz.toml`
+/// or `coppiz settings set`: enum indices resolved to their names, lists as
+/// a comma-separated bracket. `coppiz doctor` uses this to show both sides
+/// of a `[genesis]` drift (PRD 0004 *Bootstrap*), so the two halves of a
+/// mismatch are directly comparable with what the operator would write.
+pub fn writeValue(writer: *std.Io.Writer, key_index: u16, value: schema.Value) !void {
+    switch (value) {
+        .boolean => |v| try writer.writeAll(if (v) "true" else "false"),
+        .u64 => |v| try writer.print("{d}", .{v}),
+        .u32 => |v| try writer.print("{d}", .{v}),
+        .u16 => |v| try writer.print("{d}", .{v}),
+        // The index is in range by construction (decode and the defaults
+        // both guarantee it), and `enumName` is the schema's own resolver.
+        .enum_value => |v| try writer.writeAll(schema.enumName(key_index, v) orelse "?"),
+        .string_list => |items| {
+            try writer.writeAll("[");
+            for (items, 0..) |item, i| {
+                if (i != 0) try writer.writeAll(", ");
+                try writer.writeAll(item);
+            }
+            try writer.writeAll("]");
+        },
+    }
+}
+
 fn scopeName(scope: schema.Scope) []const u8 {
     return switch (scope) {
         .cluster => "cluster",

@@ -26,6 +26,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   under 700 characters (split at sentence and thought boundaries; long
   roadmap bullets became sub-bullets). `docs-check` passes with zero
   failures.
+- `coppiz doctor` reports whether the local `[genesis]` table still
+  matches the chain (PRD 0004 *Bootstrap*). `coppiz init` reads `[genesis]`
+  once and the chain is authoritative from then on, so an operator editing
+  the file afterwards previously got no error and no effect. Doctor now
+  warns per drifted key, naming the local value and the folded one, and
+  stays an `ok` line when they agree. A drift is a warning, not a failure.
 
 ### Fixed
 

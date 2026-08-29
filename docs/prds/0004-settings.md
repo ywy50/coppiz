@@ -11,6 +11,13 @@ application), `render.zig` (the operator reference), `src/config/local.zig`
 (`coppiz.toml` parsing with a closed key set), and `docs/configuration.md`
 (the generated reference, pinned by a test so it cannot drift).
 
+The *Bootstrap* design's drift check followed on 2026-08-29: `coppiz doctor`
+compares every key the local `[genesis]` table names against the folded
+chain and warns per drifted key, naming both values
+(`src/main.zig` `checkGenesisDrift`, `src/settings/render.zig` `writeValue`).
+It is a warning, not a failure - the chain is authoritative, the file is
+merely stale.
+
 Acceptance criteria: **G3** (a `settings` entry touching `leadership.mode`
 is refused on every member while `reconfigurable = false`, accepted while
 true), **G4** (every cross-key rule has refusing and accepting tests; a
