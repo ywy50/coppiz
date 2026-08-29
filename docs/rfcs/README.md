@@ -30,3 +30,4 @@ reference for what one would do ([OQ 41](../open-questions.md)).
 | [0002](0002-how-join-order-is-made-unspoofable.md) | Decided | How join order is made unspoofable |
 | [0003](0003-append-durability-fsync-policy.md) | Decided | What does `storage.fsync` govern? (ADR 0008) |
 | [0004](0004-queue-drain-shape.md) | Discussion | What shape should the queue drain take? (tombstone / watermark / batched) |
+| [0005](0005-decode-ownership.md) | Discussion | Should a decoded message own its parts, or borrow from the frame? |

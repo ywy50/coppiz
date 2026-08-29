@@ -386,6 +386,18 @@ Ordering inside each section is by what blocks implementation first.
     store index to `ensureTotalCapacity`-pre-sized rebuilds with an
     explicit assertion that `available` is never exhausted mid-rebuild.
 
+    *2026-08-29 (follow-up) - the state-carrying path removed defensively.*
+    `Store.rebuildIndex` now deinitializes and re-initializes the position
+    map instead of `clearRetainingCapacity`-and-refill, eliminating the
+    cross-rebuild state-carrying path the captured stack implicated
+    ([investigation](2026-08-29-oq62-index-rebuild-hardening.md) - linked
+    from the sweep findings). This is hardening, not a claimed fix: the
+    root cause is still unconfirmed, and the second captured stack (an io
+    worker in `checkpointForBroadcast` → `Store.append` → `fsync`) was
+    checked and reads as the G4 leader's normal checkpoint cadence under
+    load, not a second spin mechanism. The repro + bisect above still
+    stands as the way to close the question.
+
 ## F. Transport and wire
 
 19. **Replication wire: own binary framing or HTTP?** clanker's spike used
