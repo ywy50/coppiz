@@ -1,14 +1,14 @@
-# Bug — The checkpoint merge-settle rule reads the data fold's `last_merge`, which is never set: `MergeSettling` can never fire
+# Bug - The checkpoint merge-settle rule reads the data fold's `last_merge`, which is never set: `MergeSettling` can never fire
 
 ## TL;DR
 
 - **What failed:** `applyCheckpoint` gates checkpoints on `self.last_merge`, but `last_merge` is only ever set on the *control* fold (by `applyMerge`). Data folds never see a merge entry, so their `last_merge` is always `null` and the settle rule is dead code.
-- **Impact:** The [PRD 0002](../../prds/0002-ttl-and-staleness.md) / [OQ 60](../../open-questions.md) protection — "a checkpoint must not delete the other side's fresh writes on a clock it did not stamp" — never runs: after a healed merge, the survivor can immediately checkpoint and remove the loser's re-slotted, stale-marked entries without the `merge.settle_ms` window.
+- **Impact:** The [PRD 0002](../../prds/0002-ttl-and-staleness.md) / [OQ 60](../../open-questions.md) protection - "a checkpoint must not delete the other side's fresh writes on a clock it did not stamp" - never runs: after a healed merge, the survivor can immediately checkpoint and remove the loser's re-slotted, stale-marked entries without the `merge.settle_ms` window.
 - **Resolution:** Still open. Statically validated (complete setter enumeration).
 
 ## Status
 
-Resolved — `applyCheckpoint` reads `cluster.last_merge` (the control
+Resolved - `applyCheckpoint` reads `cluster.last_merge` (the control
 fold); the epoch test now folds a real merge entry instead of
 hand-assigning the field.
 
@@ -20,11 +20,11 @@ hand-assigning the field.
 
 Not dynamically reproduced (needs a full heal + checkpoint sequence); statically airtight. Trace:
 
-1. `applyMerge` (`epoch.zig:186-195`) is reachable only through `applyControl`'s `.merge` case (`chain.zig:339`) — i.e. only on the **control** fold. It sets `fold.last_merge` on that fold.
-2. `applyCheckpoint` (`chain.zig:642-662`) runs on a **data** journal fold (`applyData`'s `.checkpoint` case, `chain.zig:418`). It reads `self.last_merge` — the data fold's field — which no code ever sets.
+1. `applyMerge` (`epoch.zig:186-195`) is reachable only through `applyControl`'s `.merge` case (`chain.zig:339`) - i.e. only on the **control** fold. It sets `fold.last_merge` on that fold.
+2. `applyCheckpoint` (`chain.zig:642-662`) runs on a **data** journal fold (`applyData`'s `.checkpoint` case, `chain.zig:418`). It reads `self.last_merge` - the data fold's field - which no code ever sets.
 3. `applyData` refuses `.merge` as `WrongJournalType` (`chain.zig:420`), so a data fold can never acquire a `last_merge`.
 
-Grep confirms `last_merge` has exactly one assignment in the tree (`epoch.zig:194`). The rule's own comment says the value should come from the cluster's fold ("`merge.settle_ms` is cluster-scoped, so the value comes from the cluster's fold") — the fold is passed in as `cluster`, which *does* carry `last_merge`; the code just reads the wrong one.
+Grep confirms `last_merge` has exactly one assignment in the tree (`epoch.zig:194`). The rule's own comment says the value should come from the cluster's fold ("`merge.settle_ms` is cluster-scoped, so the value comes from the cluster's fold") - the fold is passed in as `cluster`, which *does* carry `last_merge`; the code just reads the wrong one.
 
 ## Root cause
 
@@ -39,7 +39,7 @@ control fold, which owns the merge facts) instead of `self.last_merge`
 The epoch test at `epoch.zig:628` that hand-assigned the data fold's
 field was rewritten to fold a real `merge` entry on the control chain
 (`applyMerge` sets `cluster.last_merge`), then a data checkpoint within
-`settle_ms` — `error.MergeSettling` fires through the real wiring.
+`settle_ms` - `error.MergeSettling` fires through the real wiring.
 A second, independent regression test lives in `chain.zig` ("a
 checkpoint inside merge.settle_ms of a real merge entry is refused").
 
@@ -50,7 +50,7 @@ checkpoint inside merge.settle_ms of a real merge entry is refused").
 
 ## Follow-up
 
-None — contained fix. Note the same heal path also carries the reslotted `create_journal` refusal (reported separately); both stall or weaken the merge feature.
+None - contained fix. Note the same heal path also carries the reslotted `create_journal` refusal (reported separately); both stall or weaken the merge feature.
 
 ## References
 

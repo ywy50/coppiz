@@ -1,4 +1,4 @@
-# ADR 0006 — The library is Apache-2.0 licensed
+# ADR 0006 - The library is Apache-2.0 licensed
 
 ## Status
 
@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-[Open question 18](../open-questions.md) — no licence chosen — blocks the
+[Open question 18](../open-questions.md) - no licence chosen - blocks the
 first public exposure of the repository. clanker's research tracked the
 licences of every surveyed store (BUSL, CSL, Apache, MIT) as a selection
 criterion, and the brief's comparison set (SQLite, dqlite, rqlite) are
@@ -14,7 +14,7 @@ libraries meant to be embedded and "just used". Three families were
 considered:
 
 - **Copyleft** (GPL, AGPL, LGPL): GPL/AGPL force a host that links the
-  library to license its entire program under the same terms — fatal for
+  library to license its entire program under the same terms - fatal for
   the "embed it in your product" pitch. LGPL allows proprietary hosts but
   only for *dynamic* linking; Zig hosts link statically, which triggers
   LGPL's relinkable-object-file obligation on every adopter.
@@ -29,9 +29,11 @@ considered:
 The library is licensed **Apache-2.0**, shipped as the `LICENSE` file and
 the `license` field in `build.zig.zon` (which also carries `LICENSE` in its
 `.paths`, so a host that fetches coppiz as a dependency receives the
-licence). Apache-2.0 is permissive like MIT, and adds three written-down
+licence).
+
+Apache-2.0 is permissive like MIT, and adds three written-down
 clauses MIT leaves implicit: an explicit patent grant (storage and
-replication are patent-dense; the grant is defensive — it terminates for a
+replication are patent-dense; the grant is defensive - it terminates for a
 licensee that sues over patents), an inbound = outbound contribution term
 (the first external contribution, [OQ 45](../open-questions.md), is
 licensed without a CLA), and trademark protection for the coppiz name and
@@ -52,5 +54,5 @@ project copies, made the same choice.
   patents, contributions and trademarks implicit; the difference matters
   for an embeddable storage library. Reversing this decision later is
   possible only with the consent of every contributor (Section 5 makes
-  inbound licensing non-exclusive), so it is effectively permanent — which
+  inbound licensing non-exclusive), so it is effectively permanent - which
   is the point of choosing before the first public commit.

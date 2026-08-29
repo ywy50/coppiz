@@ -1,8 +1,8 @@
-# Bug — `slotQueuedEntries` propagates a per-entry slot refusal to `fatal()`, stopping the whole node
+# Bug - `slotQueuedEntries` propagates a per-entry slot refusal to `fatal()`, stopping the whole node
 
 ## TL;DR
 
-- **What failed:** `reforwardQueue` handles a per-entry slot failure by acking the refusal and continuing; `slotQueuedEntries` uses a bare `try`, so a refusal on one queued entry propagates to `onTick` → `fatal()` — the whole node stops.
+- **What failed:** `reforwardQueue` handles a per-entry slot failure by acking the refusal and continuing; `slotQueuedEntries` uses a bare `try`, so a refusal on one queued entry propagates to `onTick` → `fatal()` - the whole node stops.
 - **Impact:** A single un-slotable queued entry (e.g. `TooLarge` after `max_entry_bytes` was lowered, or `DuplicateConflict` after a seq was consumed) kills the leader's loop.
 - **Resolution:** Still open. Statically validated.
 
@@ -24,7 +24,7 @@ The two queue-drain paths disagree on error handling: one acks-and-continues, th
 
 ## Resolution
 
-Not yet fixed. Suggested fix: mirror `reforwardQueue` — catch the refusal, ack the client, remove the entry, continue. A regression test should queue an entry that refuses at slot time and assert the node keeps running.
+Not yet fixed. Suggested fix: mirror `reforwardQueue` - catch the refusal, ack the client, remove the entry, continue. A regression test should queue an entry that refuses at slot time and assert the node keeps running.
 
 ## Verification
 

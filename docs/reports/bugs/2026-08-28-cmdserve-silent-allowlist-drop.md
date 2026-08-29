@@ -1,19 +1,19 @@
-# Bug — `cmdServe` silently drops a malformed `[[peers]] public_key` from the allowlist
+# Bug - `cmdServe` silently drops a malformed `[[peers]] public_key` from the allowlist
 
 ## TL;DR
 
-- **What failed:** `cmdServe` builds the join allowlist with `if (hexKeyToBytes(hex)) |key| ...` — a `public_key` that isn't exactly 64 hex chars yields `null` and is silently skipped. The peer is still dialed as a seed, but its join is refused at hello with no diagnostic.
-- **Impact:** A typo'd or truncated key in `coppiz.toml` passes config parsing and produces a refused join with zero feedback — in a security-relevant list, where the config layer is deliberately strict everywhere else.
+- **What failed:** `cmdServe` builds the join allowlist with `if (hexKeyToBytes(hex)) |key| ...` - a `public_key` that isn't exactly 64 hex chars yields `null` and is silently skipped. The peer is still dialed as a seed, but its join is refused at hello with no diagnostic.
+- **Impact:** A typo'd or truncated key in `coppiz.toml` passes config parsing and produces a refused join with zero feedback - in a security-relevant list, where the config layer is deliberately strict everywhere else.
 - **Resolution:** Still open. Statically validated.
 
 ## Status
 
-Resolved — `parsePeerKey` refuses a `public_key` that is not exactly 64
+Resolved - `parsePeerKey` refuses a `public_key` that is not exactly 64
 hex chars at parse time; regression test added.
 
 ## Symptom and impact
 
-The strictness asymmetry: `parsePeerKey` (`config/local.zig:233-237`) accepts any string for `public_key` (its own test uses `public_key = "abcd"` as *valid* config), and config parsing refuses unknown keys by name everywhere else — but the key's *content* is never validated at parse time. `cmdServe` (`main.zig:247-249`) then silently drops an unparseable hex key:
+The strictness asymmetry: `parsePeerKey` (`config/local.zig:233-237`) accepts any string for `public_key` (its own test uses `public_key = "abcd"` as *valid* config), and config parsing refuses unknown keys by name everywhere else - but the key's *content* is never validated at parse time. `cmdServe` (`main.zig:247-249`) then silently drops an unparseable hex key:
 
 ```zig
 if (peer.public_key) |hex| {
@@ -34,12 +34,12 @@ Key content is validated at consumption (silently) instead of at parse time (str
 ## Resolution
 
 Fixed at the strict layer: `parsePeerKey` now validates the key's
-content — exactly 64 hex chars, refused with `InvalidValue` otherwise —
+content - exactly 64 hex chars, refused with `InvalidValue` otherwise -
 so a malformed key cannot reach `cmdServe`'s allowlist at all. The
 `if (hexKeyToBytes(hex)) |key|` in `cmdServe` remains as defense in
 depth. (The existing "minimal config" test's `public_key = "abcd"`
-sample was updated to a valid 64-hex key, since "abcd" is now — and
-always was — an unparseable identity.)
+sample was updated to a valid 64-hex key, since "abcd" is now - and
+always was - an unparseable identity.)
 
 Regression test ("a malformed peer public_key is refused at parse
 time"): a short key, a 65-char key and a 64-char non-hex key are each

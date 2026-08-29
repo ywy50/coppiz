@@ -1,15 +1,15 @@
-# Investigation — simulator leader evaluation and TCP page writes
+# Investigation - simulator leader evaluation and TCP page writes
 
 ## TL;DR
 
 - **Question:** what does the simulator pay per tick that scales superlinearly
   with the node count, and what does a TCP page send pay per byte?
-- **Finding:** the sim's leader evaluation was O(n³) per tick — a linear
+- **Finding:** the sim's leader evaluation was O(n³) per tick - a linear
   `nodeIndex` scan inside a per-member `viewsFor` inside a per-node
-  `maybeOpenEpoch` — plus one heap allocation per `viewsFor`; the TCP
+  `maybeOpenEpoch` - plus one heap allocation per `viewsFor`; the TCP
   `sendFrame` buffered 4 KiB, so sync/read pages spilled into several write
   syscalls each.
-- **Resolution:** implemented — an id→index map makes `nodeIndex` O(1)
+- **Resolution:** implemented - an id→index map makes `nodeIndex` O(1)
   (nodes are never removed, so the map never goes stale), and the TCP send
   buffer grows to 64 KiB, past the common page size.
 
@@ -44,11 +44,11 @@ before implementation.
 
 ## Hypotheses and tests
 
-- **Hypothesis A — an id map replaces the scan.** Nodes never leave
+- **Hypothesis A - an id map replaces the scan.** Nodes never leave
   `nodes.items`, so an `id -> index` map filled at `init`/`addMember` can
-  never go stale. *Result:* supported — `nodeIndex` is now a map lookup;
+  never go stale. *Result:* supported - `nodeIndex` is now a map lookup;
   the linear scan and its per-lookup cost disappear.
-- **Hypothesis B — a page-sized send buffer coalesces page writes.** The
+- **Hypothesis B - a page-sized send buffer coalesces page writes.** The
   buffered writer's flush emits one write when the frame fits the buffer.
   *Result:* supported for frames ≤ 64 KiB (the common page); larger frames
   still spill, but far fewer times.
@@ -74,7 +74,7 @@ sim tests and the loop tests' hub transport).
 
 - Code: `src/sim/sim.zig`, `src/net/transport.zig`
 - The `viewsFor` allocation per call remains (an O(n) alloc per leader
-  evaluation); a scratch-buffer reuse was considered and deferred — the
+  evaluation); a scratch-buffer reuse was considered and deferred - the
   callers consume the views immediately, but a borrow discipline would need
   documenting. Tracked in the sweep findings report.
-- Prior art: [2026-08-28 — making `zig build test` faster without dropping tests](2026-08-28-test-suite-quick-wins.md)
+- Prior art: [2026-08-28 - making `zig build test` faster without dropping tests](2026-08-28-test-suite-quick-wins.md)

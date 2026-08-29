@@ -9,7 +9,7 @@ dated `CHANGELOG.md` section exist for the same commit.
 `build.zig` reads it and hands the raw value to the library, which parses it
 into `coppiz.version` (`src/root.zig`) and fails the build for values that are
 not valid Semantic Versioning; the node binary imports the library
-(`src/main.zig`), so the value is reachable from it — there is no startup
+(`src/main.zig`), so the value is reachable from it - there is no startup
 banner and no `--version` flag yet.
 
 ## Compatibility contract

@@ -1,8 +1,8 @@
-# Research — {{title}}
+# Research - {{title}}
 
 ## Status
 
-{{status}} — searched {{date}}.
+{{status}} - searched {{date}}.
 
 Research is evidence, not a decision: it records what exists, how good it is,
 and how confident the finding is. The decision that follows belongs in an
@@ -21,7 +21,7 @@ wasm32-freestanding guest with no libc" is.
 Three to six bullets, each one a finding with a link. Everything below is the
 evidence for these lines.
 
-- **Finding.** What it means for us — `high` / `medium` / `low` confidence — [source](https://example.invalid)
+- **Finding.** What it means for us - `high` / `medium` / `low` confidence - [source](https://example.invalid)
 
 ## Scope and method
 
@@ -36,12 +36,12 @@ evidence for these lines.
 
 One subsection per candidate. Include what it is before whether it is good.
 
-### <Option> — <one line>
+### <Option> - <one line>
 
 - **What it is:**
 - **Maturity:** stars, last release, commit cadence, maintainer count, licence,
   known production users. Give the numbers and the date they were read.
-- **Fit:** against the constraints in the question — language and toolchain,
+- **Fit:** against the constraints in the question - language and toolchain,
   dependency budget, sandbox and network policy, platform support.
 - **Pros:**
 - **Cons:**
@@ -85,7 +85,7 @@ would settle it.
 
 ## What would change the answer
 
-The conditions under which this research goes stale — a release, a licence
+The conditions under which this research goes stale - a release, a licence
 change, a deprecation, a change in our own constraints.
 
 ## References

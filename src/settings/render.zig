@@ -15,7 +15,7 @@ pub fn render(writer: anytype) !void {
         \\that affects what a member accepts, removes, or elects is stored in
         \\`genesis` and `settings` entries and folded identically on every
         \\member (PRD 0004). This page is generated from the schema table in
-        \\`src/settings/schema.zig` — `zig build docs` regenerates it, and
+        \\`src/settings/schema.zig` - `zig build docs` regenerates it, and
         \\the test suite fails when it is stale.
         \\
         \\Local configuration is limited to bootstrap: paths, identity, peers
@@ -24,11 +24,11 @@ pub fn render(writer: anytype) !void {
         \\
         \\## Scopes
         \\
-        \\- **cluster** — one value for the cluster (leadership, membership,
+        \\- **cluster** - one value for the cluster (leadership, membership,
         \\  admission).
-        \\- **journal** — one value per journal (TTL, staleness, checkpoints,
+        \\- **journal** - one value per journal (TTL, staleness, checkpoints,
         \\  entry size).
-        \\- **federation** — reserved for PRD 0006; no keys yet, so federating
+        \\- **federation** - reserved for PRD 0006; no keys yet, so federating
         \\  later is a new set of keys, not a schema break.
         \\
         \\## Keys

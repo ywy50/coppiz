@@ -1,4 +1,4 @@
-# Bug — `zig build test` is red: the CLI test root uses `std.c.getpid()` without linking libc
+# Bug - `zig build test` is red: the CLI test root uses `std.c.getpid()` without linking libc
 
 ## TL;DR
 
@@ -8,8 +8,8 @@
 
 ## Status
 
-Resolved — implemented in the test-build speedup work (investigation
-[2026-08-28 — making `zig build test` faster without dropping tests](../investigations/2026-08-28-test-suite-quick-wins.md)). The suggested `std.posix.getpid()` does not exist in Zig 0.16 (verified: `std.posix` has `getppid` but no `getpid`; the only non-libc getpid is `std.os.linux.getpid`, which narrows the file to Linux) — the fix below keeps `std.c.getpid()` and links libc into the test binary only.
+Resolved - implemented in the test-build speedup work (investigation
+[2026-08-28 - making `zig build test` faster without dropping tests](../investigations/2026-08-28-test-suite-quick-wins.md)). The suggested `std.posix.getpid()` does not exist in Zig 0.16 (verified: `std.posix` has `getppid` but no `getpid`; the only non-libc getpid is `std.os.linux.getpid`, which narrows the file to Linux) - the fix below keeps `std.c.getpid()` and links libc into the test binary only.
 
 ## Symptom and impact
 
@@ -25,7 +25,7 @@ error: 1 compilation errors
 failed command: /usr/bin/zig test -ODebug --dep coppiz -Mroot=.../src/main.zig ...
 ```
 
-`zig build` (the binaries) and `zig build lint` both pass; only the `test` gate is affected. The three example tests (`embed-single`, `sidecar`, `embed-cluster`) are transitively skipped by the same failure — they pass when their binaries are run directly.
+`zig build` (the binaries) and `zig build lint` both pass; only the `test` gate is affected. The three example tests (`embed-single`, `sidecar`, `embed-cluster`) are transitively skipped by the same failure - they pass when their binaries are run directly.
 
 ## Reproduction
 
@@ -37,20 +37,20 @@ Expected: the gate runs the unit tests and lint gates and exits 0. Actual: compi
 
 ## Root cause
 
-`src/main.zig:1046` — the process-level test helper introduced by `db0024bb`:
+`src/main.zig:1046` - the process-level test helper introduced by `db0024bb`:
 
 ```zig
 const pid: u32 = @intCast(@as(i64, std.c.getpid()));
 ```
 
-`std.c` is the libc namespace; calling it requires the test binary to link libc. The project is standard-library-only ([ADR 0001](../../adrs/0001-zig-0-16-standard-library-only-for-the-core.md)) and no libc is linked anywhere in `build.zig` (verified: no `linkLibC` call in the script). The binary itself never references `testAddr`, so the exe compiles; only the test root — where `testAddr` is analyzed — hits the error. `std.posix.getpid()` would work without libc (it uses the raw syscall path), which is the likely fix; not applied here.
+`std.c` is the libc namespace; calling it requires the test binary to link libc. The project is standard-library-only ([ADR 0001](../../adrs/0001-zig-0-16-standard-library-only-for-the-core.md)) and no libc is linked anywhere in `build.zig` (verified: no `linkLibC` call in the script). The binary itself never references `testAddr`, so the exe compiles; only the test root - where `testAddr` is analyzed - hits the error. `std.posix.getpid()` would work without libc (it uses the raw syscall path), which is the likely fix; not applied here.
 
 ## Resolution
 
 Fixed in `build.zig` (`addChecks`): the `exe_tests` test binary now compiles
 `src/main.zig` through its own module instance with `.link_libc = true`, and
 `testAddr` keeps `std.c.getpid()`. The shipped `coppiz` executable keeps its
-libc-free module, so the static-musl constraint (ADR 0001) is untouched —
+libc-free module, so the static-musl constraint (ADR 0001) is untouched -
 only the test binary links libc, which is a test-runner concern, not a
 shipped-artifact one.
 
@@ -64,7 +64,7 @@ real binary over TCP.
 
 ## Follow-up
 
-The same test file's process-level tests hardcode an additional port (`127.0.0.1:17431`) that the pid-derived design (`testAddr`) is meant to make impossible — reported separately. Note also that this commit landed through a review stack that evidently never ran `zig build test`; the gate's test-registration machinery does not catch libc usage.
+The same test file's process-level tests hardcode an additional port (`127.0.0.1:17431`) that the pid-derived design (`testAddr`) is meant to make impossible - reported separately. Note also that this commit landed through a review stack that evidently never ran `zig build test`; the gate's test-registration machinery does not catch libc usage.
 
 ## References
 

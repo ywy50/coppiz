@@ -1,4 +1,4 @@
-# Bug — `ttl.retain = none` compaction makes a journal unfoldable on reopen: `Node.open` fails with `BadPrevHash`
+# Bug - `ttl.retain = none` compaction makes a journal unfoldable on reopen: `Node.open` fails with `BadPrevHash`
 
 ## TL;DR
 
@@ -8,7 +8,7 @@
 
 ## Status
 
-Resolved — `foldJournal` advances the fold's chain head over slot-only
+Resolved - `foldJournal` advances the fold's chain head over slot-only
 records via the new `FoldState.advanceHead`; regression test compacts
 under `ttl.retain = none` and reopens.
 
@@ -18,20 +18,20 @@ A member that compacted under `retain = none` and restarts fails to open: the fo
 
 ## Reproduction
 
-Mechanism proof (validated by standalone repro at the store level): append three chained records (slot1 ← slot2 ← slot3) to a journal, then `compact` out record 2 with `retain = .none`. The store's scan now yields record 1, a slot-only record (entry = null), record 3. Record 3's `prev_slot_hash` equals `slotHash(slot2)` — the chain is over *slots*, and the removed slot is still part of it:
+Mechanism proof (validated by standalone repro at the store level): append three chained records (slot1 ← slot2 ← slot3) to a journal, then `compact` out record 2 with `retain = .none`. The store's scan now yields record 1, a slot-only record (entry = null), record 3. Record 3's `prev_slot_hash` equals `slotHash(slot2)` - the chain is over *slots*, and the removed slot is still part of it:
 
 ```
 record 3 prev_slot_hash == hash(slot2): true
 record 3 prev_slot_hash == hash(slot1): false
 ```
 
-The fold, however, folds only records with an entry. `foldJournal`'s callback does `const e = en orelse return;` — the slot-only record is skipped and the fold's `head_slot_hash` stays at `slotHash(slot1)`. When record 3 arrives, `checkChainContinuity` (`chain.zig:426`) compares `prev_slot_hash` (`hash(slot2)`) against the stale head (`hash(slot1)`) and refuses with `BadPrevHash`, which propagates out of `foldAll` and fails `Node.open`. A full record always follows the gap — the checkpoint record itself is never in the removal set (no `expires_at`, `ttl_action = mark_stale`) — so the failure is guaranteed after any `retain = none` compaction that removed entries.
+The fold, however, folds only records with an entry. `foldJournal`'s callback does `const e = en orelse return;` - the slot-only record is skipped and the fold's `head_slot_hash` stays at `slotHash(slot1)`. When record 3 arrives, `checkChainContinuity` (`chain.zig:426`) compares `prev_slot_hash` (`hash(slot2)`) against the stale head (`hash(slot1)`) and refuses with `BadPrevHash`, which propagates out of `foldAll` and fails `Node.open`. A full record always follows the gap - the checkpoint record itself is never in the removal set (no `expires_at`, `ttl_action = mark_stale`) - so the failure is guaranteed after any `retain = none` compaction that removed entries.
 
 ## Root cause
 
 Two pieces combine:
 
-- `store.compact` under `retain = none` rewrites removed entries as slot-only records (`store.zig:437-443`) — by design ([PRD 0002](../../prds/0002-ttl-and-staleness.md)); the chain still verifies because slots are kept verbatim.
+- `store.compact` under `retain = none` rewrites removed entries as slot-only records (`store.zig:437-443`) - by design ([PRD 0002](../../prds/0002-ttl-and-staleness.md)); the chain still verifies because slots are kept verbatim.
 - `foldJournal` (`journal.zig:682-701`) skips entry-less records with `orelse return` instead of advancing the fold's head/hash over them. There is no `retain = none` handling anywhere in the fold path; the sync path acknowledges the shape (`cluster/node.zig:1771`, "A compacted record cannot be folded") but the open path does not.
 
 Under the default `retain = header` the surviving header-only records still decode to entries and fold fine (the existing reopen test, `journal.zig:1290-1362`, covers only that value).
@@ -51,7 +51,7 @@ compacted records is unchanged.
 Regression test (`journal.zig` "retain = none compaction leaves a journal
 that folds on reopen"): set `ttl.enforce = all`, `ttl.action = delete`,
 `ttl.retain = none`, append two entries, checkpoint past the first one's
-expiry, reopen — before the fix `Node.open` failed with `BadPrevHash`.
+expiry, reopen - before the fix `Node.open` failed with `BadPrevHash`.
 The surviving entry reads back after reopen.
 
 ## Verification
@@ -61,7 +61,7 @@ The surviving entry reads back after reopen.
 
 ## Follow-up
 
-Related: `foldJournal`'s other skip (`journal.zig:696-697`, divergent-epoch data records) has the same "skip without advancing head" shape and can fail the same way if a later record in the same scan chains to a skipped slot — worth covering in the same fix.
+Related: `foldJournal`'s other skip (`journal.zig:696-697`, divergent-epoch data records) has the same "skip without advancing head" shape and can fail the same way if a later record in the same scan chains to a skipped slot - worth covering in the same fix.
 
 ## References
 

@@ -1,8 +1,8 @@
-# RFC 0003 — what does `storage.fsync` govern?
+# RFC 0003 - what does `storage.fsync` govern?
 
 ## Status
 
-Discussion — opened 2026-08-29.
+Discussion - opened 2026-08-29.
 
 An RFC is a *request for comment*: it presents the options and a recommendation
 so a decision can be made, and it is not itself the decision record. When it is
@@ -23,7 +23,7 @@ actually pay, and which component owns the decision?
 **Why now.** The write path is the runtime hot path (PRD 0001 *Write path*).
 The 2026-08-29 sweep measured the mechanism: three barriers per tier-0 append
 (`queue.append` → `store.append` → `queue.clear`, all fsync), with the queue's
-two barriers ignoring the knob — a user setting `fsync = "never"` (or
+two barriers ignoring the knob - a user setting `fsync = "never"` (or
 `"batched"`) still pays queue fsyncs, so the knob does not mean what it says
 for a third of the write path. On this machine the gate's cluster e2e tests
 also run at ~3.5 min and the process-level `status` test flakes intermittently;
@@ -32,7 +32,7 @@ barriers under `.every`, the default).
 
 **Drivers.** Any acceptable option must:
 
-- preserve PRD 0001 G3 — an acknowledged write is durable — under `.every`,
+- preserve PRD 0001 G3 - an acknowledged write is durable - under `.every`,
   the default and the single-member/leader configuration;
 - make the knob mean the same thing on every component it governs (a
   durability setting that is silently ignored is a trap);
@@ -41,8 +41,8 @@ barriers under `.every`, the default).
   (`journal.zig:719-729`, queue.zig:1-9);
 - not change the on-disk format of the queue or the store.
 
-**Out of scope.** The queue *drain* shape — the whole-file rewrite per
-`remove`, O(k²) I/O on a burst — is a separate format decision (tombstones,
+**Out of scope.** The queue *drain* shape - the whole-file rewrite per
+`remove`, O(k²) I/O on a burst - is a separate format decision (tombstones,
 watermarks, batched drains) and is deliberately not decided here; see the
 sweep findings report. The per-frame decode-ownership contract
 (`message.zig:6-8`) is likewise separate.
@@ -60,7 +60,7 @@ fsync option; `Queue.append` and `Queue.clear` sync unconditionally
 - under `.every`: 3 barriers per append (queue append, store append, queue
   clear);
 - under `.batched` and `.never`: 2 barriers per append (queue append, queue
-  clear), and the store's records are un-fsynced until a seal — the knob's
+  clear), and the store's records are un-fsynced until a seal - the knob's
   durability contract is already accepted by the user, but the queue still
   refuses to participate;
 - the `clear` barrier is redundant even under `.every`: the entry is removed
@@ -70,14 +70,14 @@ fsync option; `Queue.append` and `Queue.clear` sync unconditionally
 
 ## Options considered
 
-### Option A — the knob governs the queue; `clear` never syncs
+### Option A - the knob governs the queue; `clear` never syncs
 
 - **What it is:** thread `fsync` into `Queue.open`; `append` syncs under
   `.every` (and, when a batch window exists, `.batched`); `clear` truncates
   without syncing, because a lost truncate replays idempotently. Under
   `.every`, an append pays 2 barriers instead of 3; under `.batched`/`.never`,
   it pays 0 on the queue and the knob means the same thing everywhere.
-- **Maturity:** no new machinery — the policy already exists, the replay
+- **Maturity:** no new machinery - the policy already exists, the replay
   idempotency is already the design (`queue.zig:1-9`).
 - **How it would fit:** `Queue` gains a `fsync` field; `journal.zig` passes
   `options.fsync`; `Queue.append`/`clear` consult it. No format change.
@@ -90,10 +90,10 @@ fsync option; `Queue.append` and `Queue.clear` sync unconditionally
   the append path until a flush point exists; the queue's append under
   `.batched` must choose a side (sync per append, or wait for a future flush
   point).
-- **Cost to adopt:** small — one field, three call sites, plus tests that
+- **Cost to adopt:** small - one field, three call sites, plus tests that
   assert the barrier count per knob value (strace or an injected fsync
   counter).
-- **Cost to leave:** trivial — the change is internal; nothing on disk or the
+- **Cost to leave:** trivial - the change is internal; nothing on disk or the
   wire changes.
 - **Evidence:** the 2026-08-29 sweep reports measure the mechanism
   ([write-path data flow](../reports/investigations/2026-08-29-runtime-sweep-queue-wire.md),
@@ -101,10 +101,10 @@ fsync option; `Queue.append` and `Queue.clear` sync unconditionally
   the queue's replay idempotency is documented at `queue.zig:1-9` and
   `journal.zig:719-729`; the 3-barrier path was verified by reading
   `journal.zig:229-268` (append) and `queue.zig:124-134, 194-198`. The
-  barrier count per knob has not been strace-verified on this machine —
+  barrier count per knob has not been strace-verified on this machine -
   `unverified`.
 
-### Option B — keep the queue always-durable; document the gap
+### Option B - keep the queue always-durable; document the gap
 
 - **What it is:** the status quo plus a comment/README note that
   `storage.fsync` governs the store only and the queue is always synced.
@@ -118,7 +118,7 @@ fsync option; `Queue.append` and `Queue.clear` sync unconditionally
 - **Cost to leave:** none.
 - **Evidence:** same mechanism evidence as Option A.
 
-### Option C — policy-aware acks (out-of-the-box): the ack contract states its own durability
+### Option C - policy-aware acks (out-of-the-box): the ack contract states its own durability
 
 - **What it is:** instead of one knob governing barriers, the *ack* carries
   the durability level: under `.never` the leader may ack before the store
@@ -129,13 +129,13 @@ fsync option; `Queue.append` and `Queue.clear` sync unconditionally
   (`message.zig`), so this is a versioned change.
 - **How it would fit:** ack encoding/decoding change, loop changes, client
   changes; the sync page and read paths are unaffected.
-- **Pros:** the client can *know* what an ack meant — the honest end of the
+- **Pros:** the client can *know* what an ack meant - the honest end of the
   durability contract; opens batching as a real latency win.
 - **Cons:** wire format change (version bump), larger blast radius, and the
-  same "where is the batching point" question as Option A — it solves the
+  same "where is the batching point" question as Option A - it solves the
   contract, not the missing flush point; overkill while `.batched` has no
   batch to point at.
-- **Cost to adopt:** the largest of the three — wire + client + loop.
+- **Cost to adopt:** the largest of the three - wire + client + loop.
 - **Cost to leave:** a versioned wire field is the point of no return; it can
   be reverted only with a version negotiation.
 - **Evidence:** the ack is encoded/decoded at `message.zig:264-293`; no
@@ -147,7 +147,7 @@ fsync option; `Queue.append` and `Queue.clear` sync unconditionally
 
 - **If A:** append latency drops one barrier under `.every` and two under
   `.never`/`.batched`; the knob becomes trustworthy; the e2e suite (which runs
-  under `.every`) pays one fewer fsync per append — directly testable on this
+  under `.every`) pays one fewer fsync per append - directly testable on this
   machine's flaky/slow gate.
 - **If B:** nothing changes; the gap stays documented.
 - **If C:** a wire change lands for a promise no batching point delivers yet.
@@ -173,7 +173,7 @@ fsync option; `Queue.append` and `Queue.clear` sync unconditionally
 
 ## Recommendation
 
-**Recommended option:** A — the knob governs the queue; `clear` never syncs.
+**Recommended option:** A - the knob governs the queue; `clear` never syncs.
 
 **Confidence:** 7/10
 
@@ -181,9 +181,9 @@ fsync option; `Queue.append` and `Queue.clear` sync unconditionally
 queue ignores the knob; replay idempotent; `clear` redundant). What would move
 it up: a strace/`fsync`-count measurement per knob value on this machine
 (planned as the acceptance test), and a decision on the `.batched` append
-behavior (sync-per-append until a flush point exists — the RFC's default).
+behavior (sync-per-append until a flush point exists - the RFC's default).
 What would sink it: a crash-recovery test showing a *surviving* queue entry is
-ever required after the slot landed — the idempotency argument says it never
+ever required after the slot landed - the idempotency argument says it never
 is, but the fuzz/replay test suite is the proof.
 
 **Rationale.** Against the drivers: A keeps G3 under `.every` (the store
@@ -194,7 +194,7 @@ because C spends a wire change on a batching promise the loop does not yet
 have. The `.batched` append side is the one open sub-choice: sync per append
 until a flush point exists is the conservative default.
 
-**Reversibility.** Fully reversible — the change is internal (one field, three
+**Reversibility.** Fully reversible - the change is internal (one field, three
 call sites). There is no format, wire, or API point of no return.
 
 ## Open questions
@@ -218,13 +218,13 @@ call sites). There is no format, wire, or API point of no return.
 ## References
 
 - Investigation reports (the evidence this RFC rests on):
-  - [2026-08-29 — write-path data flow](../reports/investigations/2026-08-29-runtime-sweep-queue-wire.md)
-  - [2026-08-29 — settings key resolution and checkpoint removal sets](../reports/investigations/2026-08-29-runtime-sweep-settings-checkpoint.md)
-  - [2026-08-29 — range reads and open-time discovery](../reports/investigations/2026-08-29-runtime-sweep-journal-read.md)
-  - [2026-08-29 — simulator leader evaluation and TCP page writes](../reports/investigations/2026-08-29-runtime-sweep-sim-micro.md)
-  - [2026-08-29 — runtime speedup sweep findings](../reports/investigations/2026-08-29-runtime-sweep-findings.md)
+  - [2026-08-29 - write-path data flow](../reports/investigations/2026-08-29-runtime-sweep-queue-wire.md)
+  - [2026-08-29 - settings key resolution and checkpoint removal sets](../reports/investigations/2026-08-29-runtime-sweep-settings-checkpoint.md)
+  - [2026-08-29 - range reads and open-time discovery](../reports/investigations/2026-08-29-runtime-sweep-journal-read.md)
+  - [2026-08-29 - simulator leader evaluation and TCP page writes](../reports/investigations/2026-08-29-runtime-sweep-sim-micro.md)
+  - [2026-08-29 - runtime speedup sweep findings](../reports/investigations/2026-08-29-runtime-sweep-findings.md)
 - Code: `src/config/local.zig` (knob parse), `src/main.zig` (threading),
   `src/journal/journal.zig` (append, options), `src/journal/queue.zig`,
   `src/journal/store.zig` (fsync policy)
-- Prior RFCs: [0001 — library-first or service-first](../rfcs/0001-library-first-or-service-first.md),
-  [0002 — how join order is made unspoofable](../rfcs/0002-how-join-order-is-made-unspoofable.md)
+- Prior RFCs: [0001 - library-first or service-first](../rfcs/0001-library-first-or-service-first.md),
+  [0002 - how join order is made unspoofable](../rfcs/0002-how-join-order-is-made-unspoofable.md)

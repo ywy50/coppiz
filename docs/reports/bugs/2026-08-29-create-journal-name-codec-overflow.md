@@ -1,9 +1,9 @@
-# Bug — `encodeCreateJournalPayload` writes the journal name with an unchecked u16 cast: a 64 KiB name panics in debug
+# Bug - `encodeCreateJournalPayload` writes the journal name with an unchecked u16 cast: a 64 KiB name panics in debug
 
 ## TL;DR
 
 - **What failed:** `chain.zig:988` writes `@intCast(payload.name.len)` into the u16 name-length field with no size check. The fold caps names at `max_journal_name = 256` on decode, but nothing caps them on encode.
-- **Impact:** `coppiz init --journal <name of >65535 bytes>` panics in debug builds and silently wraps the length field in release — the founder and followers then disagree about the journal name.
+- **Impact:** `coppiz init --journal <name of >65535 bytes>` panics in debug builds and silently wraps the length field in release - the founder and followers then disagree about the journal name.
 - **Resolution:** Still open. Statically validated.
 
 ## Status

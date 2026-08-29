@@ -1,8 +1,8 @@
-# Bug — TCP accept/connect leak the OS socket when the `TcpConn` allocation fails
+# Bug - TCP accept/connect leak the OS socket when the `TcpConn` allocation fails
 
 ## TL;DR
 
-- **What failed:** `TcpListener.acceptFn` and `TcpTransport.connectFn` create the socket (`accept`/`connect`) before allocating `TcpConn`; on allocation failure the stream is dropped without `close` — an fd leak (and a dangling peer connection on the accept side).
+- **What failed:** `TcpListener.acceptFn` and `TcpTransport.connectFn` create the socket (`accept`/`connect`) before allocating `TcpConn`; on allocation failure the stream is dropped without `close` - an fd leak (and a dangling peer connection on the accept side).
 - **Impact:** OOM-only, but repeated pressure exhausts fds; the hub paths got the allocate-before-insert fix in the sweep, the TCP paths did not.
 - **Resolution:** Still open. Statically validated.
 

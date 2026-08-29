@@ -1,15 +1,15 @@
-# ADR 0002 — Entries are immutable; TTL expiry and author-marked staleness are the only mutations, and both are opt-in by setting
+# ADR 0002 - Entries are immutable; TTL expiry and author-marked staleness are the only mutations, and both are opt-in by setting
 
 ## Status
 
-Accepted — 2026-08-21.
+Accepted - 2026-08-21.
 
 ## Context
 
 The brief (2026-08-21) asks for an append-only ledger and, in the same
 breath, for two kinds of cleanup: entries whose TTL is reached are deleted or
-marked stale, by setting; and a member may mark its own entries stale — only
-its own — after which they are cleaned up too. It also asks that TTL
+marked stale, by setting; and a member may mark its own entries stale - only
+its own - after which they are cleaned up too. It also asks that TTL
 enforcement be switchable: off, per entry, or for every entry in the journal.
 
 The alternative shapes were a general `update`/`delete` API (which makes
@@ -23,15 +23,17 @@ get cleanup would be paying for the whole problem to solve a corner of it.
 ## Decision
 
 An entry's bytes never change after it is written. There is no `update` and
-no `delete(id)`. The only state transitions are `live → stale → removed` —
+no `delete(id)`. The only state transitions are `live → stale → removed` -
 or `live → expired → removed` when the journal's expiry action is delete
-rather than mark_stale —
-driven by exactly two causes — a TTL reached, and a `stale` control entry
-authored by the entry's own author — and made durable only by a leader
+rather than mark_stale -
+driven by exactly two causes - a TTL reached, and a `stale` control entry
+authored by the entry's own author - and made durable only by a leader
 `checkpoint` entry so every member removes the same set at the same chain
-position. Whether either cause is active, and whether expiry marks or
+position.
+
+Whether either cause is active, and whether expiry marks or
 deletes, are per-journal settings stored in the chain ([PRD 0002](../prds/0002-ttl-and-staleness.md),
-[PRD 0004](../prds/0004-settings.md)) — the schema gates both causes, after
+[PRD 0004](../prds/0004-settings.md)) - the schema gates both causes, after
 [OQ 57](../open-questions.md) was resolved (2026-08-27) by adding
 `stale.enforce` (default `off`) and defaulting `stale.cleanup` to `keep`.
 Slots are never removed; at most an

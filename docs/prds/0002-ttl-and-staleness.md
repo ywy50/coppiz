@@ -1,8 +1,8 @@
-# PRD 0002 — TTL and staleness: the only two mutations
+# PRD 0002 - TTL and staleness: the only two mutations
 
 ## Status
 
-Shipped — 2026-08-27 (phases 1–3 with the single-member core, phases 4–5
+Shipped - 2026-08-27 (phases 1–3 with the single-member core, phases 4–5
 with the cluster node loop). Source of truth: `src/journal/expiry.zig` (the
 pure predicates and the deterministic removal set), the `stale` and
 `checkpoint` validation rules in `src/journal/chain.zig`, the payload drop
@@ -16,9 +16,11 @@ entry is refused with `not_author`; the author's own is accepted), **G5**
 (default reads hide stale/expired; `include_*` shows them), **G7** (a
 `stale` entry is refused while `stale.enforce = off`; no checkpoint is
 emitted with an empty removal set), **G4** (three members remove the same
-set at the same checkpoint slot — e2e under both `retain` values) and
+set at the same checkpoint slot - e2e under both `retain` values) and
 **G6** (a follower skewed ±1 h shows, not stores, differently; the folds
-hash equal). The merge-settle rule (a checkpoint inside `merge.settle_ms`
+hash equal).
+
+The merge-settle rule (a checkpoint inside `merge.settle_ms`
 of the last merge is refused `merge_settling`) shipped with PRD 0003
 phases 1–3.
 
@@ -26,8 +28,10 @@ The leader checkpoints on `checkpoint.every_ms`, or when
 `checkpoint.pending_bytes` of removable payload has accumulated (probed as
 data arrives, never by a per-tick full scan); the defaults stay the
 placeholders of [OQ 10](../open-questions.md). Compaction runs at the same
-chain position on every member — the follower drops the payloads when the
-checkpoint folds — so the bytes, not just the fold marks, match. A journal
+chain position on every member - the follower drops the payloads when the
+checkpoint folds - so the bytes, not just the fold marks, match.
+
+A journal
 that has been compacted cannot yet be joined or backfilled by a new member:
 the sync path refuses compacted records, an interaction now reachable
 ([OQ 43](../open-questions.md)). The merge-with-checkpoints determinism
@@ -39,16 +43,16 @@ An append-only journal that every member holds in full grows forever. The brief
 (2026-08-21) asks for two controlled exceptions to immutability, both
 configurable per journal:
 
-- **TTL on entries** — an entry may carry a time-to-live; when it is reached
+- **TTL on entries** - an entry may carry a time-to-live; when it is reached
   the journal either *deletes* the entry or *marks it stale*, by setting; and
   enforcement itself is a setting: off, only for entries that carry a TTL, or
   for every entry in the journal (the "schema").
-- **Author-marked staleness** — a member may mark *its own* entries stale, and
+- **Author-marked staleness** - a member may mark *its own* entries stale, and
   only its own; stale entries are then cleaned up like expired ones.
 
 **Removal is a hard opt-in, never a default.** Both causes are off until a
-journal's settings explicitly enable them — `ttl.enforce = off` and
-`stale.enforce = off` are the defaults — and even under an enabled cause the
+journal's settings explicitly enable them - `ttl.enforce = off` and
+`stale.enforce = off` are the defaults - and even under an enabled cause the
 default action is to *mark*, not to *delete* (`ttl.action = mark_stale`,
 `stale.cleanup = keep`). A journal that has not opted in removes nothing and
 hides nothing. Enabling a cause is a `settings` entry in the chain, and it
@@ -119,7 +123,7 @@ the same instant from the same bytes. `author_ts_ms` is never consulted.
 | `all` | expires at `slot_ts_ms + ttl.default_ms` | expires at `slot_ts_ms + min(ttl_ms, ttl.max_ms)` |
 
 `ttl.max_ms` (0 = unbounded) caps a requested TTL under both `all` and
-`per_entry` — a larger ask is clamped to it — so the schema owner can bound
+`per_entry` - a larger ask is clamped to it - so the schema owner can bound
 retention without forcing expiry. A journal under
 `all` with `ttl.default_ms = 0` is a validation error in the `settings` entry
 (PRD 0004), because it would mean "everything expires immediately".
@@ -131,7 +135,7 @@ clock is used, and it only affects *visibility on this member*, never bytes.
 operator tolerate skew between the leader that stamped the slot and the
 member that reads it. Under `mark_stale`, a TTL-reached entry reads as
 stale; under `delete`, as expired; `include_stale` / `include_expired` show
-either. With both causes off — the default — no entry is ever hidden.
+either. With both causes off - the default - no entry is ever hidden.
 
 **Hard removal: the `checkpoint` control entry.** Only the leader appends it,
 and it names a slot: `expire_through = (epoch, seq)`. Its meaning is: *every
@@ -140,7 +144,7 @@ checkpoint's own `slot_ts_ms`, plus every entry marked stale at or before it
 (when `stale.cleanup = delete`), is removed.* The set is computed by the fold,
 so it is identical on every member; the leader's clock chose the instant, but
 it chose it once, in the chain. A member that was down during the checkpoint
-applies it when it backfills the slot — it cannot apply it early and cannot
+applies it when it backfills the slot - it cannot apply it early and cannot
 skip it.
 
 Removal means the payload bytes are dropped from the segment (rewritten on
@@ -154,17 +158,17 @@ setting `ttl.retain`:
 
 `header` is the default because it keeps "who wrote something here, and when"
 answerable after the content is gone, which is what an audit of a
-self-modifying system needs, and costs 164 bytes per removed entry — the
+self-modifying system needs, and costs 164 bytes per removed entry - the
 draft header layout of [PRD 0001](0001-journal-core.md) summed. `none` is
-for journals where volume dominates. Removing a *slot* is never allowed — it
-would break the chain — so the journal's slot count only grows; the cost of that
+for journals where volume dominates. Removing a *slot* is never allowed - it
+would break the chain - so the journal's slot count only grows; the cost of that
 is [open question 24](../open-questions.md).
 
 **Who triggers a checkpoint.** The leader, on a cadence: `checkpoint.every_ms`
 (default 60 s) or when `checkpoint.pending_bytes` of removable payload has
 accumulated, whichever first; and never with an empty removal set (no
-checkpoint spam on an idle journal). A journal under the defaults —
-`ttl.enforce = off`, `stale.enforce = off`, `stale.cleanup = keep` — never
+checkpoint spam on an idle journal). A journal under the defaults -
+`ttl.enforce = off`, `stale.enforce = off`, `stale.cleanup = keep` - never
 checkpoints: its removal set is always empty. Cadence defaults are [open
 question 10](../open-questions.md).
 
@@ -172,17 +176,18 @@ question 10](../open-questions.md).
 target entry id `(author, author_seq)` in the same journal. Validation (PRD
 0001, run by every member) refuses it while `stale.enforce = off` (the
 default), and otherwise unless `stale.author == target.author`.
+
 There is no API-level check to bypass: a member that hand-builds a `stale`
 for someone else's entry produces an entry every other member refuses, and the
 refusal names `not_author`. A `stale` for an already-stale or removed entry is
 accepted and a no-op (idempotent, so a retried mark is harmless). What happens
-to stale entries afterwards is `stale.cleanup = delete | keep` — `delete` lets
+to stale entries afterwards is `stale.cleanup = delete | keep` - `delete` lets
 the next checkpoint remove them (the brief's "which then get removed/cleanup
 as well"), `keep` leaves them hidden-but-present forever.
 
 **Settings table for this PRD** (all per journal, stored as PRD 0004
 `settings` entries; every one is live-changeable because changing them never
-invalidates history — a tightened TTL applies from the next checkpoint,
+invalidates history - a tightened TTL applies from the next checkpoint,
 a loosened one stops future removals, and a `settings` entry takes effect
 only for slots after it (PRD 0004), so flipping a cause on can never
 retroactively remove entries appended before it):
@@ -207,7 +212,7 @@ contains both sides' checkpoints; each removes only what its own fold says it
 removes, so nothing is removed twice and nothing that the other side slotted
 later is touched. A checkpoint is never emitted for slots newer than the last
 `merge` until `merge.settle_ms` has passed (default and bounds [OQ
-60](../open-questions.md)) — the conservative rule that
+60](../open-questions.md)) - the conservative rule that
 keeps a just-healed cluster from deleting the other side's fresh writes on a
 clock it did not stamp.
 
@@ -216,7 +221,7 @@ clock it did not stamp.
 
 **Implementation.**
 
-1. `src/journal/expiry.zig` — pure: `effectiveTtl(entry, settings)`,
+1. `src/journal/expiry.zig` - pure: `effectiveTtl(entry, settings)`,
    `expiresAt(slot, entry, settings)`, `visibleAt(now, …)`,
    `removalSet(fold, checkpoint)`. Table tests over the enforce × entry-ttl
    matrix and every transition of the state diagram above.
@@ -233,12 +238,12 @@ clock it did not stamp.
 
 | Condition | Behaviour |
 |---|---|
-| `stale` authored while `stale.enforce = off` | refused by every member, `staleness_disabled`; the author's `author_seq` is still consumed (the entry exists, it is just refused a slot) — [open question 11](../open-questions.md) |
-| `stale` names another author's entry | refused by every member, `not_author`; the author's `author_seq` is still consumed (the entry exists, it is just refused a slot) — [open question 11](../open-questions.md) |
+| `stale` authored while `stale.enforce = off` | refused by every member, `staleness_disabled`; the author's `author_seq` is still consumed (the entry exists, it is just refused a slot) - [open question 11](../open-questions.md) |
+| `stale` names another author's entry | refused by every member, `not_author`; the author's `author_seq` is still consumed (the entry exists, it is just refused a slot) - [open question 11](../open-questions.md) |
 | `stale` names an unknown entry id | held like any gap (PRD 0001); refused `unknown_target` if the target never arrives within `sync.gap_timeout_ms` ([OQ 56](../open-questions.md)) |
 | Follower clock far ahead of the leader | follower hides entries early (soft); bytes unaffected; `grace_ms` is the knob |
 | Follower clock far behind | follower shows expired entries until a checkpoint removes them; bytes unaffected |
-| Leader clock jumps forward | expiry instants pass early for entries slotted afterwards; nothing retroactive — earlier slots keep their stamps |
+| Leader clock jumps forward | expiry instants pass early for entries slotted afterwards; nothing retroactive - earlier slots keep their stamps |
 | `settings` sets `ttl.enforce = all` with `ttl.default_ms = 0` | refused at validation, `invalid_settings` |
 | Checkpoint arrives for a slot the member does not have yet | applied after backfill reaches it; never before |
 | Member was down across several checkpoints | each applied in order during backfill; end state identical to a member that was up |
@@ -270,6 +275,6 @@ clock it did not stamp.
 - Slot count grows forever even under `retain = none`; whether an
   *archival checkpoint* (a signed root that lets old slots be archived) is
   needed, and when ([OQ 24](../open-questions.md)).
-- Whether the `stale` cause is itself switchable per journal — settled: the
+- Whether the `stale` cause is itself switchable per journal - settled: the
   schema above gates it with `stale.enforce` ([OQ 57](../open-questions.md),
   resolved 2026-08-27).

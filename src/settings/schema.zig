@@ -4,7 +4,7 @@
 //! A setting is either **cluster-scoped** (one value for the cluster:
 //! `leadership.*`, `cluster.*`, `membership.*`, `merge.*`), **journal-scoped**
 //! (one value per journal: `ttl.*`, `stale.*`, `checkpoint.*`, `journal.*`),
-//! or **federation-scoped** — reserved now, populated by PRD 0006, with no
+//! or **federation-scoped** - reserved now, populated by PRD 0006, with no
 //! keys yet so that federating later is a new set of keys, not a schema
 //! break. The table is the single source the generated
 //! `docs/configuration.md` and `coppiz settings schema` render, and the
@@ -65,8 +65,8 @@ pub const Key = struct {
 pub const provisional_max_journals: u32 = 1024;
 pub const provisional_max_entry_bytes: u64 = 16 * 1024 * 1024;
 
-/// The whole schema. Order is stable — key index is part of the settings
-/// payload format — so new keys append, never reorder.
+/// The whole schema. Order is stable - key index is part of the settings
+/// payload format - so new keys append, never reorder.
 pub const keys = [_]Key{
     // --- cluster scope ---
     .{
@@ -342,7 +342,7 @@ pub const Value = union(enum) {
 
 /// The index of the key named `name` (wire-format position, table order).
 /// The parameter is comptime so every call with a literal name resolves at
-/// compile time — the hot paths re-resolve key indices on every tick and
+/// compile time - the hot paths re-resolve key indices on every tick and
 /// every append, and the scan over the schema table would otherwise run
 /// again on each call. Runtime lookups (a TOML or CLI key name) use
 /// `keyIndexRuntime`.
@@ -499,7 +499,7 @@ pub fn decodeValue(
 }
 
 /// The folded settings state for one scope (PRD 0004): one value per key in
-/// table order — the defaults plus everything the chain applied. Owns its
+/// table order - the defaults plus everything the chain applied. Owns its
 /// values (a `string_list`'s slices are allocator-backed); the `get*`
 /// accessors borrow. One instance per scope per journal lives in the fold.
 pub const SettingsState = struct {
@@ -608,7 +608,7 @@ test "every key has a non-empty name and description" {
     }
 }
 
-test "keys are unique — the index, part of the settings payload format, is stable" {
+test "keys are unique - the index, part of the settings payload format, is stable" {
     // The order itself is a format fact (see the module doc): new keys
     // append, never reorder. What the test pins is that the table holds no
     // duplicate names, so a lookup by name resolves exactly one key.

@@ -170,7 +170,7 @@ pub fn applySettings(
     try validate.validateState(&candidate, member_count);
     // Commit by swapping the validated candidate in. Re-applying the changes
     // to `state` would clone again, and a failure part-way through would
-    // leave the entry half-applied *and* refused — a replicated fold that
+    // leave the entry half-applied *and* refused - a replicated fold that
     // silently diverges from every member that did not fail there (bug
     // 2026-08-28-settings-apply-partial-commit). After the swap, `candidate`
     // holds the old state and the defer frees it.
@@ -178,8 +178,8 @@ pub fn applySettings(
 }
 
 /// Applies genesis initial settings. Genesis is the offline bootstrap, so
-/// the live-changeability gate does not apply — a founder may start frozen
-/// (`reconfigurable = false`, a configured authority list) — but the
+/// the live-changeability gate does not apply - a founder may start frozen
+/// (`reconfigurable = false`, a configured authority list) - but the
 /// whole-state rules still hold, against the founder's cluster (n = 1).
 pub fn applyGenesis(
     state: *schema.SettingsState,
