@@ -137,5 +137,5 @@ adding serve later is additive.
 - [OQ 17](../open-questions.md) - the register entry this RFC addresses.
 - [PRD 0001](../prds/0001-journal-core.md) - the fold and the deferral.
 - [OQ 54](../open-questions.md) - the join/backfill measurement.
-- [RFC 0026](0026-archival-checkpoint.md) - the sibling chain-level
-  mechanism.
+- [OQ 24](../open-questions.md#oq-24) - the sibling chain-level
+  mechanism (archival checkpoint, to become an RFC).

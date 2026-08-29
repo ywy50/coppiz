@@ -139,5 +139,5 @@ untouched.
 
 - [OQ 26](../open-questions.md) - the register entry this RFC addresses.
 - [PRD 0001](../prds/0001-journal-core.md) - the version rule.
-- [RELEASES.md](../RELEASES.md) - the release policy that names this
+- [RELEASES.md](../../RELEASES.md) - the release policy that names this
   procedure.

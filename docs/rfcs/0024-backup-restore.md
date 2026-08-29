@@ -143,5 +143,5 @@ failure (lost member, not lost cluster).
 - [OQ 39](../open-questions.md) - the register entry this RFC addresses.
 - [PRD 0001](../prds/0001-journal-core.md) - torn-tail recovery and the
   chain's arbitration.
-- [RELEASES.md](../RELEASES.md) - the first-release list that names the
+- [RELEASES.md](../../RELEASES.md) - the first-release list that names the
   backup runbook.
