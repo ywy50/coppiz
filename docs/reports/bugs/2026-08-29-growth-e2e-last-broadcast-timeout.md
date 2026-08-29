@@ -71,6 +71,36 @@ Also plausible and not separated from the above: C is simply slower than
 20 s under load. Against that, the deadline is 20 s for a single 100-byte
 record on loopback, and the other polls in the same test complete quickly.
 
+## Later observations (2026-08-29, `src/net/` session)
+
+Frequency, on a different working set: **five occurrences in roughly a dozen
+`zig build test` runs**, every one of them
+`pollRead(&c, "m2") -> error.Timeout` at the same step, and every one of them
+green on an immediate re-run of the same tree. That is more often than the
+"three in roughly a dozen" above, and it happened while two worktrees were
+building concurrently, which fits the report's note that load makes it more
+likely.
+
+One candidate was tested and is **not** the answer on its own.
+[`2026-08-29-tcp-recvframe-drops-buffered-bytes.md`](2026-08-29-tcp-recvframe-drops-buffered-bytes.md)
+found that `TcpConn.recvFrame` discarded every byte the socket had read past
+the current frame. That is a concrete way a broadcast is lost with no gap the
+receiver can see, and the leader sends its heartbeat and its slot broadcast
+back to back on one connection, which is exactly the coalescing case. It is
+also the only process-level TCP test in the suite, so it was the natural
+suspect. The flake still fired twice after that fix was on the branch. So
+either it is a second mechanism, or a lost frame is not what fires here at all.
+
+Nothing about the recovery-gap analysis above changed: `onHeartbeat` still
+compares only the control head, and `onSlot`'s `BadPrevHash` still needs a
+later record on the same journal. Those remain the reason a *single* lost
+final broadcast would never be recovered. What is now less likely is that the
+loss comes from the framing layer.
+
+The next step in *Resolution* below is still the right one, and is now the
+only one left that separates the hypotheses: capture the three serve stderr
+logs from a failing run.
+
 ## Resolution
 
 Not fixed. The next step is to capture the failing run's three serve
