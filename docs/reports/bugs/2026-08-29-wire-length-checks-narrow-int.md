@@ -103,16 +103,68 @@ which is what the callers already handle.
   and passes after.
 - `zig build test --summary all` green.
 
-## Follow-up
+## Follow-up: `decodeMembersPage`'s unchecked count - resolved
 
-One related weakness in the same file is **not** fixed here, to keep the
-change to one mechanism: `decodeMembersPage` reads a `u16` `count` and
-immediately does `allocator.alloc(MemberInfo, count)` before checking that the
-body could hold that many members. `MemberInfo` is 48 bytes, so a 26-byte frame
-can force a ~3.1 MiB allocation - about 120,000x amplification, repeatable per
-frame. The `errdefer` frees correctly, so it is bounded churn and not a leak,
-but the cheap guard (`26 + count * 34 > bytes.len`) that every sibling decoder
-has is missing.
+One related weakness in the same file was **not** fixed with the narrow-int
+sweep, to keep that change to one mechanism: `decodeMembersPage` read a `u16`
+`count` and immediately did `allocator.alloc(MemberInfo, count)` before
+checking that the body could hold that many members. It is fixed now, with the
+guard every sibling decoder already had:
+
+```zig
+if (26 + count * 34 > bytes.len) return error.InvalidLength;
+```
+
+34 bytes is the minimum a member occupies on the wire (16 id, 16 seniority, a
+2-byte address length), so the check is exact for empty addresses and
+conservative otherwise. The refusal itself is unchanged: the decode loop's
+first `off + 34 > bytes.len` test already returned `InvalidLength` for these
+bodies. What changed is that saying so no longer costs an allocation.
+
+### The measured amplification
+
+This section's original text called it "bounded churn and not a leak, about
+120,000x amplification". The leak half is right - the `errdefer` frees
+correctly - but "bounded churn" understates it, and the amplification was an
+estimate. Both were measured, in the new test
+`members_page refuses a count its body cannot hold, before allocating`, by
+decoding through a `std.testing.FailingAllocator` and reading its
+`allocated_bytes`:
+
+| | before | after |
+|---|---|---|
+| bytes allocated by one 26-byte payload | 3,145,680 | 0 |
+| amplification over the payload | 120,987x | none |
+| time for 100,000 such frames | 163,179 ms | 5 ms |
+| per frame | 1,631,795 ns | 54 ns |
+
+The timings are `std.testing.allocator` (a `DebugAllocator`, the same family
+`std.process.Init` hands the CLI in a debug build) on this machine; a release
+allocator would be faster, and the ratio is what matters rather than the
+absolute figures.
+
+The cost lands on the one thread that matters. `ClusterNode.onFrame` decodes
+on the node's single loop thread, and it decodes *before* `frameAllowed`
+rejects the sender's role, so an unadmitted peer reaches it. At 1.6 ms of loop
+time per frame, roughly 600 frames per second - about 20 KB/s of attacker
+uplink, since each frame is 32 bytes on the wire - is enough to spend the whole
+loop thread on `members_page` frames the node then discards (`.members_page =>
+{}`). That is a throughput ceiling on election, heartbeats and replication, not
+just allocator churn.
+
+An audit of the rest of the file found no sibling: every other
+variable-length decode in `message.zig` is a `dupe` of a slice of the body, so
+the body's own length bounds it. `decodeMembersPage` is the only one that
+allocated from a count.
+
+### Verification
+
+- New test above. Control: with the guard reverted it fails with
+  `expected 0, found 3145680`; with the guard it passes.
+- The non-vacuous half: the same `FailingAllocator` instance then decodes a
+  well-formed one-member page and the test asserts `allocated_bytes > 0`, so
+  the zero above is a measurement and not a dead counter.
+- `zig build test` green (see the PR).
 
 ## References
 
