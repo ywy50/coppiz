@@ -1661,7 +1661,10 @@ pub const ClusterNode = struct {
     }
 
     /// The leader's slot step: position, store, fold, broadcast. Returns
-    /// the slot (for acks).
+    /// the slot (for acks). The record is encoded once and both the store
+    /// write and the broadcast reuse the same bytes (the follower appends
+    /// them verbatim), so a replicated slot costs one encode on the leader,
+    /// not two.
     fn slotAndBroadcast(
         self: *ClusterNode,
         en: *const entry.Entry,
@@ -1670,7 +1673,10 @@ pub const ClusterNode = struct {
         const fold = self.foldFor(en.journal) orelse return error.UnknownJournal;
         const sl = try self.node.slotFor(fold, en);
         const prev_head = self.node.control.head;
-        try self.node.applyReplicated(en.journal, &sl, en, reslotted, null);
+        const record = try self.allocator.alloc(u8, segment.recordSize(&sl, en));
+        defer self.allocator.free(record);
+        segment.encodeRecord(&sl, en, record);
+        try self.node.applyReplicated(en.journal, &sl, en, reslotted, record);
         if (en.kind == .epoch) {
             if (self.node.control.epoch) |ep| {
                 if (sl.epoch > ep.number) {
@@ -1681,7 +1687,7 @@ pub const ClusterNode = struct {
         }
         self.broadcastToMembers(.{ .slot = .{
             .reslotted = reslotted,
-            .record = &.{},
+            .record = record,
             .sl = sl,
             .en = en.*,
         } });
@@ -1735,12 +1741,17 @@ pub const ClusterNode = struct {
         };
         sl.signature = (try slot.sign(self.node.keypair, &sl)).toBytes();
         const prev_head = self.node.control.head;
-        try self.node.applyReplicated(fold.journal_id, &sl, &en, false, null);
+        // Encode once for the store write and the broadcast, as in
+        // `slotAndBroadcast`.
+        const record = try self.allocator.alloc(u8, segment.recordSize(&sl, &en));
+        defer self.allocator.free(record);
+        segment.encodeRecord(&sl, &en, record);
+        try self.node.applyReplicated(fold.journal_id, &sl, &en, false, record);
         self.branch_start = sl.position();
         self.common_tail = prev_head;
         self.broadcastToMembers(.{ .slot = .{
             .reslotted = false,
-            .record = &.{},
+            .record = record,
             .sl = sl,
             .en = en,
         } });

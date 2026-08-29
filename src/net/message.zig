@@ -340,6 +340,17 @@ pub fn encodeSlot(reslotted: bool, sl: *const slot.Slot, en: *const entry.Entry,
     segment.encodeRecord(sl, en, buf[5..]);
 }
 
+/// Encodes a slot message from a pre-encoded record (len | crc | slot |
+/// entry) instead of re-encoding `sl`/`en`: the leader writes a record to
+/// the store and broadcasts the same bytes, so one encode (and its CRC)
+/// serves both (the bytes `segment.encodeRecord` produced are exactly the
+/// on-disk form the follower appends verbatim).
+pub fn encodeSlotRecord(reslotted: bool, record: []const u8, buf: []u8) void {
+    buf[0] = @intFromBool(reslotted);
+    std.mem.writeInt(u32, buf[1..5], @intCast(record.len), .little);
+    @memcpy(buf[5..], record);
+}
+
 pub fn decodeSlot(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!SlotMsg {
     if (bytes.len < 5) return error.InvalidLength;
     if (bytes[0] > 1) return error.InvalidValue;
@@ -775,7 +786,10 @@ pub fn encode(m: Message, buf: []u8) void {
         .append => |v| encodeAppend(v, out),
         .ack => |v| encodeAck(v, out),
         .forward => |v| encodeForward(v, out),
-        .slot => |v| encodeSlot(v.reslotted, &v.sl, &v.en.?, out),
+        .slot => |v| if (v.record.len > 0)
+            encodeSlotRecord(v.reslotted, v.record, out)
+        else
+            encodeSlot(v.reslotted, &v.sl, &v.en.?, out),
         .sync_req => |v| encodeSyncReq(v, out[0..sync_req_len]),
         .sync_page => |v| encodeSyncPage(v, out),
         .heartbeat => |v| encodeHeartbeat(v, out[0..heartbeat_len]),
