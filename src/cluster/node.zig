@@ -304,6 +304,13 @@ pub const ClusterNode = struct {
     /// buffers hold the loser's raw records per journal; `merge_pending`
     /// lists the data journals still to fetch.
     merging_from: ?u64 = null,
+    /// Merge state, the loser's half: the conn a `merge_offer` was sent on
+    /// and whose `merge_ack` this member is waiting for. `merge_ack` carries
+    /// no body, so the conn is the only thing that binds an ack to the offer
+    /// it answers; without it any admitted member could truncate every data
+    /// journal here by sending one (bug
+    /// 2026-08-29-merge-ack-unauthenticated).
+    merging_to: ?u64 = null,
     merge_buffers: std.AutoHashMapUnmanaged([16]u8, std.ArrayListUnmanaged(u8)) = .empty,
     merge_pending: std.ArrayListUnmanaged([16]u8) = .empty,
     /// Control `leave` entries deferred by doMergeControl: a re-slotted
@@ -790,6 +797,7 @@ pub const ClusterNode = struct {
     fn onPeerGone(self: *ClusterNode, conn_id: u64) void {
         // A dead conn can strand an in-flight sync or a merge; release both.
         self.sync_in_flight = false;
+        if (self.merging_to == conn_id) self.merging_to = null;
         if (self.merging_from == conn_id) {
             self.merging_from = null;
             var bit = self.merge_buffers.valueIterator();
@@ -2228,6 +2236,8 @@ pub const ClusterNode = struct {
             .branch_leader = my_leader,
             .branch_head = branch_head,
         } });
+        // Only this peer's `merge_ack` may truncate my data branches.
+        self.merging_to = conn_id;
         // Truncate the control branch and re-fold now; the data branches are
         // truncated only after the survivor fetches them (merge_ack), or the
         // fetch would find them gone.
@@ -2257,7 +2267,13 @@ pub const ClusterNode = struct {
     /// The survivor fetched and re-slotted my data: truncate my data
     /// branches, re-fold, and re-sync them from the survivor.
     fn onMergeAck(self: *ClusterNode, conn_id: u64) !void {
-        _ = conn_id;
+        // An ack answers an offer: it is only actionable on the conn this
+        // member offered its branch on, and only once. The frame has no
+        // body to authenticate, so the pending offer is the whole check
+        // (bug 2026-08-29-merge-ack-unauthenticated).
+        const offered_to = self.merging_to orelse return;
+        if (offered_to != conn_id) return;
+        self.merging_to = null;
         const tail = self.common_tail orelse return;
         var it = self.node.control.journals.iterator();
         while (it.next()) |kv| {
@@ -4462,4 +4478,78 @@ test "a seed peer named twice does not leak the second retry key" {
     cn.bootstrapDial();
     // Two distinct addresses, one entry each.
     try std.testing.expectEqual(@as(u32, 2), cn.seed_retry.count());
+}
+
+test "an unsolicited merge_ack truncates nothing: the ack is bound to the offer" {
+    // `onMergeAck` discarded its `conn_id` (`_ = conn_id;`) and acted on
+    // `common_tail` alone, so a zero-length `merge_ack` frame from *any*
+    // admitted member truncated every data journal on this node back to the
+    // last slot of the common epoch. Only the survivor this member offered
+    // its branch to may answer that offer.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    var jit = node.control.journals.keyIterator();
+    const data_id = (jit.next() orelse return error.NoDataJournal).*;
+
+    // One data slot in epoch 1, a failover to epoch 2 (the step that sets
+    // `branch_start`/`common_tail`), then a data slot in epoch 2 — the
+    // shape a losing branch has while it waits for the merge_ack.
+    {
+        const en = try cn.signedEntry(.data, data_id, "one", 0);
+        try cn.noteBuilt(data_id, en.author_seq);
+        _ = try cn.slotAndBroadcast(&en, false);
+    }
+    try cn.appendEpoch(.leader_lost);
+    {
+        const en = try cn.signedEntry(.data, data_id, "two", 0);
+        try cn.noteBuilt(data_id, en.author_seq);
+        _ = try cn.slotAndBroadcast(&en, false);
+    }
+    try std.testing.expectEqual(@as(u64, 1), cn.common_tail.?.epoch);
+    const head_before = cn.headFor(data_id);
+    try std.testing.expectEqual(@as(u64, 2), head_before.epoch);
+
+    // No merge_offer was ever sent, and conn 4242 is nobody.
+    try cn.onMergeAck(4242);
+    try std.testing.expectEqual(head_before, cn.headFor(data_id));
+    try std.testing.expect(!cn.syncing);
+
+    // An offer is outstanding on conn 7, and 4242 is still nobody.
+    cn.merging_to = 7;
+    try cn.onMergeAck(4242);
+    try std.testing.expectEqual(head_before, cn.headFor(data_id));
+    try std.testing.expect(!cn.syncing);
+
+    // The survivor this member offered its branch to does truncate it: the
+    // epoch-2 branch goes, the epoch-1 common prefix stays.
+    try cn.onMergeAck(7);
+    try std.testing.expectEqual(@as(u64, 1), cn.headFor(data_id).epoch);
+    try std.testing.expect(cn.syncing);
+    // One ack per offer: a replay of it is inert.
+    try std.testing.expectEqual(@as(?u64, null), cn.merging_to);
 }
