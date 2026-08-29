@@ -159,6 +159,22 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- The deterministic simulator now drives the **node loop**, not only the
+  pure fold, election and merge functions - the second half of OQ 27, which
+  PRD 0003 named as its remaining work. `sim.LoopWorld` runs real
+  `ClusterNode`s over real stores without `start()`: no loop, timer or
+  reader task and no sockets, with the world owning the wire (frames are
+  queued per ordered pair and delivered into `onFrame`), connectivity
+  (`cut`/`restore`) and liveness (a cut backdates the peer's last
+  heartbeat, because the failure detector reads the real monotonic clock
+  and has no seam). Nine `sim*` entry points on `ClusterNode` are the seam;
+  each is a thin call onto the handler the running loop uses, so a scenario
+  exercises the shipped state machine rather than a copy.
+  Its three-member partition scenario turns PRD 0003's known heal issue
+  from an intermittent observation into a fixed reproduction: the losing
+  branch's leader converges on the survivor, and the losing branch's
+  follower does not.
+
 - A live `leadership.*` change now hands the term over on the record, which
   is what PRD 0003 *Live reconfiguration* specifies and nothing implemented:
   the leader appends the `settings` entry and then an `epoch` with

@@ -49,19 +49,30 @@ elect nobody - `fallback = stall` is meant to stall.
 The fold infers a re-slot from its author and epoch
 (`chain.zig applyControl`), so a merged chain replays identically after a
 restart without a side channel. The embedded-host write API shipped with
-it (`cluster.ClusterNode.localAppend`, PRD 0005 step 1). Remaining: the
-simulator driving the loop itself (OQ 27's second half), and the open
-questions the matrix names.
+it (`cluster.ClusterNode.localAppend`, PRD 0005 step 1). The simulator driving the loop itself
+(OQ 27's second half) landed 2026-08-30: `sim.LoopWorld` runs real
+`ClusterNode`s over real stores without `start()`, owning the wire,
+connectivity and liveness so a scenario is deterministic. Remaining: the
+open questions the matrix names.
 
 Known issue, found 2026-08-27 while exercising the loop from
 `examples/embed-cluster`: a **three-member partition that elects a second
 leader does not reliably converge on heal** - the survivor's branch fetch
 or the losers' re-sync can stall without retry (the two-member merge, e2e
 (b), converges; three members - two losers - surfaced a stall). The e2e
-matrix's (b) is two-member; the three-member merge needs the simulator over
-the loop (OQ 27's second half) and a deterministic scenario before it can
-be pinned. Reported rather than silently worked around: the embed-cluster
-example's partition stays short enough to avoid the election.
+matrix's (b) is two-member. Both things this needed - the simulator over
+the loop (OQ 27's second half) and a deterministic scenario - landed
+2026-08-30 as `sim.LoopWorld` and its
+`a three-member partition elects a second leader and heals` scenario, and
+the issue is now pinned rather than intermittent: the losing branch's
+*leader* converges on the survivor and the losing branch's *follower* does
+not, keeping its dead branch and its old leader
+([report](../reports/bugs/2026-08-30-three-member-merge-strands-the-losing-follower.md)).
+The cause is not yet established. The same scenario also records that a
+healed cluster with no writer stays forked: the merge is broadcast-driven,
+and heartbeats carry the peer's head without anything comparing it.
+Reported rather than silently worked around: the embed-cluster example's
+partition stays short enough to avoid the election.
 
 One implementation note the simulator pinned down ([OQ 44](0002-ttl-and-staleness.md)):
 a merge converges only if every node **re-folds from the last common slot** -

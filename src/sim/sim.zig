@@ -36,6 +36,9 @@ const settings_fold = @import("../settings/fold.zig");
 const membership = @import("../cluster/membership.zig");
 const election = @import("../cluster/election.zig");
 const epoch = @import("../cluster/epoch.zig");
+const cluster = @import("../cluster/node.zig");
+const journal = @import("../journal/journal.zig");
+const net = @import("../net/net.zig");
 
 /// One message on the wire (and in a node's applied chain): a slot and its
 /// entry. Owned by the world; nodes reference it. `reslotted` marks a
@@ -818,6 +821,16 @@ fn memberKey(seed: u64) crypto.sign.Ed25519.KeyPair {
     return crypto.sign.Ed25519.KeyPair.generateDeterministic(key_seed) catch unreachable;
 }
 
+/// The `changes` blob a `settings` wire message carries: one cluster-scoped
+/// key set to `value`. `settingsEntryPayload` above wraps the same changes
+/// in a chain payload; the wire message carries the changes alone.
+fn settingsEntryChanges(buf: []u8, key: u16, value: schema.Value) []const u8 {
+    const changes = [_]validate.Change{.{ .key = key, .value = value }};
+    const len = settings_fold.changesLen(&changes);
+    settings_fold.encodeChanges(&changes, buf[0..len]) catch unreachable;
+    return buf[0..len];
+}
+
 /// The node key the world derives for a node index (member ids must be
 /// predictable in the tests, so the derivation is exposed).
 pub fn nodeKey(index: usize) crypto.sign.Ed25519.KeyPair {
@@ -1041,4 +1054,564 @@ test "clock skew does not disturb the merge (re-fold discipline)" {
     // cross-clock comparison (that is why merge.settle_ms exists only at the
     // checkpoint level).
     try world.assertConverged();
+}
+
+test "three-member partition: the losing side's follower converges too (PRD 0003)" {
+    // PRD 0003's *Status* carries this as a known issue, found 2026-08-27
+    // while exercising the loop from `examples/embed-cluster`:
+    //
+    // > a **three-member partition that elects a second leader does not
+    // > reliably converge on heal** - the survivor's branch fetch or the
+    // > losers' re-sync can stall without retry (the two-member merge, e2e
+    // > (b), converges; three members - two losers - surfaced a stall). The
+    // > e2e matrix's (b) is two-member; the three-member merge needs the
+    // > simulator over the loop (OQ 27's second half) and a deterministic
+    // > scenario before it can be pinned.
+    //
+    // This is that deterministic scenario, over the pure rules. Every
+    // existing partition scenario splits one node against one node, so the
+    // shape the issue is about - a losing *side* with a follower on it,
+    // which must end up holding the survivor's chain without ever having
+    // spoken to the survivor's leader - had no coverage at all.
+    var world = try World.init(test_alloc, 0x3EED, test_control_id, &.{});
+    defer world.deinit();
+    const a: usize = 0;
+    const b = try world.addMember(memberKey(1), "node-b", a);
+    const c = try world.addMember(memberKey(2), "node-c", a);
+
+    // A leads under seniority and everyone is at the same head.
+    var buf: [128]u8 = undefined;
+    try world.append(a, .settings, settingsEntryPayload(&buf, max_journals, .{ .u32 = 11 }));
+    for (0..3) |_| try world.tick();
+    try world.assertConverged();
+    try std.testing.expectEqualSlices(u8, &world.nodeId(a), &(try world.leaderOf(a)).?);
+
+    // The senior member is cut off from the other two. B and C keep each
+    // other, so their side elects: B is the senior of the pair.
+    try world.partition(&.{ &[_]usize{a}, &[_]usize{ b, c } });
+    for (0..3) |_| try world.tick();
+    try std.testing.expectEqualSlices(u8, &world.nodeId(a), &(try world.leaderOf(a)).?);
+    try std.testing.expectEqualSlices(u8, &world.nodeId(b), &(try world.leaderOf(b)).?);
+    // C follows B, not A: the losing side has a real follower on it.
+    try std.testing.expectEqualSlices(u8, &world.nodeId(b), &(try world.leaderOf(c)).?);
+
+    // Both sides write. C's copy of B's branch is what the heal has to
+    // undo and re-fold.
+    try world.append(a, .settings, settingsEntryPayload(&buf, max_journals, .{ .u32 = 22 }));
+    try world.append(b, .settings, settingsEntryPayload(&buf, max_journals, .{ .u32 = 33 }));
+    for (0..3) |_| try world.tick();
+    try std.testing.expectEqual(
+        @as(u32, 33),
+        world.nodes.items[c].fold.settings.getU32(max_journals),
+    );
+
+    try world.heal();
+    for (0..6) |_| try world.tick();
+
+    // One chain on all three, folds hash-equal (assertConverged), and the
+    // survivor A's value wins: B's settings entry re-slotted as a no-op on
+    // every node, including the follower that had already folded it live.
+    try world.assertConverged();
+    for (world.nodes.items) |*node| {
+        try std.testing.expectEqual(@as(u32, 22), node.fold.settings.getU32(max_journals));
+    }
+
+    // Every entry written on either side resolves everywhere - the losing
+    // side's entries kept their ids and only moved slot (PRD 0003 G7).
+    const a_second = entry.Id{ .author = world.nodeId(a), .author_seq = 3 };
+    const b_branch = entry.Id{ .author = world.nodeId(b), .author_seq = 2 };
+    for (0..3) |i| {
+        try std.testing.expect(world.entryResolves(i, a_second));
+        try std.testing.expect(world.entryResolves(i, b_branch));
+    }
+    // A merge really happened, and C - which never spoke to A during the
+    // partition - folded it.
+    try std.testing.expect(world.nodes.items[c].fold.last_merge != null);
+}
+
+// ---------------------------------------------------------------------------
+// The loop world (OQ 27's second half)
+// ---------------------------------------------------------------------------
+
+/// A deterministic driver for the **node loop**, not just the pure rules.
+///
+/// `World` above drives `membership`/`election`/`epoch` directly: it is the
+/// reference implementation of the merge discipline, and it converges a
+/// three-member partition without complaint. PRD 0003's *Status* records a
+/// known issue that it therefore cannot see:
+///
+/// > a **three-member partition that elects a second leader does not
+/// > reliably converge on heal** ... The e2e matrix's (b) is two-member; the
+/// > three-member merge needs the simulator over the loop (OQ 27's second
+/// > half) and a deterministic scenario before it can be pinned.
+///
+/// `LoopWorld` is that second half. It runs real `cluster.ClusterNode`s over
+/// real stores, and drives them *without* `start()`: no loop task, no timer
+/// task, no reader task, no sockets. The world owns three things the node
+/// would otherwise get from the outside, and owns them synchronously:
+///
+/// - **the wire.** Each ordered pair of nodes has a queue. A node's
+///   connection appends the frames it sends; `pump` hands each queued frame
+///   to the peer's `onFrame` and repeats until the queues are empty, so a
+///   request and its reply resolve inside one call in a fixed order.
+/// - **connectivity.** `cut` and `restore` decide which queues deliver.
+///   Because the world owns this, the node's own redial is suppressed:
+///   `dial_at_ms` is cleared before each tick, so `onTick` never reaches
+///   `spawnDial` and no task is ever spawned.
+/// - **liveness.** `elapsedMs` reads the real monotonic clock and has no
+///   seam, so the failure detector cannot be driven by advancing a fake
+///   clock. `cut` instead backdates the peer's `last_heard_ms`, which is
+///   what a missed heartbeat does, and the suspect branch then fires on the
+///   very next tick.
+///
+/// What it does *not* model: the reader task's concurrency (frames are
+/// delivered on the driving thread, in order), real timing, and the dial
+/// path. Those are the e2e matrix's job. What it does model is the loop's
+/// own state machine, which is where the known issue lives.
+pub const LoopWorld = struct {
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    nodes: std.ArrayListUnmanaged(LoopNode) = .empty,
+    /// `links[i * n + j]`: whether frames queued from i to j are delivered.
+    links: std.ArrayListUnmanaged(bool) = .empty,
+    /// One outbound queue per ordered pair, indexed like `links`.
+    wires: std.ArrayListUnmanaged(Wire) = .empty,
+    /// Connections, indexed like `links`: the id node i uses for its link
+    /// to node j, or null when the pair is not connected.
+    conn_ids: std.ArrayListUnmanaged(?u64) = .empty,
+    size: usize,
+
+    const Wire = struct {
+        frames: std.ArrayListUnmanaged([]u8) = .empty,
+    };
+
+    /// One node: its data directory, store and loop, plus the per-peer
+    /// connection contexts (stable addresses, so `Conn.ctx` stays valid).
+    const LoopNode = struct {
+        tmp: std.testing.TmpDir,
+        node: *journal.Node,
+        cn: *cluster.ClusterNode,
+        ctxs: []LinkCtx,
+        /// Borrowed by `cn.options.address`, so the world owns it.
+        address: []u8,
+    };
+
+    const LinkCtx = struct {
+        world: *LoopWorld,
+        from: usize,
+        to: usize,
+    };
+
+    fn wireIndex(self: *LoopWorld, from: usize, to: usize) usize {
+        return from * self.size + to;
+    }
+
+    fn sendFrame(ctx: *anyopaque, _: std.Io, body: []const u8) net.transport.SendError!void {
+        const link: *LinkCtx = @ptrCast(@alignCast(ctx));
+        const self = link.world;
+        const idx = self.wireIndex(link.from, link.to);
+        if (!self.links.items[idx]) return; // partitioned: the frame is lost
+        const copy = self.allocator.dupe(u8, body) catch return error.SendFailed;
+        self.wires.items[idx].frames.append(self.allocator, copy) catch {
+            self.allocator.free(copy);
+            return error.SendFailed;
+        };
+    }
+
+    fn recvFrame(
+        _: *anyopaque,
+        _: std.Io,
+        _: std.mem.Allocator,
+    ) net.transport.RecvError![]u8 {
+        // Nothing reads: the world delivers into `onFrame` directly.
+        return error.EndOfStream;
+    }
+
+    fn nopConn(_: *anyopaque, _: std.Io) void {}
+
+    fn nullConnect(
+        _: *anyopaque,
+        _: std.Io,
+        _: std.mem.Allocator,
+        _: []const u8,
+    ) anyerror!net.transport.Conn {
+        // The world makes every connection; a node never dials.
+        return error.ConnectionRefused;
+    }
+
+    fn nopTransport(_: *anyopaque) void {}
+
+    /// `size` nodes: node 0 founds the cluster with `genesis_changes`, the
+    /// rest hold only a member key and join by handshake, exactly as a real
+    /// joiner does.
+    pub fn init(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        size: usize,
+        genesis_changes: []const validate.Change,
+    ) !*LoopWorld {
+        const self = try allocator.create(LoopWorld);
+        errdefer allocator.destroy(self);
+        self.* = .{ .allocator = allocator, .io = io, .size = size };
+
+        try self.links.appendNTimes(allocator, true, size * size);
+        try self.wires.appendNTimes(allocator, .{}, size * size);
+        try self.conn_ids.appendNTimes(allocator, null, size * size);
+
+        for (0..size) |i| {
+            var tmp = std.testing.tmpDir(.{});
+            tmp.dir.createDir(io, "data", .default_dir) catch {};
+            {
+                // `journal.init` takes the directory handle; `writeMemberKey`
+                // borrows it, so only the joiner's copy is closed here.
+                const dd = try tmp.dir.openDir(io, "data", .{ .iterate = true });
+                if (i == 0) {
+                    try journal.init(
+                        allocator,
+                        io,
+                        dd,
+                        genesis_changes,
+                        "main",
+                        &journal.wallClock,
+                    );
+                } else {
+                    defer dd.close(io);
+                    const kp = crypto.sign.Ed25519.KeyPair.generateDeterministic(
+                        deterministicSeed(i),
+                    ) catch unreachable;
+                    try journal.writeMemberKey(allocator, io, dd, kp);
+                }
+            }
+            const dd = try tmp.dir.openDir(io, "data", .{ .iterate = true });
+            const node = try journal.Node.open(allocator, io, dd, .{ .fsync = .never });
+            // `ClusterNode` borrows the address; it has to outlive the node.
+            const address = try std.fmt.allocPrint(allocator, "sim-{d}", .{i});
+            const cn = try cluster.ClusterNode.init(allocator, io, node, .{
+                .transport = .{
+                    .ctx = self,
+                    .connect_fn = nullConnect,
+                    .deinit_fn = nopTransport,
+                },
+                .address = address,
+            });
+            const ctxs = try allocator.alloc(LinkCtx, size);
+            for (ctxs, 0..) |*c, j| c.* = .{ .world = self, .from = i, .to = j };
+            try self.nodes.append(allocator, .{
+                .tmp = tmp,
+                .node = node,
+                .cn = cn,
+                .ctxs = ctxs,
+                .address = address,
+            });
+        }
+        // Each node keeps one operator connection - the channel a CLI or a
+        // wire client would hold. It is the self-link, whose `links` entry
+        // is false, so everything written to it is discarded: a scenario
+        // needs somewhere for an ack to go, not the ack itself.
+        for (0..size) |i| {
+            self.links.items[self.wireIndex(i, i)] = false;
+            const id = try self.nodes.items[i].cn.simRegisterConn(self.connFor(i, i), false);
+            self.conn_ids.items[self.wireIndex(i, i)] = id;
+        }
+        return self;
+    }
+
+    fn deterministicSeed(i: usize) [32]u8 {
+        var seed: [32]u8 = undefined;
+        crypto.hash.sha2.Sha256.hash(&std.mem.toBytes(@as(u64, i)), &seed, .{});
+        return seed;
+    }
+
+    pub fn deinit(self: *LoopWorld) void {
+        for (self.nodes.items) |*n| {
+            n.cn.deinit();
+            n.node.deinit();
+            self.allocator.free(n.ctxs);
+            self.allocator.free(n.address);
+            var tmp = n.tmp;
+            tmp.cleanup();
+        }
+        self.nodes.deinit(self.allocator);
+        for (self.wires.items) |*w| {
+            for (w.frames.items) |f| self.allocator.free(f);
+            w.frames.deinit(self.allocator);
+        }
+        self.wires.deinit(self.allocator);
+        self.links.deinit(self.allocator);
+        self.conn_ids.deinit(self.allocator);
+        self.allocator.destroy(self);
+    }
+
+    fn connFor(self: *LoopWorld, from: usize, to: usize) net.transport.Conn {
+        return .{
+            .ctx = &self.nodes.items[from].ctxs[to],
+            .recv_frame = recvFrame,
+            .send_frame = sendFrame,
+            .shutdown_fn = nopConn,
+            .close_fn = nopConn,
+        };
+    }
+
+    /// Opens the connection `dialer` -> `admitter` and runs the handshake to
+    /// completion: the dialer's `hello` reaches the admitter, whose
+    /// `hello_ack` comes back, and (for a newcomer) the admitter's `join`
+    /// goes onto the chain.
+    pub fn connect(self: *LoopWorld, dialer: usize, admitter: usize) !void {
+        const d = self.nodes.items[dialer].cn;
+        const a = self.nodes.items[admitter].cn;
+        const d_conn = try d.simRegisterConn(self.connFor(dialer, admitter), true);
+        const a_conn = try a.simRegisterConn(self.connFor(admitter, dialer), false);
+        self.conn_ids.items[self.wireIndex(dialer, admitter)] = d_conn;
+        self.conn_ids.items[self.wireIndex(admitter, dialer)] = a_conn;
+        try d.simSendHello(d_conn);
+        try self.pump();
+    }
+
+    /// Delivers every queued frame, in node order, until the queues are
+    /// empty. A frame that a partition has cut was never queued.
+    pub fn pump(self: *LoopWorld) !void {
+        var rounds: usize = 0;
+        while (rounds < 64) : (rounds += 1) {
+            var moved = false;
+            for (0..self.size) |from| {
+                for (0..self.size) |to| {
+                    if (from == to) continue;
+                    const idx = self.wireIndex(from, to);
+                    const wire = &self.wires.items[idx];
+                    if (wire.frames.items.len == 0) continue;
+                    const body = wire.frames.orderedRemove(0);
+                    defer self.allocator.free(body);
+                    moved = true;
+                    const conn_id = self.conn_ids.items[self.wireIndex(to, from)] orelse continue;
+                    self.nodes.items[to].cn.simDeliver(conn_id, body);
+                }
+            }
+            if (!moved) return;
+        }
+        return error.WireDidNotSettle;
+    }
+
+    /// One round: every node runs its periodic work, then the wire settles.
+    /// Redials are suppressed first - the world owns connectivity.
+    pub fn tick(self: *LoopWorld) !void {
+        for (self.nodes.items) |*n| n.cn.simClearRedials();
+        for (self.nodes.items) |*n| try n.cn.simTick();
+        try self.pump();
+        self.reapClosedConns();
+    }
+
+    /// A connection the loop shut down is destroyed by its reader's
+    /// peer-gone notice; with no reader, the world plays that part.
+    fn reapClosedConns(self: *LoopWorld) void {
+        for (0..self.size) |i| {
+            for (0..self.size) |j| {
+                if (i == j) continue; // the operator connection is not a peer
+                const idx = self.wireIndex(i, j);
+                const conn_id = self.conn_ids.items[idx] orelse continue;
+                if (!self.nodes.items[i].cn.simConnClosing(conn_id)) continue;
+                self.nodes.items[i].cn.simPeerGone(conn_id);
+                self.conn_ids.items[idx] = null;
+            }
+        }
+    }
+
+    /// Severs both directions between `i` and `j` and backdates the
+    /// heartbeat each holds for the other, so the suspect branch fires on
+    /// the next tick rather than after a real 5 s.
+    pub fn cut(self: *LoopWorld, i: usize, j: usize) void {
+        self.links.items[self.wireIndex(i, j)] = false;
+        self.links.items[self.wireIndex(j, i)] = false;
+        self.nodes.items[i].cn.simExpireHeartbeat(self.nodes.items[j].node.member_id);
+        self.nodes.items[j].cn.simExpireHeartbeat(self.nodes.items[i].node.member_id);
+    }
+
+    /// Reopens both directions and re-runs the handshake, which is what a
+    /// successful redial would have done.
+    pub fn restore(self: *LoopWorld, i: usize, j: usize) !void {
+        self.links.items[self.wireIndex(i, j)] = true;
+        self.links.items[self.wireIndex(j, i)] = true;
+        try self.connect(i, j);
+    }
+
+    /// The fold digest of every node, which is what "converged" means (PRD
+    /// 0003 G7: one chain, hash-equal folds).
+    pub fn assertConverged(self: *LoopWorld) !void {
+        var all: [16]usize = undefined;
+        for (0..self.size) |i| all[i] = i;
+        try self.assertConvergedAmong(all[0..self.size]);
+    }
+
+    /// The same, over a subset - for a scenario in which part of the
+    /// cluster is known not to have converged yet.
+    pub fn assertConvergedAmong(self: *LoopWorld, indices: []const usize) !void {
+        var reference: ?[32]u8 = null;
+        for (indices) |i| {
+            const h = try self.nodes.items[i].cn.node.control.hash(self.allocator);
+            if (reference) |r| {
+                try std.testing.expectEqualSlices(u8, &r, &h);
+            } else {
+                reference = h;
+            }
+        }
+    }
+
+    pub fn leaderOf(self: *LoopWorld, i: usize) ?[16]u8 {
+        const e = self.nodes.items[i].cn.node.control.epoch orelse return null;
+        return e.leader;
+    }
+
+    /// A cluster-scoped settings write on node `i`, over its operator
+    /// connection - the write a CLI or a wire client makes. A partitioned
+    /// node can still be written to, which is the point: both sides of a
+    /// partition take writes.
+    pub fn settingsWrite(self: *LoopWorld, i: usize, changes: []const u8) !void {
+        const conn_id = self.conn_ids.items[self.wireIndex(i, i)] orelse return error.NoConn;
+        try self.nodes.items[i].cn.simSettings(conn_id, changes);
+        try self.pump();
+    }
+
+    pub fn memberId(self: *LoopWorld, i: usize) [16]u8 {
+        return self.nodes.items[i].node.member_id;
+    }
+};
+
+test "LoopWorld: three members join and replicate over the real loop" {
+    // The first scenario over the node loop itself (OQ 27's second half):
+    // real stores, the real state machine, no threads and no sockets.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(8) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    const admission = schema.keyIndex("cluster.admission").?;
+    const genesis = [_]validate.Change{.{
+        .key = admission,
+        .value = .{ .enum_value = schema.enumValue(admission, "open").? },
+    }};
+    var world = try LoopWorld.init(test_alloc, oio, 3, &genesis);
+    defer world.deinit();
+
+    try world.connect(1, 0);
+    try world.connect(2, 0);
+    try world.connect(2, 1);
+    for (0..8) |_| try world.tick();
+
+    // The founder leads under seniority and every member folded both joins.
+    try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(0).?);
+    for (0..3) |i| {
+        try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(i).?);
+        try std.testing.expectEqual(
+            @as(usize, 3),
+            world.nodes.items[i].cn.node.control.members.items.len,
+        );
+    }
+    try world.assertConverged();
+}
+
+test "LoopWorld: a three-member partition elects a second leader and heals" {
+    // PRD 0003 *Status* records this as a known issue found 2026-08-27 from
+    // `examples/embed-cluster`: "a three-member partition that elects a
+    // second leader does not reliably converge on heal ... the three-member
+    // merge needs the simulator over the loop (OQ 27's second half) and a
+    // deterministic scenario before it can be pinned." This is that
+    // scenario, over the loop rather than over the pure rules.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(8) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    const admission = schema.keyIndex("cluster.admission").?;
+    const genesis = [_]validate.Change{.{
+        .key = admission,
+        .value = .{ .enum_value = schema.enumValue(admission, "open").? },
+    }};
+    var world = try LoopWorld.init(test_alloc, oio, 3, &genesis);
+    defer world.deinit();
+
+    // Join through the founder first: a hello landing on a member that has
+    // not yet folded the newcomer's join is not an admission (bug
+    // 2026-08-28-sweep3-follower-admitter-join-fails), so the mesh link
+    // between the two joiners is opened once both are members.
+    try world.connect(1, 0);
+    try world.connect(2, 0);
+    for (0..8) |_| try world.tick();
+    try world.connect(2, 1);
+    for (0..4) |_| try world.tick();
+    try world.assertConverged();
+    try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(0).?);
+
+    // Cut the senior member off; 1 and 2 keep each other, so their side can
+    // elect. 1 is the senior of the pair.
+    world.cut(0, 1);
+    world.cut(0, 2);
+    for (0..6) |_| try world.tick();
+    try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(0).?);
+    try std.testing.expectEqualSlices(u8, &world.memberId(1), &world.leaderOf(1).?);
+    try std.testing.expectEqualSlices(u8, &world.memberId(1), &world.leaderOf(2).?);
+    // Node 2 is a follower on the losing side: it folded 1's epoch without
+    // ever hearing from 0. That is the shape the known issue is about, and
+    // no scenario had it before.
+    try std.testing.expect(world.nodes.items[2].cn.node.control.epoch.?.number > 1);
+
+    // Both sides write. `max_journals` is a cluster-scoped setting, so the
+    // two values are directly comparable after the heal.
+    var buf: [128]u8 = undefined;
+    try world.settingsWrite(0, settingsEntryChanges(&buf, max_journals, .{ .u32 = 21 }));
+    try world.settingsWrite(1, settingsEntryChanges(&buf, max_journals, .{ .u32 = 42 }));
+    for (0..4) |_| try world.tick();
+    try std.testing.expectEqual(
+        @as(u32, 21),
+        world.nodes.items[0].cn.node.control.settings.getU32(max_journals),
+    );
+    for (1..3) |i| {
+        try std.testing.expectEqual(
+            @as(u32, 42),
+            world.nodes.items[i].cn.node.control.settings.getU32(max_journals),
+        );
+    }
+
+    try world.restore(0, 1);
+    try world.restore(0, 2);
+    for (0..10) |_| try world.tick();
+
+    // Reconnecting is not enough on its own: after ten ticks with the links
+    // back up, node 0 is still on its epoch-1 branch and nodes 1 and 2 on
+    // their epoch-2 one. Heartbeats carry the peer's head and nothing
+    // compares it, so nothing detects the divergence until a record fails
+    // `prev_slot_hash`.
+    try std.testing.expectEqual(
+        @as(u64, 1),
+        world.nodes.items[0].cn.node.control.epoch.?.number,
+    );
+    try std.testing.expectEqual(
+        @as(u64, 2),
+        world.nodes.items[1].cn.node.control.epoch.?.number,
+    );
+
+    // A write after the heal is what starts the merge.
+    try world.settingsWrite(1, settingsEntryChanges(&buf, max_journals, .{ .u32 = 99 }));
+    for (0..30) |_| try world.tick();
+
+    // The survivor and the losing branch's *leader* converge: node 1
+    // discarded its branch, re-folded node 0's chain, and both hold node 0
+    // as leader with the survivor's value.
+    try world.assertConvergedAmong(&.{ 0, 1 });
+    try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(0).?);
+    try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(1).?);
+    try std.testing.expectEqual(
+        @as(u32, 21),
+        world.nodes.items[0].cn.node.control.settings.getU32(max_journals),
+    );
+
+    // The losing branch's *follower* is stranded: still on the dead branch,
+    // still naming its old leader. This is PRD 0003's known issue, pinned -
+    // "three members - two losers - surfaced a stall" - and reported at
+    // docs/reports/bugs/2026-08-30-three-member-merge-strands-the-losing-follower.md.
+    //
+    // The assertion is deliberately on the *current* behaviour, so that the
+    // change which fixes it fails here and has to update this scenario and
+    // that report together.
+    try std.testing.expectEqualSlices(u8, &world.memberId(1), &world.leaderOf(2).?);
+    try std.testing.expectEqual(
+        @as(u64, 2),
+        world.nodes.items[2].cn.node.control.epoch.?.number,
+    );
 }

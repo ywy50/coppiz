@@ -49,6 +49,13 @@ to land. Update it when a PRD changes status.
   reorder, configured + stall (G4 core), clock skew. Pins the merge
   discipline: on heal every node re-folds from the last common slot
   ([OQ 44](prds/0002-ttl-and-staleness.md)).
+  - The second half - the simulator driving the **node loop** - landed
+    2026-08-30 as `sim.LoopWorld`: real `ClusterNode`s over real stores,
+    driven without `start()` (no loop, timer or reader task, no sockets),
+    with the world owning the wire, connectivity and liveness. Its
+    three-member partition scenario pins PRD 0003's known heal issue, which
+    was intermittent until then
+    ([report](reports/bugs/2026-08-30-three-member-merge-strands-the-losing-follower.md)).
 - **Membership and leadership: wire, node loop, e2e** (2026-08-27) -
   [PRD 0003](prds/0003-membership-and-leadership.md) phases 4–6, on
   [OQ 19](prds/0003-membership-and-leadership.md) decided (own binary framing over one TCP
