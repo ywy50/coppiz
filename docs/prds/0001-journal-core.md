@@ -38,7 +38,12 @@ Implementation decisions recorded at the format freeze: one chain per
 journal with a cluster control journal (OQ 7 resolved); `author_seq` is
 monotone, gaps allowed (OQ 11 resolved); the `create_journal` control kind
 carries a new journal's id, name and initial settings (OQ 34, leader-only
-in v1); `join`/`leave`/`epoch`/`merge` fold since PRD 0003 phases 1–3
+in v1) and there is no drop - a journal's end state is *frozen*,
+`journal.allow_append = false`, which refuses new `data` with
+`journal_frozen` while `settings`, `stale` and `checkpoint` still fold, so
+the entries expire away and the freeze can be lifted
+([RFC 0019](../rfcs/0019-journal-lifecycle.md) option A; whether a
+`drop_journal` kind is ever added stays open there); `join`/`leave`/`epoch`/`merge` fold since PRD 0003 phases 1–3
 (2026-08-27, [ADR 0005](../adrs/0005-join-order-is-slot-position.md)) -
 until then they were refused as unimplemented. Snapshots are deferred (OQ
 17); the unslotted queue bound is local config with a provisional default

@@ -67,6 +67,9 @@ pub const Refusal = error{
     ScopeMismatch,
     /// A payload larger than journal.max_entry_bytes.
     TooLarge,
+    /// A data entry for a journal with journal.allow_append = false: the
+    /// journal is frozen (RFC 0019).
+    JournalFrozen,
     /// A join naming a key already a member (PRD 0003).
     AlreadyMember,
     /// A malformed join entry: bad payload, or a member id that does not
@@ -126,6 +129,7 @@ pub fn refusalName(err: anyerror) ?[]const u8 {
         error.NotLiveChangeable => "not_live_changeable",
         error.ScopeMismatch => "scope_mismatch",
         error.TooLarge => "too_large",
+        error.JournalFrozen => "journal_frozen",
         error.AlreadyMember => "already_member",
         error.BadJoin => "bad_join",
         error.BadLeave => "bad_leave",
@@ -501,7 +505,17 @@ pub const FoldState = struct {
             }
         } else {
             switch (en.kind) {
-                .data => {},
+                // A frozen journal (RFC 0019 option A) takes no new data.
+                // Only `data` is refused: the freeze has to be reversible,
+                // so a `settings` entry must still fold, and the entries
+                // already in the journal still have to expire away, which
+                // is `stale` and `checkpoint`. The rule lives in the fold,
+                // so every member refuses the same entry - a follower with
+                // a stale local view cannot accept what the leader
+                // refused.
+                .data => if (!self.settings.getBool(
+                    schema.keyIndex("journal.allow_append").?,
+                )) return error.JournalFrozen,
                 .settings => try self.applyJournalSettings(sl, en, cluster),
                 .stale => try self.applyStale(sl, en),
                 .checkpoint => try self.applyCheckpoint(sl, en, cluster),
@@ -1315,6 +1329,30 @@ fn nextAuthorSeq(fold: *const FoldState, author: [16]u8) u64 {
 /// Appends a data entry to the data journal. Both counters derive from the
 /// fold, so tests never drift: author_seq is the founder's next in this
 /// journal, slot_seq the chain's next (they only coincide at n = 1).
+/// Folds one journal-scoped `settings` entry onto the data chain. The
+/// freeze test changes settings four times; inlining the payload encode
+/// each time buries what it is testing.
+fn applyJournalSetting(
+    fix: *const Fix,
+    cluster: anytype,
+    changes: []const validate.Change,
+    ts: u64,
+) !void {
+    const pl = SettingsPayload{
+        .scope = .journal,
+        .journal_id = fix.data_id,
+        .changes = changes,
+    };
+    const buf = try test_alloc.alloc(u8, settings_fold.payloadLen(pl));
+    defer test_alloc.free(buf);
+    try settings_fold.encodePayload(pl, buf);
+    const seq = nextAuthorSeq(&cluster.data, fix.founder_id);
+    const en = try fix.entryFor(.settings, fix.data_id, seq, 0, buf);
+    const next = (cluster.data.head orelse slot.Position{ .epoch = 1, .seq = 0 }).seq + 1;
+    const sl = try fix.slotFor(1, next, entry.entryHash(&en), cluster.data.head_slot_hash, ts);
+    try cluster.data.applyData(&cluster.control, &sl, &en);
+}
+
 fn appendData(
     fix: *const Fix,
     control: *FoldState,
@@ -1811,6 +1849,83 @@ test "chain continuity: bad prev, gapped seq, and backwards clocks are refused" 
         error.BadTimestamp,
         cluster.data.applyData(&cluster.control, &sl, &en),
     );
+}
+
+test "a frozen journal refuses data and still folds settings, stale and checkpoints" {
+    // RFC 0019 option A: a journal's end state is frozen, not dropped.
+    // `journal.allow_append = false` stops new data; everything that lets
+    // the journal wind down - a settings entry (including the one that
+    // unfreezes it), an author's stale mark, and the checkpoints that
+    // reclaim the bytes - must still fold, or the freeze would be a
+    // one-way trip and the entries could never expire away.
+    var fix = Fix.init();
+    var cluster = try clusterWithDataJournal(&fix);
+    defer {
+        cluster.control.deinit();
+        cluster.data.deinit();
+    }
+    try appendData(&fix, &cluster.control, &cluster.data, 0, "before", 1002);
+
+    const allow_append = schema.keyIndex("journal.allow_append").?;
+    const freeze = [_]validate.Change{.{ .key = allow_append, .value = .{ .boolean = false } }};
+    try applyJournalSetting(&fix, &cluster, &freeze, 1003);
+    try std.testing.expect(!cluster.data.settings.getBool(allow_append));
+
+    // A data entry is now refused, by name.
+    {
+        const seq = nextAuthorSeq(&cluster.data, fix.founder_id);
+        const en = try fix.entryFor(.data, fix.data_id, seq, 0, "after");
+        const next = cluster.data.head.?.seq + 1;
+        const sl = try fix.slotFor(
+            1,
+            next,
+            entry.entryHash(&en),
+            cluster.data.head_slot_hash,
+            1004,
+        );
+        try std.testing.expectError(
+            error.JournalFrozen,
+            cluster.data.applyData(&cluster.control, &sl, &en),
+        );
+    }
+    try std.testing.expectEqualStrings(
+        "journal_frozen",
+        refusalName(error.JournalFrozen).?,
+    );
+
+    // The entry already in the journal is untouched, and the head did not
+    // move: a refusal is not a slot.
+    try std.testing.expectEqual(@as(?slot.Position, .{ .epoch = 1, .seq = 2 }), cluster.data.head);
+
+    // An author's stale mark still folds on a frozen journal.
+    const stale_enforce = schema.keyIndex("stale.enforce").?;
+    const on = [_]validate.Change{.{ .key = stale_enforce, .value = .{
+        .enum_value = schema.enumValue(stale_enforce, "author").?,
+    } }};
+    try applyJournalSetting(&fix, &cluster, &on, 1005);
+    {
+        var buf: [24]u8 = undefined;
+        encodeStalePayload(
+            .{ .target = .{ .author = fix.founder_id, .author_seq = 1 } },
+            &buf,
+        );
+        const seq = nextAuthorSeq(&cluster.data, fix.founder_id);
+        const en = try fix.entryFor(.stale, fix.data_id, seq, 0, &buf);
+        const next = cluster.data.head.?.seq + 1;
+        const sl = try fix.slotFor(
+            1,
+            next,
+            entry.entryHash(&en),
+            cluster.data.head_slot_hash,
+            1006,
+        );
+        try cluster.data.applyData(&cluster.control, &sl, &en);
+    }
+
+    // Unfreezing is an ordinary settings change, and data folds again.
+    const thaw = [_]validate.Change{.{ .key = allow_append, .value = .{ .boolean = true } }};
+    try applyJournalSetting(&fix, &cluster, &thaw, 1007);
+    try appendData(&fix, &cluster.control, &cluster.data, 0, "after thaw", 1008);
 }
 
 test "stale: gated by enforce, author-only, idempotent (PRD 0002 G3, G7)" {

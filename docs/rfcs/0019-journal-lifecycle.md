@@ -146,7 +146,13 @@ would be new); after, B is a versioned addition.
 
 ## Next steps / action items
 
-- [ ] Add the freeze representation (a read-only journal setting).
+- [x] Add the freeze representation (a read-only journal setting) - done
+      2026-08-30: `journal.allow_append` (bool, journal scope, default
+      true, live-changeable). The fold refuses a `data` entry with
+      `journal_frozen` and still folds `settings`, `stale` and
+      `checkpoint`, so a frozen journal can expire its entries away and be
+      unfrozen. The drop half of OQ 34 - whether option B is ever built -
+      is what keeps this RFC open.
 - [ ] Write the ADR once decided; update OQ 34's status (the drop half).
 
 ## References
