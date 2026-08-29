@@ -4,11 +4,20 @@
 
 - **What failed:** `validateState` refuses only an *empty* authority list. A non-empty list whose entries match no member - a 64-hex public key pasted instead of a 32-hex id, a dead hostname, any non-matching string - passes genesis and every join; once the cluster grows past n=1, `leader()` finds no authority and `fallback = stall` returns `null`.
 - **Impact:** The cluster strands permanently - and, since only the leader can author settings entries, the bad list can never be corrected online. The same no-self-heal class the empty-list fix (2026-08-28-join-can-strand-cluster-leaderless) closed.
-- **Resolution:** Still open. Statically validated.
+- **Resolution:** Resolved - `validateState` now takes the member table and refuses a non-empty authority list that resolves to no member under the same conditions the empty-list rule uses (n > 1, no seniority fallback).
 
 ## Status
 
-Open.
+Resolved - `validateState` (validate.zig) gained a `members` parameter and
+the `AuthoritiesMatchNoMember` rule: a non-empty authority list naming no
+member is refused exactly when the empty-list rule fires (n > 1,
+`fallback = stall`), so the n = 1 pre-provisioning carve-out is unchanged.
+The rule runs at the settings-apply hook (`applySettings`), the join hook
+(`applyJoin`, mirroring the empty-list fix), and — new — the live `leave`
+hook (`applyLeaveChecked`), which the empty rule could never violate since a
+leave only shrinks the count. The merge re-slot leave path skips the check:
+a refusal there would abort the heal with the merge entry already on the
+survivor's chain.
 
 ## Symptom and impact
 
@@ -24,7 +33,19 @@ The validation checks list *emptiness*, not list *resolvability*: an authority e
 
 ## Resolution
 
-Not yet fixed. Suggested direction: validate each authority entry against the member table at settings-apply time (an entry that matches no current member is either refused or warned), and/or make `fallback = stall` recoverable by authoring settings from a live member. A regression test should grow past n=1 with a ghost authority and expect a refusal, not a silent strand.
+Fixed: `validateState` (validate.zig) takes the member table
+(`validate.MemberView`, built by `chain.FoldState.memberViews`) and returns
+`error.AuthoritiesMatchNoMember` when a non-empty authority list resolves to
+no member and the state would strand (`!empty_ok` — the same n = 1 and
+seniority-fallback exceptions the empty-list rule uses, so pre-provisioning
+a future member at genesis still works). The rule is enforced at the
+settings-apply hook (`applySettings`, both scopes — journal scope is inert,
+it carries no leadership keys), the join hook (`applyJoin`, the empty-list
+fix's own hook), and the live leave hook (`applyLeaveChecked` — a leave can
+remove the last resolvable authority, which the empty rule can never do).
+The merge re-slot leave path skips the check so a heal cannot abort on it.
+Regression tests: validate.zig's ghost-list test, membership.zig's
+ghost-join refusal and last-authority-leave refusal.
 
 ## Verification
 

@@ -283,6 +283,31 @@ pub const FoldState = struct {
         return @intCast(self.members.items.len);
     }
 
+    /// The member table as settings whole-state views (id + address), for
+    /// the authority-resolvability rule (bug
+    /// 2026-08-28-sweep3-ghost-authority-strand). `exclude` drops one member
+    /// (the leave path validates the would-be post-removal state). The
+    /// caller owns the slice.
+    pub fn memberViews(
+        self: *const FoldState,
+        allocator: std.mem.Allocator,
+        exclude: ?[16]u8,
+    ) ![]validate.MemberView {
+        const excluded = if (exclude) |id| self.memberById(id) != null else false;
+        const count = self.members.items.len - @intFromBool(excluded);
+        const views = try allocator.alloc(validate.MemberView, count);
+        errdefer allocator.free(views);
+        var i: usize = 0;
+        for (self.members.items) |m| {
+            if (exclude) |id| {
+                if (std.mem.eql(u8, &m.id, &id)) continue;
+            }
+            views[i] = .{ .id = m.id, .address = m.address };
+            i += 1;
+        }
+        return views;
+    }
+
     /// Validates and folds one `(slot, entry)` of the control journal's
     /// chain. On refusal, the fold is untouched.
     pub fn applyControl(
@@ -639,7 +664,9 @@ pub const FoldState = struct {
             return mapSettingsDecodeError(err);
         defer payload.deinit(self.allocator);
         if (payload.scope != .cluster) return error.ScopeMismatch;
-        settings_fold.applySettings(&self.settings, payload, self.memberCount()) catch |err|
+        const views = try self.memberViews(self.allocator, null);
+        defer self.allocator.free(views);
+        settings_fold.applySettings(&self.settings, payload, self.memberCount(), views) catch |err|
             return mapSettingsApplyError(err);
         try self.registerEntry(sl, en);
     }
@@ -661,8 +688,14 @@ pub const FoldState = struct {
         {
             return error.ScopeMismatch;
         }
-        settings_fold.applySettings(&self.settings, payload, cluster.memberCount()) catch |err|
-            return mapSettingsApplyError(err);
+        const views = try cluster.memberViews(self.allocator, null);
+        defer self.allocator.free(views);
+        settings_fold.applySettings(
+            &self.settings,
+            payload,
+            cluster.memberCount(),
+            views,
+        ) catch |err| return mapSettingsApplyError(err);
         try self.registerEntry(sl, en);
     }
 

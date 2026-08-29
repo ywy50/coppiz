@@ -102,15 +102,18 @@ pub fn applyJoin(
         .seniority = sl.position(),
         .address = try fold.allocator.dupe(u8, payload.address),
     });
-    // The empty-authorities rule is count-dependent (PRD 0004's n = 1
-    // exception): a join that grows the cluster past it would leave a
-    // state no leader can ever be elected under — and, since only the
-    // leader can author settings entries, one that can never self-heal
-    // (bug 2026-08-28-join-can-strand-cluster-leaderless). Refuse the
-    // join, rolling the member back, when the state would be invalid at
-    // the new count. A leave cannot create a violation (the rule only
-    // loosens as the count shrinks).
-    validate.validateState(&fold.settings, fold.memberCount()) catch {
+    // The whole-state rules are count-dependent (PRD 0004's n = 1
+    // exception): a join that grows the cluster past them would leave a
+    // state no leader can ever be elected under — an empty authority list,
+    // or a non-empty list that names no member (bug
+    // 2026-08-28-join-can-strand-cluster-leaderless,
+    // 2026-08-28-sweep3-ghost-authority-strand) — and, since only the
+    // leader can author settings entries, one that can never self-heal.
+    // Refuse the join, rolling the member back, when the state would be
+    // invalid at the new count.
+    const views = try fold.memberViews(fold.allocator, null);
+    defer fold.allocator.free(views);
+    validate.validateState(&fold.settings, fold.memberCount(), views) catch {
         removeMember(fold, payload.member_id);
         return error.InvalidSettings;
     };
@@ -141,13 +144,7 @@ pub fn applyLeave(
     fold: *chain.FoldState,
     en: *const entry.Entry,
 ) ApplyError!void {
-    const payload = decodeLeavePayload(en.payload) catch return error.BadControlPayload;
-    const leader = fold.epoch.?.leader;
-    const self_leave = std.mem.eql(u8, &payload.member_id, &en.author);
-    const leader_evicts = std.mem.eql(u8, &en.author, &leader);
-    if (!self_leave and !leader_evicts) return error.BadLeave;
-    if (fold.memberById(payload.member_id) == null) return error.BadLeave;
-    removeMember(fold, payload.member_id);
+    try applyLeaveChecked(fold, en, true);
 }
 
 /// Applies a re-slotted `leave` after a merge, with the same authorization
@@ -162,7 +159,37 @@ pub fn applyLeaveReslotted(
 ) ApplyError!void {
     const payload = decodeLeavePayload(en.payload) catch return error.BadControlPayload;
     if (fold.memberById(payload.member_id) == null) return;
-    try applyLeave(fold, en);
+    try applyLeaveChecked(fold, en, false);
+}
+
+/// The shared live/re-slot leave rule: authorization, then removal. The live
+/// path additionally runs the whole-state rule on the would-be post-leave
+/// state — a leave that would strand the cluster (removing the last
+/// resolvable authority, PRD 0004 goal 4) is refused with the fold untouched
+/// (bug 2026-08-28-sweep3-ghost-authority-strand). The merge re-slot path
+/// skips that check: the survivor's chain already carries the merge entry,
+/// so a refusal there would abort the heal permanently (bug
+/// 2026-08-29-merge-data-reslot-refusals).
+fn applyLeaveChecked(
+    fold: *chain.FoldState,
+    en: *const entry.Entry,
+    check_whole_state: bool,
+) ApplyError!void {
+    const payload = decodeLeavePayload(en.payload) catch return error.BadControlPayload;
+    const leader = fold.epoch.?.leader;
+    const self_leave = std.mem.eql(u8, &payload.member_id, &en.author);
+    const leader_evicts = std.mem.eql(u8, &en.author, &leader);
+    if (!self_leave and !leader_evicts) return error.BadLeave;
+    if (fold.memberById(payload.member_id) == null) return error.BadLeave;
+    if (check_whole_state) {
+        // The would-be state with the leaving member excluded; on refusal
+        // nothing was mutated (the member is removed only after the check).
+        const views = try fold.memberViews(fold.allocator, payload.member_id);
+        defer fold.allocator.free(views);
+        validate.validateState(&fold.settings, fold.memberCount() - 1, views) catch
+            return error.InvalidSettings;
+    }
+    removeMember(fold, payload.member_id);
 }
 
 /// Removes the target member, ending its seniority. Validation has already
@@ -417,6 +444,167 @@ test "a join that would strand the cluster leaderless is refused" {
     try std.testing.expectError(error.InvalidSettings, fold.applyControl(&sl, &en));
     // The join was rolled back; the cluster stays at one member.
     try std.testing.expectEqual(@as(usize, 1), fold.members.items.len);
+}
+
+test "a join that would strand via a ghost authority list is refused" {
+    // Bug 2026-08-28-sweep3-ghost-authority-strand: validateState checked
+    // only list *emptiness*, so a non-empty list naming no member passed
+    // genesis (n = 1 exempts the resolvability rule) and every join — until
+    // the cluster grew past n = 1 with no resolvable authority and
+    // election.leader returned null under fallback = stall forever.
+    var fix = Fix.init();
+    var fold = try chain.FoldState.init(test_alloc, true, [_]u8{0} ** 16);
+    defer fold.deinit();
+
+    const mode = schema.keyIndex("leadership.mode").?;
+    const authorities = schema.keyIndex("leadership.authorities").?;
+    const ghost_list = try test_alloc.alloc([]const u8, 1);
+    defer test_alloc.free(ghost_list);
+    ghost_list[0] = "deadbeefdeadbeefdeadbeefdeadbeef"; // 32-hex id no member has
+    const changes = [_]validate.Change{
+        .{ .key = mode, .value = .{ .enum_value = schema.enumValue(mode, "configured").? } },
+        .{ .key = authorities, .value = .{ .string_list = ghost_list } },
+    };
+    const g_payload = try test_alloc.alloc(
+        u8,
+        chain.genesisPayloadLen(.{
+            .founder_key = fix.founder.public_key.toBytes(),
+            .changes = &changes,
+        }),
+    );
+    defer test_alloc.free(g_payload);
+    try chain.encodeGenesisPayload(
+        .{ .founder_key = fix.founder.public_key.toBytes(), .changes = &changes },
+        g_payload,
+    );
+    const g_en = try fix.entryFor(fix.founder, .genesis, fix.control_id, 1, g_payload);
+    const g_sl = try fix.slotFor(
+        fix.founder,
+        1,
+        1,
+        entry.entryHash(&g_en),
+        slot.genesis_prev,
+        1000,
+    );
+    try fold.applyControl(&g_sl, &g_en);
+
+    const payload = try test_alloc.alloc(
+        u8,
+        joinPayloadLen(.{
+            .member_id = fix.second_id,
+            .public_key = fix.second.public_key.toBytes(),
+            .address = "10.0.0.2:3939",
+        }),
+    );
+    defer test_alloc.free(payload);
+    encodeJoinPayload(
+        .{
+            .member_id = fix.second_id,
+            .public_key = fix.second.public_key.toBytes(),
+            .address = "10.0.0.2:3939",
+        },
+        payload,
+    );
+    const en = try fix.entryFor(
+        fix.founder,
+        .join,
+        fix.control_id,
+        nextAuthorSeq(&fold, fix.founder_id),
+        payload,
+    );
+    const sl = try fix.nextSlot(&fold, entry.entryHash(&en), 1001);
+    try std.testing.expectError(error.InvalidSettings, fold.applyControl(&sl, &en));
+    // The join was rolled back; the cluster stays at one member.
+    try std.testing.expectEqual(@as(usize, 1), fold.members.items.len);
+}
+
+test "a leave that removes the last resolvable authority is refused" {
+    // Bug 2026-08-28-sweep3-ghost-authority-strand: a leave is the one
+    // mutation the empty-list rule cannot violate (it only loosens as the
+    // count shrinks), but removing the last resolvable authority strands a
+    // cluster of ≥ 2 members under fallback = stall. The leave is refused
+    // with the fold untouched.
+    var fix = Fix.init();
+    var fold = try chain.FoldState.init(test_alloc, true, [_]u8{0} ** 16);
+    defer fold.deinit();
+
+    const mode = schema.keyIndex("leadership.mode").?;
+    const authorities = schema.keyIndex("leadership.authorities").?;
+    const addr_list = try test_alloc.alloc([]const u8, 1);
+    defer test_alloc.free(addr_list);
+    addr_list[0] = "10.0.0.2:3939"; // the second member's advertised address
+    const changes = [_]validate.Change{
+        .{ .key = mode, .value = .{ .enum_value = schema.enumValue(mode, "configured").? } },
+        .{ .key = authorities, .value = .{ .string_list = addr_list } },
+    };
+    const g_payload = try test_alloc.alloc(
+        u8,
+        chain.genesisPayloadLen(.{
+            .founder_key = fix.founder.public_key.toBytes(),
+            .changes = &changes,
+        }),
+    );
+    defer test_alloc.free(g_payload);
+    try chain.encodeGenesisPayload(
+        .{ .founder_key = fix.founder.public_key.toBytes(), .changes = &changes },
+        g_payload,
+    );
+    const g_en = try fix.entryFor(fix.founder, .genesis, fix.control_id, 1, g_payload);
+    const g_sl = try fix.slotFor(
+        fix.founder,
+        1,
+        1,
+        entry.entryHash(&g_en),
+        slot.genesis_prev,
+        1000,
+    );
+    try fold.applyControl(&g_sl, &g_en);
+
+    var third = crypto.sign.Ed25519.KeyPair.generate(fix.io_state.io());
+    const third_id = chain.deriveMemberId(third.public_key.toBytes());
+    const members = [_]struct { id: [16]u8, kp: crypto.sign.Ed25519.KeyPair, addr: []const u8 }{
+        .{ .id = fix.second_id, .kp = fix.second, .addr = "10.0.0.2:3939" },
+        .{ .id = third_id, .kp = third, .addr = "10.0.0.3:3939" },
+    };
+    for (members, 0..) |m, i| {
+        const payload = try test_alloc.alloc(
+            u8,
+            joinPayloadLen(.{
+                .member_id = m.id,
+                .public_key = m.kp.public_key.toBytes(),
+                .address = m.addr,
+            }),
+        );
+        defer test_alloc.free(payload);
+        encodeJoinPayload(
+            .{ .member_id = m.id, .public_key = m.kp.public_key.toBytes(), .address = m.addr },
+            payload,
+        );
+        const en = try fix.entryFor(
+            fix.founder,
+            .join,
+            fix.control_id,
+            nextAuthorSeq(&fold, fix.founder_id),
+            payload,
+        );
+        const sl = try fix.nextSlot(&fold, entry.entryHash(&en), @intCast(1002 + i));
+        try fold.applyControl(&sl, &en);
+    }
+    try std.testing.expectEqual(@as(usize, 3), fold.members.items.len);
+
+    // The authority (second) leaves: n stays ≥ 2 and nothing resolves.
+    var leave_buf: [16]u8 = undefined;
+    encodeLeavePayload(.{ .member_id = fix.second_id }, &leave_buf);
+    const leave_en = try fix.entryFor(
+        fix.founder,
+        .leave,
+        fix.control_id,
+        nextAuthorSeq(&fold, fix.founder_id),
+        &leave_buf,
+    );
+    const leave_sl = try fix.nextSlot(&fold, entry.entryHash(&leave_en), 1004);
+    try std.testing.expectError(error.InvalidSettings, fold.applyControl(&leave_sl, &leave_en));
+    try std.testing.expectEqual(@as(usize, 3), fold.members.items.len);
 }
 
 test "join is refused when the id does not derive from the key, or already a member" {
