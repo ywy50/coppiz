@@ -43,3 +43,7 @@ reference for what one would do ([OQ 41](../open-questions.md#oq-41)).
 | [0015](0015-eviction.md) | Discussion | Eviction of dead members: the leader evicts, and the dead-leader case (OQ 20) |
 | [0016](0016-allowlist-key-learning.md) | Discussion | How the allowlist learns a newcomer's key (OQ 21) |
 | [0017](0017-key-rotation-operator-key.md) | Discussion | Key rotation and compromise; an operator key (OQ 22) |
+| [0018](0018-read-consistency.md) | Discussion | Read consistency: local reads and the leader-head check (OQ 31) |
+| [0019](0019-journal-lifecycle.md) | Discussion | Journal lifecycle: creation is leader-only; there is no drop (OQ 34) |
+| [0020](0020-cursor-id-encoding.md) | Discussion | Cursor and id encoding for consumers (OQ 42) |
+| [0021](0021-host-shapes.md) | Discussion | Which non-clanker hosts are the design targets? (OQ 46) |
