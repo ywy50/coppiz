@@ -105,6 +105,12 @@ const LocalCompletion = struct {
     refusal: []const u8 = "",
 };
 
+/// The refusal `releaseLocalWaiters` posts. It is not a refusal by the
+/// cluster - the loop stopped before the entry's slot folded back - so
+/// `localAppend` reports it as `error.Canceled`, not `error.Refused`. The
+/// entry may still be in the durable queue and slot on a later start.
+const shutdown_refusal = "shutdown";
+
 fn completeLocal(completion: *LocalCompletion, io: std.Io, id: entry.Id, refusal: []const u8) void {
     completion.id = id;
     completion.refusal = refusal;
@@ -384,6 +390,9 @@ pub const ClusterNode = struct {
         while (mit.next()) |ms| self.allocator.free(ms.address);
         self.members.deinit(self.allocator);
         self.pending_clients.deinit(self.allocator);
+        // A host thread can post after the loop has exited; nothing else
+        // will ever answer it.
+        self.releaseLocalWaiters();
         self.pending_locals.deinit(self.allocator);
         self.sync_cursors.deinit(self.allocator);
         self.my_seq.deinit(self.allocator);
@@ -475,6 +484,7 @@ pub const ClusterNode = struct {
             completeLocal(&completion, io, undefined, "mailbox_full");
         }
         completion.sem.wait(io) catch return error.Canceled;
+        if (std.mem.eql(u8, completion.refusal, shutdown_refusal)) return error.Canceled;
         if (completion.refusal.len > 0) return error.Refused;
         return completion.id;
     }
@@ -658,7 +668,11 @@ pub const ClusterNode = struct {
     // -- tasks ---------------------------------------------------------------
 
     fn loopMain(self: *ClusterNode) error{Canceled}!void {
+        // Order matters: release the parked hosts *before* `waitForStop`
+        // can return, so a caller that has been told the loop is down knows
+        // no host thread is still waiting on it.
         defer self.loop_exited.store(true, .release);
+        defer self.releaseLocalWaiters();
         self.bootstrapDial();
         while (true) {
             const ev = self.mailbox.wait(self.io) catch return;
@@ -690,6 +704,55 @@ pub const ClusterNode = struct {
     /// unblocks once `stopped` is set, so this must go through `stop`.
     fn fatal(self: *ClusterNode) void {
         self.stop();
+    }
+
+    /// Wakes every host thread parked on this loop.
+    ///
+    /// `localAppend` and `localReadRange` block on their completion's
+    /// semaphore with no timeout and no deadline, so a completion the loop
+    /// never posts is a host thread that never wakes and a process that
+    /// cannot exit. Two places hold one:
+    ///
+    /// - `pending_locals`, for an append the loop accepted but whose slot
+    ///   has not folded back - a follower with no reachable leader, a
+    ///   member still backfilling, a member mid-merge. `deinit` freed the
+    ///   map without posting anything.
+    /// - the mailbox, for an event a host posted that the loop never
+    ///   reached. `deinit`'s drain handles the three variants that own
+    ///   memory or a connection and let `.local_append`/`.local_read` fall
+    ///   through its `else` arm.
+    ///
+    /// (bug 2026-08-30-shutdown-strands-local-completions)
+    ///
+    /// Called once the loop has exited, from `loopMain`'s own defer and
+    /// again from `deinit` - the second covers a host thread that posted
+    /// while shutdown was already in progress. Removing mailbox events
+    /// without touching the semaphore is safe only because nothing waits on
+    /// it again after the loop returns.
+    fn releaseLocalWaiters(self: *ClusterNode) void {
+        var it = self.pending_locals.valueIterator();
+        while (it.next()) |completion| {
+            completeLocal(completion.*, self.io, undefined, shutdown_refusal);
+        }
+        self.pending_locals.clearRetainingCapacity();
+
+        self.mailbox.mutex.lockUncancelable(self.io);
+        defer self.mailbox.mutex.unlock(self.io);
+        var i: usize = 0;
+        while (i < self.mailbox.events.items.len) {
+            switch (self.mailbox.events.items[i]) {
+                .local_append => |a| {
+                    completeLocal(a.completion, self.io, undefined, shutdown_refusal);
+                    _ = self.mailbox.events.orderedRemove(i);
+                },
+                .local_read => |r| {
+                    r.completion.err = error.Canceled;
+                    r.completion.sem.post(self.io);
+                    _ = self.mailbox.events.orderedRemove(i);
+                },
+                else => i += 1,
+            }
+        }
     }
 
     /// Tells the loop a dial died so it can back off and retry. `address`
@@ -5413,4 +5476,81 @@ test "a merge data re-slot is broadcast as a re-slot, not as a live record" {
     var msg = try message.decode(test_alloc, Recorder.sent.items[0]);
     defer msg.deinit(test_alloc);
     try std.testing.expect(msg.slot.reslotted);
+}
+
+test "shutdown wakes every host thread parked on the loop" {
+    // `localAppend` and `localReadRange` block on a semaphore with no
+    // timeout. `deinit` freed `pending_locals` without posting anything and
+    // dropped queued `.local_append`/`.local_read` events on its `else`
+    // arm, so a host that appended on a follower with no reachable leader
+    // and then shut down blocked for the life of the process - which is to
+    // say the process could not exit (bug
+    // 2026-08-30-shutdown-strands-local-completions).
+    //
+    // `permits` is read directly rather than waited on: a red run must fail
+    // an assertion, not hang the suite.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    defer dialer.deinit_fn(dialer.ctx);
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+
+    // An append the loop accepted and parked: forwarded to a leader that
+    // never answered.
+    var parked = LocalCompletion{};
+    try cn.pending_locals.put(
+        test_alloc,
+        .{ .author = node.member_id, .author_seq = 1 },
+        &parked,
+    );
+
+    // An append and a read the host posted that the loop never reached.
+    var queued_append = LocalCompletion{};
+    try std.testing.expect(cn.mailbox.post(oio, .{ .local_append = .{
+        .journal = "main",
+        .payload = "x",
+        .ttl_ms = 0,
+        .completion = &queued_append,
+    } }));
+    var queued_read = LocalReadCompletion{ .allocator = test_alloc };
+    try std.testing.expect(cn.mailbox.post(oio, .{ .local_read = .{
+        .journal_id = node.control.journal_id,
+        .from = null,
+        .to = null,
+        .include_stale = false,
+        .include_expired = false,
+        .completion = &queued_read,
+    } }));
+
+    cn.deinit();
+
+    // Every waiter got exactly one post, so every host thread wakes.
+    try std.testing.expectEqual(@as(usize, 1), parked.sem.permits);
+    try std.testing.expectEqualStrings(shutdown_refusal, parked.refusal);
+    try std.testing.expectEqual(@as(usize, 1), queued_append.sem.permits);
+    try std.testing.expectEqualStrings(shutdown_refusal, queued_append.refusal);
+    try std.testing.expectEqual(@as(usize, 1), queued_read.sem.permits);
+    try std.testing.expectEqual(@as(?anyerror, error.Canceled), queued_read.err);
+
+    // A shutdown is not a refusal by the cluster: the entry may still be in
+    // the durable queue, so the host is told the call was cancelled.
+    deinitLocalRead(&queued_read, test_alloc);
 }
