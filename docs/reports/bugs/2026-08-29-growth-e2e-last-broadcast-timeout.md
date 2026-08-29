@@ -32,9 +32,11 @@ C never shows `m2` within 20 s of polling `coppiz read` every 150 ms.
 
 Observed on three different working trees, and never on an untouched
 `origin/main` in six consecutive baseline runs (three at 3456e14, three at
-c0a5d55). That asymmetry is unexplained and is the reason this is filed
-rather than dismissed: it is not reproducible on demand and no diff has been
-shown to cause it.
+c0a5d55). That asymmetry is unexplained.
+
+It is not caused by any code change: one occurrence was on the branch
+carrying this report, whose entire diff is three Markdown files. Whatever
+the trigger is, it is in the tree already.
 
 ## Reproduction
 
