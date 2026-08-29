@@ -652,7 +652,18 @@ pub const Store = struct {
 
     /// Rebuilds the position index from the (possibly rewritten) segments.
     fn rebuildIndex(self: *Store, jd: *JournalDir) !void {
-        jd.index.clearRetainingCapacity();
+        // A fresh map per rebuild: `clearRetainingCapacity` keeps the
+        // backing table across rebuilds, and OQ 62's captured spin showed a
+        // put probing at O(capacity) on a rebuilt index — consistent with
+        // the map's `available` accounting drifting across clear+refill
+        // cycles. A new map starts with correct accounting however the
+        // previous rebuild ended, at the cost of one map allocation per
+        // compaction (negligible next to the segment rewrites). Same
+        // contents, same lookups; the exact root cause of the observed spin
+        // is still open (OQ 62), so this is defensive hardening, not a
+        // claimed fix.
+        jd.index.deinit();
+        jd.index = std.AutoHashMap(slot.Position, IndexEntry).init(self.allocator);
         for (jd.segments.items, 0..) |seg, seg_idx| {
             const records = try self.readRecordRegion(&seg, 0, seg.records_len);
             defer self.allocator.free(records);
