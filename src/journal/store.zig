@@ -776,7 +776,9 @@ pub const Store = struct {
 
             // The file is header + records (+ a seal trailer when sealed).
             const len = try file.length(self.io);
-            const sealed = try self.hasSeal(file, len);
+            const seal = try self.sealStatus(file, len);
+            if (seal == .corrupt) return error.Corrupt;
+            const sealed = seal == .valid;
             const records_len = len - segment.header_len -
                 if (sealed) @as(u64, segment.seal_len) else 0;
             const records = try self.allocator.alloc(u8, @intCast(records_len));
@@ -824,21 +826,29 @@ pub const Store = struct {
         try self.journals.put(journal_id, jd);
     }
 
+    const SealStatus = enum { absent, valid, corrupt };
+
     /// Whether the file ends in a valid seal trailer, and that its hash
     /// verifies against the records. `file_len` is the full file size.
-    fn hasSeal(self: *Store, file: std.Io.File, file_len: u64) !bool {
-        if (file_len < segment.header_len + segment.seal_len) return false;
+    /// `absent` means the file is too short for a trailer or its last bytes
+    /// are not a seal (a torn record tail); `corrupt` means a seal trailer
+    /// is present but its hash does not verify — the sealed (acknowledged)
+    /// prefix is damaged, and treating the trailer as records would silently
+    /// truncate it (bug 2026-08-28-sweep3-hasseal-conflation).
+    fn sealStatus(self: *Store, file: std.Io.File, file_len: u64) !SealStatus {
+        if (file_len < segment.header_len + segment.seal_len) return .absent;
         const records_len = file_len - segment.header_len - segment.seal_len;
         var buf: [segment.seal_len]u8 = undefined;
         const n = try file.readPositionalAll(self.io, &buf, segment.header_len + records_len);
-        if (n != buf.len) return false;
-        const hash = segment.decodeSeal(&buf) catch return false;
+        if (n != buf.len) return .absent;
+        const hash = segment.decodeSeal(&buf) catch return .absent;
         // Verify the seal against the records.
         const records = try self.allocator.alloc(u8, @intCast(records_len));
         defer self.allocator.free(records);
         const m = try file.readPositionalAll(self.io, records, segment.header_len);
-        if (m != records.len) return false;
-        return std.mem.eql(u8, &hash, &segment.recordsHash(records));
+        if (m != records.len) return .absent;
+        if (!std.mem.eql(u8, &hash, &segment.recordsHash(records))) return .corrupt;
+        return .valid;
     }
 };
 
@@ -1060,6 +1070,38 @@ test "a torn tail is truncated at open and the verified head survives (G4 unit h
         }
     }.cb);
     try std.testing.expectEqual(@as(usize, 2), count);
+}
+
+test "a sealed segment whose seal hash does not verify refuses to open" {
+    // Bug 2026-08-28-sweep3-hasseal-conflation: hasSeal reported false for
+    // a present-but-invalid seal trailer, so the trailer was scanned as
+    // records and the sealed (acknowledged) prefix was silently truncated.
+    var env = TestEnv.init();
+    defer env.deinit();
+    const journal_id = "0123456789abcdef".*;
+
+    {
+        const data_dir = try env.dataDir();
+        const store = try Store.open(test_alloc, tio, data_dir, .{ .seal_threshold = 200 });
+        defer store.deinit();
+        try store.createJournal(journal_id, [_]u8{0} ** 32);
+        try appendN(store, journal_id, 3); // the first two appends seal segments
+    }
+
+    // Damage the first (sealed) segment's seal trailer hash: the records
+    // are intact, but the seal no longer verifies — corruption, not a torn
+    // tail, and the open must refuse rather than drop the prefix.
+    const seg_path = try std.fmt.allocPrint(test_alloc, "data/{x}/seg-00000001", .{journal_id});
+    defer test_alloc.free(seg_path);
+    const file = try env.tmp.dir.openFile(tio, seg_path, .{ .mode = .read_write });
+    defer file.close(tio);
+    const len = try file.length(tio);
+    var one: [1]u8 = undefined;
+    _ = try file.readPositionalAll(tio, &one, len - 10);
+    one[0] ^= 0x40;
+    try file.writePositionalAll(tio, &one, len - 10);
+
+    try std.testing.expectError(error.Corrupt, env.openStore());
 }
 
 test "mid-file corruption refuses the open and names the journal (G3)" {
