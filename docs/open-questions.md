@@ -56,9 +56,11 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
    its layer stay open. *Answer from:* the operator; also
    clanker's RFC 0019 open question 1 ("stall or keep working").
 <a id="oq-38"></a>
-38. **Service API auth.** [OPEN] If RFC 0001 keeps a service API, what authenticates
-    a caller off loopback - a static token, member keys, mTLS? v1 drafts
-    loopback-only with a warning. *Blocks:* PRD 0005 phase 4.
+38. **Service API auth.** [OPEN]
+    What authenticates a service-API caller off loopback? The decision is
+    explored in [RFC 0007](rfcs/0007-service-api-auth.md) (Discussion);
+    this entry is the stable pointer. *Blocks:* PRD 0005 phase 4 (the
+    deferred wrapper).
 <a id="oq-40"></a>
 40. **Public claims need reopening.** [RESOLVED] Everything in research 0001 is carried
     from clanker's reading dates; before the README or a release cites an
@@ -469,11 +471,11 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     code runs under both, which is the OQ 27 shape. Recorded in PRD 0003's
     status and implemented in `src/net/`.
 <a id="oq-23"></a>
-23. **Wire encryption.** [OPEN] Plain TCP on loopback/RFC1918 for v1 (clanker's mesh
-    made the same call); for anything else, TLS - Zig `std` has a TLS client
-    but no server - or a Noise-style handshake over the member keys we
-    already have, using `std.crypto`'s X25519 + ChaCha20-Poly1305. ADR 0001
-    bounds this to what `std` ships. *Blocks:* any non-private deployment.
+23. **Wire encryption.** [OPEN]
+    What protects member-to-member traffic off a private network? The
+    decision is explored in [RFC 0008](rfcs/0008-wire-encryption.md)
+    (Discussion); this entry is the stable pointer. *Blocks:* any
+    non-private deployment.
 <a id="oq-28"></a>
 28. **Backpressure.** [OPEN] A slow follower under a fast leader: does the leader
     buffer (bounded by what?), drop to backfill mode for that follower, or
@@ -539,21 +541,14 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     nothing; shapes PRD 0005's API before it freezes. *Answer from:* the
     operator.
 <a id="oq-47"></a>
-47. **Several processes on one data directory, SQLite-style.** [OPEN] SQLite lets
-    N processes open one file (file locks, busy timeout); clanker relies on
-    that today for its session databases, with `run`/`repl` processes
-    writing beside `serve`. coppiz v1 flocks the directory to one process and
-    expects short-lived processes to talk to the long-lived one. Supporting
-    multi-process opens natively would mean: one process holds the listener
-    and leader role, others append through a local IPC the library provides
-    (unix socket in the data dir) - still no external infrastructure, but a
-    second transport to own.
-
-    Is the SQLite habit important enough to hosts
-    to make this v1? *Blocks:* none - v1 shipped the flock + wire-fallback
-    model ("the long-lived process owns the directory"); native
-    multi-process opens stay open. *Answer
-    from:* the operator; OQ 46's host shapes.
+47. **Several processes on one data directory, SQLite-style.** [OPEN]
+    Is the SQLite habit - several processes opening one data directory
+    natively - important enough to hosts to make it a v1 property? The
+    decision is explored in
+    [RFC 0006](rfcs/0006-multi-process-one-data-directory.md) (Discussion);
+    this entry is the stable pointer and its status follows the RFC's.
+    *Blocks:* none - v1 shipped the flock + wire-fallback model ("the
+    long-lived process owns the directory").
 
 ## H. Project, process and quality
 
