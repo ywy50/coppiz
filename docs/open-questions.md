@@ -148,40 +148,30 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
 ## C. Membership
 
 <a id="oq-4"></a>
-4. **Seniority on rejoin.** [OPEN] Drafted: only a `leave` entry resets seniority; a
-   crash or network absence keeps it. Should a long absence
-   (`evict_after_ms`) convert to a `leave`? That makes eviction change the
-   leader order, which is either the point or a surprise. *Blocks:* none -
-   phase 1 shipped with "only a `leave` resets seniority"; changing it is one
-   fold rule.
+4. **Seniority on rejoin.** [OPEN]
+    The decision is explored in
+    [RFC 13](rfcs/0013-seniority-on-rejoin.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* none - phase 1 shipped with 'only a `leave` resets seniority'.
 <a id="oq-5"></a>
-5. **Changing leadership settings when `reconfigurable = false`.** [OPEN] Drafted as
-   an offline procedure (`coppiz reconfigure` on one stopped member, others
-   backfill it). Is "stop everything" acceptable, or is a signed operator
-   override (OQ 22) wanted so the lock can be lifted live by someone who is
-   not a member? *Blocks:* none in the shipped surface (phase 5 shipped
-   without the offline procedure); `coppiz reconfigure` is not a command yet.
+5. **Changing leadership settings when `reconfigurable = false`.** [OPEN]
+    The decision is explored in
+    [RFC 14](rfcs/0014-offline-reconfigure.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* none in the shipped surface; `coppiz reconfigure` is not a command yet.
 <a id="oq-20"></a>
-20. **Eviction of dead members.** [OPEN] Default never. An evicted member's entries
-    stay; only its seniority and its seat in `max_members` go. Who evicts
-    under `configured` when the leader is the dead one? *Blocks:* none -
-    eviction shipped (`membership.evict_after_ms`, default 0); the
-    dead-leader case stays open.
+20. **Eviction of dead members.** [OPEN]
+    The decision is explored in
+    [RFC 15](rfcs/0015-eviction.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* none - eviction shipped (`membership.evict_after_ms`, default 0).
 <a id="oq-21"></a>
-21. **How the allowlist learns a newcomer's key.** [OPEN] Out of band - the operator
-    copies the public key into `[[peers]]` - or a one-time join token the
-    founder prints and the newcomer presents, after which the key is bound.
-    clanker's mesh binds identity to a TLS pin in its phase 2. *Blocks:*
-    none - admission shipped (`allowlist`/`prompt`/`open`); how the
-    allowlist learns the key out of band stays open.
+21. **How the allowlist learns a newcomer's key.** [OPEN]
+    The decision is explored in
+    [RFC 16](rfcs/0016-allowlist-key-learning.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* none - admission shipped; the key-learning mechanism is this RFC's answer.
 <a id="oq-22"></a>
-22. **Key rotation and compromise; an operator key.** [OPEN] A member's key is its
-    identity; rotating it is a `leave` + `join` (new seniority) as drafted,
-    which is punitive for routine rotation. And should *operator* actions
-    (settings, reconfigure, evict) be signed by a key that is not any
-    member's, so a compromised leader cannot reconfigure the cluster?
-    *Blocks:* nothing in v1; must be decided before 1.0 because it changes
-    the `join` payload.
+22. **Key rotation and compromise; an operator key.** [OPEN]
+    The decision is explored in
+    [RFC 17](rfcs/0017-key-rotation-operator-key.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* nothing in v1; must be decided before 1.0 because it changes the `join` payload / adds a control entry.
 <a id="oq-25"></a>
 25. **Topology past 32 members.** [OPEN]
     The decision is explored in

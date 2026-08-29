@@ -38,3 +38,8 @@ reference for what one would do ([OQ 41](../open-questions.md#oq-41)).
 | [0010](0010-per-journal-leadership.md) | Discussion | Per-journal or cluster-level leadership? (OQ 8) |
 | [0011](0011-topology-past-32.md) | Discussion | Topology past 32 members: leader-star first, gossip later (OQ 25) |
 | [0012](0012-backpressure.md) | Discussion | Backpressure: a slow follower must not slow the writers (OQ 28) |
+| [0013](0013-seniority-on-rejoin.md) | Discussion | Seniority on rejoin: only a leave resets it (OQ 4) |
+| [0014](0014-offline-reconfigure.md) | Discussion | Changing leadership settings when reconfigurable = false (OQ 5) |
+| [0015](0015-eviction.md) | Discussion | Eviction of dead members: the leader evicts, and the dead-leader case (OQ 20) |
+| [0016](0016-allowlist-key-learning.md) | Discussion | How the allowlist learns a newcomer's key (OQ 21) |
+| [0017](0017-key-rotation-operator-key.md) | Discussion | Key rotation and compromise; an operator key (OQ 22) |
