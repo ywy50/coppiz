@@ -586,8 +586,16 @@ pub const Node = struct {
             }
         } else {
             const js = self.journals.get(journal_id) orelse return error.UnknownJournal;
-            try js.fold.applyData(&self.control, sl, en);
-            if (en.kind == .checkpoint) {
+            if (reslotted) {
+                try js.fold.applyDataReslotted(&self.control, sl, en);
+            } else {
+                try js.fold.applyData(&self.control, sl, en);
+            }
+            // A re-slotted checkpoint is a no-op (OQ 33): the losing
+            // branch's cleanup already served its purpose there, and the
+            // survivor's own checkpoint cadence removes the bytes (bug
+            // 2026-08-29-merge-data-reslot-refusals).
+            if (en.kind == .checkpoint and !reslotted) {
                 // The bytes a checkpoint removes drop here, at the same chain
                 // position as the fold mark, on every member (PRD 0002 G4).
                 // The fold already validated the payload, so the decode
