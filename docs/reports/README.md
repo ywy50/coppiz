@@ -96,6 +96,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-28 - sweep3: duplicate top-level `coppiz.toml` keys leak the previous value](bugs/2026-08-28-sweep3-duplicate-toml-key-leak.md)
 - [2026-08-28 - sweep3: settings/join/create-journal decode OOM folded into a normal refusal](bugs/2026-08-28-sweep3-decode-oom-mapped-to-refusal.md)
 - [2026-08-28 - sweep3: `slotQueuedEntries` propagates a per-entry refusal to `fatal()`](bugs/2026-08-28-sweep3-slotqueued-refusal-fatal.md)
+- [2026-08-29 - the in-memory hub's `pipes` list is appended without a lock: concurrent dials leak its backing buffer](bugs/2026-08-29-hub-pipes-append-unsynchronised.md)
 
 ### Investigations
 
