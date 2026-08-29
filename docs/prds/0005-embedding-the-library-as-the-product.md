@@ -17,7 +17,9 @@ like any other. The embedded *read* path followed: `localReadRange` routes
 a host's synchronous read through the loop - the loop runs the range over
 its own state (atomic with respect to its own mutations) and copies the
 records, and the host's callback replays the copies on its own thread - so
-a host thread never touches the folds while the loop runs. `examples/`
+a host thread never touches the folds while the loop runs.
+
+`examples/`
 carries one host per shape - `embed-single` (size 1, no network),
 `embed-cluster` (three embedded nodes in one process; a partition and
 heal, with the host's writes readable throughout, read through the loop),

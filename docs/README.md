@@ -5,11 +5,13 @@ the Done/Planned narrative is [docs/ROADMAP.md](ROADMAP.md).
 Decisions that are still open live in [docs/rfcs/](rfcs/) ([index](rfcs/README.md), [template](rfcs/TEMPLATE.md)),
 and the evidence they rest on in [docs/research/](research/) ([index](research/README.md), [template](research/TEMPLATE.md));
 a decision that has been made is an [ADR](adrs/) ([index](adrs/README.md)).
+
 Operational bugs and evidence-led investigations go in [docs/reports/](reports/),
 recurring recovery procedures in [docs/runbooks/](runbooks/),
 and what we learn from an external project in [docs/digests/](digests/).
 Cross-cutting unknowns are numbered in [open-questions.md](open-questions.md);
 terms are defined once in [glossary.md](glossary.md).
+
 The operator's original brief (2026-08-21), quoted as "the brief" wherever a
 record refers to it, is [qnd-notes.md](../qnd-notes.md) at the repository
 root. Clarified the same day, in conversation: coppiz is for anyone facing
@@ -76,7 +78,9 @@ members, liveness)` is a pure function every member evaluates over its fold;
 members that agree on liveness agree on the leader, and members that do not
 are partitioned. Three modes - `seniority` (earliest join slot), `configured`
 (an operator list; name one of two, or an odd subset of six), `combined` -
-all well-defined at n = 1, 2, and any even n. A partition under `seniority`
+all well-defined at n = 1, 2, and any even n.
+
+A partition under `seniority`
 yields a leader per side and a deterministic merge on heal; `configured` with
 `fallback = stall` refuses writes instead. Modes are settings, so a cluster
 can start as one member and change mode as it grows, gated by

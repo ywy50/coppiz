@@ -53,27 +53,32 @@ to land. Update it when a PRD changes status.
 - **Membership and leadership: wire, node loop, e2e** (2026-08-27) -
   [PRD 0003](prds/0003-membership-and-leadership.md) phases 4–6, on
   [OQ 19](open-questions.md) decided (own binary framing over one TCP
-  connection): the replication wire (`src/net/` - framing, the message set,
-  and a transport seam with TCP and an in-memory hub implementation), the
-  node loop (`src/cluster/node.zig` - failure detector, election → epoch,
-  admission, forward/broadcast/backfill, and the partition/merge with the
-  OQ 44 re-fold discipline), the `coppiz serve` CLI with every command
-  falling back to the wire when the data directory is locked, and the e2e
-  matrix (process-level (a) 1 → 2 → 3 joins, (d) live reconfiguration, (e)
-  forged-join refusal; in-process (b) partition-heal-merge and (c)
-  configured + stall over the hub transport).
+  connection):
+  - the replication wire (`src/net/` - framing, the message set, and a
+    transport seam with TCP and an in-memory hub implementation),
+  - the node loop (`src/cluster/node.zig` - failure detector, election →
+    epoch, admission, forward/broadcast/backfill, and the partition/merge
+    with the OQ 44 re-fold discipline),
+  - the `coppiz serve` CLI with every command falling back to the wire when
+    the data directory is locked,
+  - the e2e matrix (process-level (a) 1 → 2 → 3 joins, (d) live
+    reconfiguration, (e) forged-join refusal; in-process (b)
+    partition-heal-merge and (c) configured + stall over the hub transport).
 
 - **Embedding: the write API and the example hosts** (2026-08-27) - [PRD
   0005](prds/0005-embedding-the-library-as-the-product.md) steps 1–3:
-  `cluster.ClusterNode.localAppend` (a host writes through its member's
-  loop - durable queue, then leader slot or forward - and blocks until the
-  slot folds back), the `examples/` directory (`embed-single` at size 1,
-  `embed-cluster` as three embedded nodes with partition, heal and merge,
-  `sidecar` speaking the wire to a node), each built by `zig build examples`
-  and each a test run by `zig build test`. G1–G4 met: the loop-routed host
-  read path (`cluster.ClusterNode.localReadRange`), `coppiz doctor` and the
-  G2 sidecar↔binary pairing followed 2026-08-28. G5 (a thread-count test)
-  and G6 (the clanker branch's gated single-call proof) are follow-up.
+  - `cluster.ClusterNode.localAppend` (a host writes through its member's
+    loop - durable queue, then leader slot or forward - and blocks until the
+    slot folds back),
+  - the `examples/` directory (`embed-single` at size 1, `embed-cluster` as
+    three embedded nodes with partition, heal and merge, `sidecar` speaking
+    the wire to a node), each built by `zig build examples` and each a test
+    run by `zig build test`.
+  - G1–G4 met: the loop-routed host read path
+    (`cluster.ClusterNode.localReadRange`), `coppiz doctor` and the G2
+    sidecar↔binary pairing followed 2026-08-28.
+  - G5 (a thread-count test) and G6 (the clanker branch's gated single-call
+    proof) are follow-up.
 
 ## Scale tiers
 

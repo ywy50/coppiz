@@ -18,7 +18,9 @@ entry is refused with `not_author`; the author's own is accepted), **G5**
 emitted with an empty removal set), **G4** (three members remove the same
 set at the same checkpoint slot - e2e under both `retain` values) and
 **G6** (a follower skewed ±1 h shows, not stores, differently; the folds
-hash equal). The merge-settle rule (a checkpoint inside `merge.settle_ms`
+hash equal).
+
+The merge-settle rule (a checkpoint inside `merge.settle_ms`
 of the last merge is refused `merge_settling`) shipped with PRD 0003
 phases 1–3.
 
@@ -27,7 +29,9 @@ The leader checkpoints on `checkpoint.every_ms`, or when
 data arrives, never by a per-tick full scan); the defaults stay the
 placeholders of [OQ 10](../open-questions.md). Compaction runs at the same
 chain position on every member - the follower drops the payloads when the
-checkpoint folds - so the bytes, not just the fold marks, match. A journal
+checkpoint folds - so the bytes, not just the fold marks, match.
+
+A journal
 that has been compacted cannot yet be joined or backfilled by a new member:
 the sync path refuses compacted records, an interaction now reachable
 ([OQ 43](../open-questions.md)). The merge-with-checkpoints determinism
@@ -172,6 +176,7 @@ question 10](../open-questions.md).
 target entry id `(author, author_seq)` in the same journal. Validation (PRD
 0001, run by every member) refuses it while `stale.enforce = off` (the
 default), and otherwise unless `stale.author == target.author`.
+
 There is no API-level check to bypass: a member that hand-builds a `stale`
 for someone else's entry produces an entry every other member refuses, and the
 refusal names `not_author`. A `stale` for an already-stale or removed entry is

@@ -10,7 +10,9 @@ tests). Source of truth: `src/journal/` - `entry.zig` and `slot.zig`
 CRC, torn-tail recovery, compaction), `queue.zig` (unslotted queue),
 `journal.zig` (the single-member node), `src/settings/` (schema, fold,
 validation), `src/config/local.zig` (`coppiz.toml`), `src/main.zig` (the
-tier-0 CLI). The format magics are coppiz-derived (`CPPZ` entry, `CPSG`
+tier-0 CLI).
+
+The format magics are coppiz-derived (`CPPZ` entry, `CPSG`
 segment, `CPST` seal, `CPPQ` queue), not the draft's `SPNE`.
 
 This PRD is the data model every other PRD builds on: [0002](0002-ttl-and-staleness.md)
@@ -25,7 +27,9 @@ truncation unit tests plus a process-level e2e that truncates the segment
 tail and reopens), **G5** (entry/segment/queue `version + 1` refused),
 **G6** (`journal.max_entry_bytes`, `cluster.max_journals`, and the queue
 bound each tripped by a test), **G7** (a member cannot forge another's
-entry - signature negative test). **G1** and **G2** (two members,
+entry - signature negative test).
+
+**G1** and **G2** (two members,
 byte-identical journals; hash-equal folds) need the replication transport,
 which phase 5 defers to PRD 0003; the fold-determinism hash is tested
 single-member.
@@ -48,6 +52,7 @@ replication daemon), or write files and hope. There is no library that a Zig
 program embeds the way it embeds SQLite - open a directory, append, read -
 whose replication, election and cleanup are already inside, and which grows
 from one process to a fleet without an operator standing up a cluster first.
+
 clanker's RFC 0019 surveyed seventeen candidates - stores and log/CRDT
 libraries alike - and confirmed that gap; the
 operator's direction (2026-08-19, clarified 2026-08-21) was to found the
@@ -277,7 +282,9 @@ reached the leader's head, and a `syncing` member is never leader-eligible
 files of slots+entries in chain order, each record length-prefixed and
 CRC-checked so a torn tail write is detected and truncated at startup, and
 a sparse position→offset index per segment (position = `(epoch, seq)`;
-`seq` alone cannot key it - it restarts at 1 every epoch). The per-journal
+`seq` alone cannot key it - it restarts at 1 every epoch).
+
+The per-journal
 subdirectory is named for the journal's id in lowercase hex, never for its
 name: the name is a mutable setting, and keying a directory by a chosen
 string drags filesystem naming rules into journal identity - on
@@ -285,14 +292,18 @@ case-insensitive filesystems such as Windows NTFS and macOS's default APFS,
 journals named `Foo` and `foo` would share one directory and one chain;
 Windows refuses reserved device names (`con`, `nul`) and names ending in a
 dot or space; a name carrying `/` or `\` escapes the member directory.
-None of that is spellable in hex digits. A segment's header carries the
+None of that is spellable in hex digits.
+
+A segment's header carries the
 format version, the journal id and the id of the group that sequenced it, so
 a segment is self-describing when it moves between groups (ownership
 transfer or parity reconstruction, PRD 0006); a **sealed** segment - one
 behind the head that will never be appended to - has a recorded hash and is
 the unit parity works on. The unslotted queue is its own
 small append file, bounded by `sync.unslotted_max_bytes` (value and overflow
-behaviour [OQ 55](../open-questions.md)). Everything else - membership,
+behaviour [OQ 55](../open-questions.md)).
+
+Everything else - membership,
 settings, leader, stale/expired sets - is folded from the log at open,
 optionally from a snapshot (a verified fold at a named slot) to bound restart
 time.

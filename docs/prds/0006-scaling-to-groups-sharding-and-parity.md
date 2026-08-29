@@ -15,7 +15,9 @@ routing, parity) - a name chosen now so no one puts it in `src/cluster/`.
 The big picture, in the operator's words (2026-08-21): natural scalability
 from 1 to n, "no matter if even or uneven number"; fast and very slim to get
 started; and still running efficiently at 1,000, 10,000 or 100,000
-instances. Past a certain size the flat design cannot do that - a full mesh
+instances.
+
+Past a certain size the flat design cannot do that - a full mesh
 is O(n²) connections and every member holding every byte is O(n) copies of
 everything - so the operator's later overlay is: **group** instances, where
 each group is *exactly the system built now* with its own leader election
@@ -95,6 +97,7 @@ liveness)` function over groups. A group is *represented* in the federation
 by its current leader; when the group's leader changes, the representative
 changes, the group's seniority does not. The federation holds one control
 journal: group membership, journal ownership, and federation-level settings.
+
 Its entries are signed by the representing leader's member key, and
 validation accepts a group's entry only from a member the group's own chain
 currently names leader - which is checkable because the group's membership
@@ -113,7 +116,9 @@ group's chain:** a federation entry signed by group B's representative is
 accepted only if B's own membership chain, as the validator last saw it,
 names that member B's leader - otherwise any member of B could speak for B.
 Groups therefore exchange their *control* chains (membership, epochs), which
-are small, never their data. **Representative churn must not read as
+are small, never their data.
+
+**Representative churn must not read as
 death:** a group re-electing internally is briefly silent at the federation
 level, so `federation.suspect_after_ms` must exceed a group's internal
 election time (`cluster.suspect_after_ms` plus one epoch handover), or a
@@ -155,7 +160,9 @@ cold or large journals the operator's "break the journal down and have data
 parity" is erasure coding across groups: segments of a journal's chain are
 encoded into m fragments of which any k reconstruct, and each of m groups
 stores one fragment (inside the group, that fragment is replicated as
-usual). Reads of a parity-stored range need k groups reachable; appends go
+usual).
+
+Reads of a parity-stored range need k groups reachable; appends go
 to the owning group's live head as before and are encoded into fragments
 only once a segment is sealed (it is behind the head and will never change,
 which is what append-only buys here). The chain is unaffected: fragments

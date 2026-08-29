@@ -29,7 +29,9 @@ rather than mark_stale -
 driven by exactly two causes - a TTL reached, and a `stale` control entry
 authored by the entry's own author - and made durable only by a leader
 `checkpoint` entry so every member removes the same set at the same chain
-position. Whether either cause is active, and whether expiry marks or
+position.
+
+Whether either cause is active, and whether expiry marks or
 deletes, are per-journal settings stored in the chain ([PRD 0002](../prds/0002-ttl-and-staleness.md),
 [PRD 0004](../prds/0004-settings.md)) - the schema gates both causes, after
 [OQ 57](../open-questions.md) was resolved (2026-08-27) by adding

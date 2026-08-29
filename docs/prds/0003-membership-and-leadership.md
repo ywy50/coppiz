@@ -29,7 +29,9 @@ the partition/merge with the OQ 44 re-fold discipline), the `coppiz serve`
 CLI with every command falling back to the wire when the data directory is
 locked, and the e2e matrix of *Acceptance criteria* below (process-level (a)
 (d) (e); (b) and (c) in-process over the hub transport with real stores and
-real loops). The fold infers a re-slot from its author and epoch
+real loops).
+
+The fold infers a re-slot from its author and epoch
 (`chain.zig applyControl`), so a merged chain replays identically after a
 restart without a side channel. The embedded-host write API shipped with
 it (`cluster.ClusterNode.localAppend`, PRD 0005 step 1). Remaining: the
@@ -173,7 +175,9 @@ replication connection (`cluster.heartbeat_ms`, default 1 s); a member missed
 for `cluster.suspect_after_ms` (default 5 s) is `unreachable`. Both timings
 are placeholders, on the record at [OQ 37](../open-questions.md) together
 with the leader-lease question they feed. A leader that
-becomes `unreachable` triggers an election on every member that noticed. Full
+becomes `unreachable` triggers an election on every member that noticed.
+
+Full
 mesh is the v1 topology and inherits clanker's reasoning for a small cap
 (`cluster.max_members`, default 32); the leader-star or gossip topology for
 larger clusters is [open question 25](../open-questions.md). The cap is per
@@ -222,7 +226,9 @@ Its exact semantics are [open question 12](../open-questions.md).
 leader: self}`. This reason list is tier-1's; the federation overlay of
 [PRD 0006](0006-scaling-to-groups-sharding-and-parity.md) adds
 `ownership_transfer`, which a journal's new owner appends when it continues
-the adopted chain after a transfer. Slots in the new epoch start at `seq = 1`. Every member
+the adopted chain after a transfer.
+
+Slots in the new epoch start at `seq = 1`. Every member
 validates that the claimed leader is what `leader(...)` returns for *their*
 fold and liveness; a member that disagrees does not accept the epoch and
 keeps its previous view - that is a partition, by definition, and merge
@@ -237,7 +243,9 @@ heads; the side whose leader ranks higher under the mode (earlier seniority,
 or earlier in `authorities[]`) is the *surviving branch*. Its leader appends a
 `merge` control entry naming the other branch's epoch and head, then re-slots
 every entry of the other branch, in that branch's order, after the `merge`.
-Entries are unchanged (same bytes, same ids); only their slots are new. The
+Entries are unchanged (same bytes, same ids); only their slots are new.
+
+The
 other branch's slots remain readable as history on members that had them and
 are delivered as an archived branch to members that did not, so a chain
 verifier can still check them. The rule is deterministic - any member given

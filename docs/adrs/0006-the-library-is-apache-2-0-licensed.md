@@ -29,7 +29,9 @@ considered:
 The library is licensed **Apache-2.0**, shipped as the `LICENSE` file and
 the `license` field in `build.zig.zon` (which also carries `LICENSE` in its
 `.paths`, so a host that fetches coppiz as a dependency receives the
-licence). Apache-2.0 is permissive like MIT, and adds three written-down
+licence).
+
+Apache-2.0 is permissive like MIT, and adds three written-down
 clauses MIT leaves implicit: an explicit patent grant (storage and
 replication are patent-dense; the grant is defensive - it terminates for a
 licensee that sues over patents), an inbound = outbound contribution term
