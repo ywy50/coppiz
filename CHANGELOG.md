@@ -7,6 +7,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- The library's thread behaviour is pinned by a test, not just documented
+  (PRD 0005 G5): opening a node, appending and reading at size 1 spawns no
+  thread, `ClusterNode.init` spawns none, and `start()` is the only call
+  that puts work on the host's `Io`. An embedding host can therefore reason
+  about when coppiz begins using its thread pool.
 - The project-kit session workflow (install with the never-overwrite
   fix in the kit itself): `workflows/` (continue, fix, plan, review,
   handoff, deliver), the plans/handovers/reviews/postmortems/prompts/
@@ -21,6 +26,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   under 700 characters (split at sentence and thought boundaries; long
   roadmap bullets became sub-bullets). `docs-check` passes with zero
   failures.
+- `coppiz doctor` reports whether the local `[genesis]` table still
+  matches the chain (PRD 0004 *Bootstrap*). `coppiz init` reads `[genesis]`
+  once and the chain is authoritative from then on, so an operator editing
+  the file afterwards previously got no error and no effect. Doctor now
+  warns per drifted key, naming the local value and the folded one, and
+  stays an `ok` line when they agree. A drift is a warning, not a failure.
 - The historical settings view PRD 0004 *Reading settings* names:
   `Node.settingsAt(position)` for cluster scope and
   `Node.journalSettingsAt(id, position)` for a journal's merged view. The

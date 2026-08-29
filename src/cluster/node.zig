@@ -4236,3 +4236,109 @@ test "embedded host reads through the loop from its own thread (PRD 0005)" {
     );
     try std.testing.expectEqual(@as(usize, 0), empty);
 }
+
+/// The number of worker threads an `Io.Threaded` currently owns, walked off
+/// its intrusive `worker_threads` list. `Threaded` spawns a worker only from
+/// its `async`/`concurrent` paths; ordinary file I/O runs on the calling
+/// thread. So on an `Io` nothing else shares, this count is exactly the
+/// threads the library caused to exist.
+///
+/// It reads a field of `std.Io.Threaded` that is not part of its documented
+/// API, which is the price of counting threads without libc: `std.Thread`
+/// exposes no enumeration, and neither macOS nor Linux offers one portably.
+/// A Zig upgrade that renames the field breaks this test loudly, which is
+/// the failure mode to prefer over a test that cannot check the claim.
+fn workerThreadCount(t: *std.Io.Threaded) usize {
+    var n: usize = 0;
+    var it = t.worker_threads.load(.acquire);
+    while (it) |thread| : (it = thread.next) n += 1;
+    return n;
+}
+
+test "(PRD 0005 G5) no thread exists before start(), and the size-1 path needs none" {
+    // G5 has two halves. The first is that the size-1 path creates no
+    // threads at all: it runs here on an `Io` whose async limit is
+    // `.nothing`, so `Threaded` can never hand work to a worker - every
+    // `async` runs inline on the calling thread. Opening the store,
+    // appending and reading all complete there, and the worker count stays
+    // zero.
+    {
+        var solo = std.Io.Threaded.init(test_alloc, .{ .async_limit = .nothing });
+        defer solo.deinit();
+        const sio = solo.io();
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        tmp.dir.createDir(sio, "data", .default_dir) catch {};
+        {
+            const dd = try tmp.dir.openDir(sio, "data", .{ .iterate = true });
+            try journal.init(test_alloc, sio, dd, &.{}, "main", &journal.wallClock);
+        }
+        const dd = try tmp.dir.openDir(sio, "data", .{ .iterate = true });
+        var node = try journal.Node.open(test_alloc, sio, dd, .{ .fsync = .never });
+        defer node.deinit();
+        const main_id = node.journalIdByName("main").?;
+        _ = try node.append(main_id, "size-1", 0);
+        var seen: usize = 0;
+        try node.readRange(main_id, null, null, false, false, &seen, struct {
+            fn on(c: *usize, _: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
+                if (en != null) c.* += 1;
+            }
+        }.on);
+        try std.testing.expectEqual(@as(usize, 1), seen);
+        try std.testing.expectEqual(@as(usize, 0), workerThreadCount(&solo));
+    }
+
+    // The second half is that nothing runs before the host asks for it:
+    // `ClusterNode.init` folds the chain and builds the loop's state, and
+    // `start()` is the only call that puts a task on the io. On an `Io` this
+    // test owns exclusively, the worker count is zero right up to `start()`.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(64) });
+    defer owned.deinit();
+    const oio = owned.io();
+    try std.testing.expectEqual(@as(usize, 0), workerThreadCount(&owned));
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    var listener = try hub.listen(test_alloc, "solo");
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .listener = listener,
+        .address = "solo",
+    });
+
+    // Opening the store, folding the chain and building the member table
+    // spawned nothing.
+    try std.testing.expectEqual(@as(usize, 0), workerThreadCount(&owned));
+
+    cn.start();
+    defer {
+        cn.stop();
+        cn.waitForStop();
+        listener.close(oio);
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    // `start()` is what spawns: the loop, the timer and the accept task each
+    // take a worker. Poll rather than assume the spawns have landed.
+    var threads: usize = 0;
+    var tries: u32 = 0;
+    while (tries < 500) : (tries += 1) {
+        threads = workerThreadCount(&owned);
+        if (threads > 0) break;
+        std.Io.sleep(oio, std.Io.Duration.fromMilliseconds(10), .awake) catch break;
+    }
+    try std.testing.expect(threads > 0);
+}

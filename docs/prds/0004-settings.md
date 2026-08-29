@@ -11,6 +11,13 @@ application), `render.zig` (the operator reference), `src/config/local.zig`
 (`coppiz.toml` parsing with a closed key set), and `docs/configuration.md`
 (the generated reference, pinned by a test so it cannot drift).
 
+The *Bootstrap* design's drift check followed on 2026-08-29: `coppiz doctor`
+compares every key the local `[genesis]` table names against the folded
+chain and warns per drifted key, naming both values
+(`src/main.zig` `checkGenesisDrift`, `src/settings/render.zig` `writeValue`).
+It is a warning, not a failure - the chain is authoritative, the file is
+merely stale.
+
 The *Reading settings* design's historical view followed on 2026-08-29:
 `Node.settingsAt(position)` and `Node.journalSettingsAt(id, position)`
 re-fold the chain and stop after the last slot at or before the position,
