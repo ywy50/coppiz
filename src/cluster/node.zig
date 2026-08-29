@@ -3000,7 +3000,13 @@ test "e2e (b): partition a 2-member seniority cluster, write on both sides, heal
         try journal.init(test_alloc, tio, data_dir, &genesis_changes, "main", &journal.wallClock);
     }
     const a_data_dir = try tmp_a.dir.openDir(tio, "data", .{ .iterate = true });
-    var node_a = try journal.Node.open(test_alloc, tio, a_data_dir, .{ .replay_forward = true });
+    // Test nodes run fsync = never: their dirs are throwaway tmpdirs, and
+    // a per-record fsync on the host filesystem both slows the suite and
+    // can stall it (bug 2026-08-29-e2e-fsync-stall-hang).
+    var node_a = try journal.Node.open(test_alloc, tio, a_data_dir, .{
+        .replay_forward = true,
+        .fsync = .never,
+    });
     var node_a_open = true;
     defer {
         if (node_a_open) node_a.deinit();
@@ -3013,7 +3019,10 @@ test "e2e (b): partition a 2-member seniority cluster, write on both sides, heal
         try journal.writeMemberKey(test_alloc, tio, data_dir, b_kp);
     }
     const b_data_dir = try tmp_b.dir.openDir(tio, "data", .{ .iterate = true });
-    var node_b = try journal.Node.open(test_alloc, tio, b_data_dir, .{ .replay_forward = true });
+    var node_b = try journal.Node.open(test_alloc, tio, b_data_dir, .{
+        .replay_forward = true,
+        .fsync = .never,
+    });
     var node_b_open = true;
     defer {
         if (node_b_open) node_b.deinit();
@@ -3265,6 +3274,13 @@ fn triNodeInit(
     var node = try journal.Node.open(test_alloc, tio, data_dir, .{
         .replay_forward = true,
         .now = now orelse &journal.wallClock,
+        // The test dirs live in `.zig-cache/tmp` on the host filesystem
+        // (btrfs here): a per-record fsync on every node serialized the
+        // suite on the disk and, when an fsync stalls, hung the whole run —
+        // the client's blocking recv has no deadline, so a delayed settings
+        // ack blocked forever (bug 2026-08-29-e2e-fsync-stall-hang). Test
+        // data is throwaway; the tested logic does not depend on durability.
+        .fsync = .never,
     });
     const listener = try hub.listen(test_alloc, listen_addr);
     const dialer = try hub.dialer(test_alloc, listen_addr);
