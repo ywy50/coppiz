@@ -24,6 +24,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- `zig build test` no longer hangs. Every three-node test ran on an
+  `std.Io.Threaded` with the default `async_limit` (`cpu_count - 1`), and
+  three `ClusterNode`s need 15 async slots, so on a machine with 16 or fewer
+  logical CPUs the third `start()` ran its own task inline and never
+  returned. Both sites - the `embed-cluster` example and the tri-node test
+  helper - now ask for 64 slots, which is not a per-CPU quantity, so the
+  threshold no longer moves with the hardware.
 - The readability rules now reach the repository root: docs-check (from
   the project-kit kit) scans the root README, CHANGELOG, RELEASES and
   AGENTS for links, paragraph length and em dashes, not only `docs/`.
