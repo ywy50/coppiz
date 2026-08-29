@@ -299,7 +299,7 @@ pub const Node = struct {
         const group_id = self.group_hash;
 
         try self.appendControl(.create_journal, payload, &self.control);
-        try self.store.createJournal(journal_id, group_id.entry_hash);
+        try self.store.createJournal(journal_id, group_id);
 
         var js = try self.allocator.create(JournalState);
         errdefer self.allocator.destroy(js);
@@ -1199,6 +1199,34 @@ test "init, append, read, head, reopen (the single-member journal)" {
         }
     }.cb);
     try std.testing.expectEqual(@as(usize, 2), seen2);
+}
+
+test "Node.createJournal creates and registers a journal" {
+    // The dead-API regression: createJournal's body had a field-access
+    // compile error (group_id.entry_hash on a [32]u8) that no gate
+    // analyzed; this call forces the body through analysis and checks the
+    // journal lands in the registry and survives reopen.
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    const jid = blk: {
+        var node = try openNode(&env);
+        defer node.deinit();
+        const id = try node.createJournal("side", &.{});
+        try std.testing.expect(!std.mem.eql(u8, &id, &[_]u8{0} ** 16));
+        try std.testing.expect(node.journalIdByName("side") != null);
+        break :blk id;
+    };
+
+    var node2 = try openNode(&env);
+    defer node2.deinit();
+    const side = node2.journalIdByName("side").?;
+    try std.testing.expectEqualSlices(u8, &jid, &side);
 }
 
 test "follow delivers existing slots from the cursor, then pushes new ones" {
