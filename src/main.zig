@@ -709,7 +709,9 @@ fn cmdAdmit(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void 
     const data_dir = try std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true });
     var node = try journal.Node.open(gpa, io, data_dir, .{});
     defer node.deinit();
-    if (!std.mem.eql(u8, &node.leader(), &node.member_id)) return error.NotLeader;
+    if (!std.mem.eql(u8, &(node.leader() orelse return error.NotLeader), &node.member_id)) {
+        return error.NotLeader;
+    }
 
     const file = data_dir.openFile(io, "pending.admit", .{}) catch |err| switch (err) {
         error.FileNotFound => return error.NoPendingAdmissions,
@@ -1192,12 +1194,32 @@ fn dumpServeLogs(bt: *BinTest) void {
 /// The founder's member id, from its own status line before anyone joins.
 fn leaderHex(bt: *BinTest) ![]u8 {
     try waitStatus(bt, "epoch 1");
-    const res = try bt.runRaw(&.{ "status", "--dir", bt.dir });
-    defer test_alloc.free(res.out);
-    const prefix = "leader ";
-    const start = std.mem.indexOf(u8, res.out, prefix) orelse return error.NoLeader;
-    const hex = std.mem.trim(u8, res.out[start + prefix.len ..], " \n\r");
-    return test_alloc.dupe(u8, hex);
+    // The follow-up status call used to run exactly once; a transient
+    // failure (ConnectionRefused while serve boots, FileNotFound before the
+    // key file exists) flaked the suite (bug
+    // 2026-08-28-sweep3-leaderhex-flaky-status). Poll it like waitStatus.
+    const deadline = std.Io.Timestamp.now(tio, .real).toMilliseconds() + 10_000;
+    while (std.Io.Timestamp.now(tio, .real).toMilliseconds() < deadline) {
+        const res = bt.runRaw(&.{ "status", "--dir", bt.dir }) catch {
+            std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(150), .awake) catch {};
+            continue;
+        };
+        if (res.code == 0) {
+            const prefix = "leader ";
+            if (std.mem.indexOf(u8, res.out, prefix)) |start| {
+                const hex = std.mem.trim(u8, res.out[start + prefix.len ..], " \n\r");
+                if (hex.len > 0) {
+                    const out = try test_alloc.dupe(u8, hex);
+                    test_alloc.free(res.out);
+                    return out;
+                }
+            }
+        }
+        test_alloc.free(res.out);
+        std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(150), .awake) catch {};
+    }
+    dumpServeLogs(bt);
+    return error.NoLeader;
 }
 
 /// The number of members in the fold of `name`'s data dir (nodes stopped).
