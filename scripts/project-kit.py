@@ -196,18 +196,27 @@ def next_phase(directory: Path, series: str) -> int:
 
 
 def render_template(kind: str, text: str, title: str, number: int | None = None) -> str:
-    headings = {"prd": "# PRD - ", "plan": "# Plan - ", "review": "# Review - ", "handover": "# Handover - ", "bug": "# Bug - ", "investigation": "# Investigation - ", "postmortem": "# Postmortem - "}
-    if kind == "adr":
+    headings = {"prd": "# PRD - ", "plan": "# Plan - ", "review": "# Review - ", "handover": "# Handover - ", "bug": "# Bug - ", "investigation": "# Investigation - ", "postmortem": "# Postmortem - ", "research": "# Research - "}
+    if kind in ("adr", "rfc"):
         if number is None:
-            raise ValueError("ADR template rendering requires a number")
-        headings["adr"] = f"# ADR {number:04d} - "
+            raise ValueError(f"{kind.upper()} template rendering requires a number")
+        headings[kind] = f"# {kind.upper()} {number:04d} - "
     text = re.sub(r"^# .*$", headings[kind] + title, text, count=1, flags=re.M)
-    return text.replace("YYYY-MM-DD", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    text = text.replace("YYYY-MM-DD", today)
+    # The RFC and research templates carry {{placeholders}}; fill the ones
+    # the scaffolder knows (number, title, date, and the opening status an
+    # RFC starts in), leave the substantive ones for the author.
+    if kind == "rfc":
+        text = text.replace("{{number}}", f"{number:04d}").replace("{{title}}", title).replace("{{status}}", "Discussion").replace("{{date}}", today)
+    if kind == "research":
+        text = text.replace("{{title}}", title).replace("{{date}}", today)
+    return text
 
 
 def command_new_doc(root: Path, cfg: dict, args: argparse.Namespace) -> int:
     title = " ".join(args.title)
-    entries = {"prd": ("prds", "TEMPLATE.md"), "adr": ("adrs", "TEMPLATE.md"), "plan": ("plans", "TEMPLATE.md"), "review": ("reviews", "TEMPLATE.md"), "handover": ("handovers", "TEMPLATE.md"), "bug": ("reports/bugs", "TEMPLATE.md"), "investigation": ("reports/investigations", "TEMPLATE.md"), "postmortem": ("reports/postmortems", "TEMPLATE.md")}
+    entries = {"prd": ("prds", "TEMPLATE.md"), "adr": ("adrs", "TEMPLATE.md"), "rfc": ("rfcs", "TEMPLATE.md"), "research": ("research", "TEMPLATE.md"), "plan": ("plans", "TEMPLATE.md"), "review": ("reviews", "TEMPLATE.md"), "handover": ("handovers", "TEMPLATE.md"), "bug": ("reports/bugs", "TEMPLATE.md"), "investigation": ("reports/investigations", "TEMPLATE.md"), "postmortem": ("reports/postmortems", "TEMPLATE.md")}
     directory_name, template_name = entries[args.kind]
     directory = docs_root(root, cfg) / directory_name
     template = directory / template_name
@@ -217,7 +226,7 @@ def command_new_doc(root: Path, cfg: dict, args: argparse.Namespace) -> int:
     series = getattr(args, "series", None)
     if series and args.kind != "plan":
         raise ValueError("--series is only valid for plans")
-    if args.kind in ("prd", "adr"):
+    if args.kind in ("prd", "adr", "rfc", "research"):
         number = next_number(directory)
         output = directory / f"{number:04d}-{slug(title)}.md"
     elif series:
@@ -273,7 +282,7 @@ def command_docs_check(root: Path, cfg: dict, _args: argparse.Namespace) -> int:
     # length, em dashes) apply to them like to docs/.
     root_docs = ("README.md", "CHANGELOG.md", "RELEASES.md", "AGENTS.md")
     readable = sorted(list(docs.rglob("*.md")) + [root / name for name in root_docs if (root / name).is_file()])
-    required = {"prds": ["Status", "Problem", "Goals", "Non-goals", "Design", "Failure modes", "Acceptance criteria", "Open questions / future work"], "adrs": ["Status", "Context", "Decision", "Consequences"]}
+    required = {"prds": ["Status", "Problem", "Goals", "Non-goals", "Design", "Failure modes", "Acceptance criteria", "Open questions / future work"], "adrs": ["Status", "Context", "Decision", "Consequences"], "rfcs": ["Status", "Overview", "Options considered", "Recommendation"]}
     for group, headings in required.items():
         seen: set[int] = set()
         for path in sorted((docs / group).glob("*.md")):
@@ -534,7 +543,7 @@ def parser() -> argparse.ArgumentParser:
     output.add_argument("--root", help="repository root; defaults to the current Git repository")
     sub = output.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor")
-    doc = sub.add_parser("new-doc"); doc.add_argument("kind", choices=("prd", "adr", "plan", "review", "handover", "bug", "investigation", "postmortem")); doc.add_argument("--series", help="plans only: phase series slug; names the doc <date>-<series>-phase-NN-<title>.md with NN auto-numbered"); doc.add_argument("title", nargs="+")
+    doc = sub.add_parser("new-doc"); doc.add_argument("kind", choices=("prd", "adr", "rfc", "research", "plan", "review", "handover", "bug", "investigation", "postmortem")); doc.add_argument("--series", help="plans only: phase series slug; names the doc <date>-<series>-phase-NN-<title>.md with NN auto-numbered"); doc.add_argument("title", nargs="+")
     sub.add_parser("docs-check")
     verify = sub.add_parser("verify"); verify.add_argument("names", nargs="*")
     sub.add_parser("status")
