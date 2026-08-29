@@ -32,6 +32,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the file afterwards previously got no error and no effect. Doctor now
   warns per drifted key, naming the local value and the folded one, and
   stays an `ok` line when they agree. A drift is a warning, not a failure.
+- The historical settings view PRD 0004 *Reading settings* names:
+  `Node.settingsAt(position)` for cluster scope and
+  `Node.journalSettingsAt(id, position)` for a journal's merged view. The
+  live accessors read the fold at the head; these re-fold the chain and stop
+  after the last slot at or before the position, so a caller can ask what
+  was in force when a given slot was written without standing up a second
+  node. A position before the genesis yields the schema defaults and one
+  past the head yields the head state; the caller owns the returned state.
 
 ### Fixed
 
