@@ -107,7 +107,13 @@ pub const Node = struct {
     ) anyerror!*Node {
         const st = try store.Store.open(allocator, io, data_dir, .{ .fsync = options.fsync });
         errdefer st.deinit();
-        const q_value = try queue.Queue.open(allocator, io, data_dir, options.unslotted_max_bytes);
+        const q_value = try queue.Queue.open(
+            allocator,
+            io,
+            data_dir,
+            options.unslotted_max_bytes,
+            options.fsync,
+        );
         const q = try allocator.create(queue.Queue);
         q.* = q_value;
         errdefer {

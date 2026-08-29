@@ -86,6 +86,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Changed
 
+- `storage.fsync` now governs the whole write path: the unslotted queue
+  honors the knob like the store does, and the queue's drain barriers
+  (`remove`/`clear`) no longer sync (a lost trim replays idempotently).
+  An append pays 2 fsyncs under `every`, 1 under `batched`, 0 under
+  `never` (was 3/2/2) - [ADR 0008](docs/adrs/0008-storage-fsync-governs-the-queue.md).
 - `zig build test` installs only what the suite spawns - the `coppiz`
   binary and the `sidecar` example (the G2 process-level test runs the
   installed sidecar): the other example executables are no longer compiled

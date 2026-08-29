@@ -2,7 +2,10 @@
 
 ## Status
 
-Discussion - opened 2026-08-29.
+Decided - 2026-08-29, [ADR 0008](../adrs/0008-storage-fsync-governs-the-queue.md)
+(Option A). Implementation note: the append-path drain is the per-entry
+`Queue.remove` (the single-member path's whole-queue `clear` is the same
+operation); both are now sync-free under the same idempotency argument.
 
 An RFC is a *request for comment*: it presents the options and a recommendation
 so a decision can be made, and it is not itself the decision record. When it is
