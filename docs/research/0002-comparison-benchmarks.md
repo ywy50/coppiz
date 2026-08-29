@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft — searched 2026-08-28.
+Draft — searched 2026-08-28; a follow-up sweep the same day (via the shell,
+see Scope and method) closed several of the open items.
 
 Research is evidence, not a decision: it records what exists, how good it is,
 and how confident the finding is. The decision that follows belongs in an
@@ -33,10 +34,11 @@ and adds the external comparison rows.
   must justify itself by the claim it tests — [Options found](#options-found).
 - **No rigorous head-to-head benchmark of these systems exists in public.**
   The closest are a crude 2022 gcore wall-clock test (Litestream ≈10 s,
-  dqlite ≈22 s, rqlite ≈61.5 s to import Chinook) and self-reported vendor
-  numbers (rqlite docs, etcd 2016-era doc, LiteFS "~100 tps" FUSE ceiling,
-  CR-SQLite "2.5× insert overhead"). A fair comparison is itself a
-  contribution — `high`, absence-based after a broad sweep:
+  dqlite ≈22 s, rqlite ≈61.5 s to import Chinook), a qualitative 2020
+  Stanford student project, and self-reported vendor numbers (rqlite docs,
+  etcd 2016-era doc, LiteFS "~100 tps" FUSE ceiling, CR-SQLite "2.5× insert
+  overhead"). A fair comparison is itself a contribution — `high`,
+  absence-based after a broad sweep:
   [gcore](https://gcore.com/blog/comparing-litestream-rqlite-dqlite/),
   [evidence log](#evidence-log).
 - **The single most common flaw in every published comparison is durability
@@ -87,6 +89,16 @@ and adds the external comparison rows.
   cadence, licences and maintenance posture age fast — the versions quoted
   here are already a snapshot. Anything marked `absence-based` means the
   sweep searched and did not find it; treat it as evidence, not certainty.
+
+- **Follow-up sweep (*sweep 2*, 2026-08-28, from the project shell):** the
+  agents' web search was bot-walled, so a second sweep ran with `curl`: the
+  HN Algolia API (comments with measured numbers), direct greps of k0s,
+  nats.io, cncf.io, tigerbeetle.com, the npm and crates registries, and a
+  fetch of the Stanford CS244b PDF that had failed earlier. Search engines
+  (DuckDuckGo, Bing, Brave, Mojeek, lite DDG) stayed walled from this
+  environment too; anything they alone could answer remains in
+  [Open questions](#open-questions). New evidence is marked *sweep 2* in
+  the evidence log.
 
 ## Benchmark harness design (how to do it)
 
@@ -311,8 +323,8 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
   prepared SELECT) gives a cache-resident ceiling.
 - **Cons:** single-writer; replicas lag (eventual consistency); the June
   2024 licence-change plan's outcome could not be verified at a primary
-  source (repo still MIT, a Turso employee said so on HN 2025-03); no
-  independent benchmarks exist.
+  source, though a Turso engineer confirmed "libSQL is open source (MIT
+  license)" on HN 2025-03-31 (*sweep 2*); no independent benchmarks exist.
 - **Unknowns:** the C library's actual current SQLite base version; a
   versioned C-library release artifact (tags are `libsql-server-vX.Y.Z`).
 
@@ -396,8 +408,8 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
 - **What it is:** persistence layer inside nats-server; a stream is
   literally a sequence-numbered append-only log with a read-back API; KV is
   a stream bucket. Raft-replicated (R1 default, R3 "production floor").
-- **Status:** nats-server v2.14.6 (2026-08-27), Apache-2.0, CNCF, very
-  active.
+- **Status:** nats-server v2.14.6 (2026-08-27), Apache-2.0, CNCF member
+  since 2018-03-15 (*sweep 2*; graduation not confirmed), very active.
 - **Benchmark fit:** the stream-shaped baseline (C5): most comparable data
   shape of all candidates. Durability must be pinned — **PubAck ≠ fsynced
   by default**; file storage syncs on `sync_interval` (`always` degrades
@@ -408,8 +420,8 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
 - **Cons:** messaging semantics (consumers, acks, retention, dedup window)
   complicate a store-to-store comparison; single-leader writes; no official
   absolute benchmark table.
-- **Unknowns:** CNCF graduation status (membership confirmed, graduation
-  not).
+- **Unknowns:** CNCF graduation status (accepted 2018-03-15, graduation
+  not confirmed).
 
 #### PostgreSQL — the server baseline
 
@@ -593,7 +605,12 @@ not certainty.
 | Methodology: commit latency = fdatasync + network RTT; disclose hardware, versions, workload, commands; rerun in your own environment | https://etcd.io/docs/v3.4/op-guide/performance/ | 2026-08-28 | high |
 | Methodology: pgbench scale factor should exceed client count; run the client from a separate machine; consider separate WAL filesystems | https://wiki.postgresql.org/wiki/Pgbench | 2026-08-28 | high |
 | Methodology: report avg + p95 + p99 + ops/s + resource utilization + process audit trail | https://benchant.com/more-solutions/benchmarking-platform | 2026-08-28 | medium (vendor, standard practice) |
-| Stanford CS244b "Distributed SQLite" project PDF exists but could not be opened from the research environment (fetch failed) | https://www.scs.stanford.edu/20sp-cs244b/projects/Distributed%20SQLite.pdf | 2026-08-28 | low (unread) |
+| Stanford CS244b spring-2020 student project "Distributed SQLite" (Raft-replicated SQLite on sofajraft): 3-node single-host cluster, benchmarked against rqlite and SQLite; reports DSQLite faster on write requests (1,500-INSERT test); hardware disclosed (16 GB / 3.1 GHz i7 vs rqlite; 8 GB / 1.6 GHz vs SQLite); durability not discussed; exact numbers garbled in the PDF text layer — *sweep 2* | https://www.scs.stanford.edu/20sp-cs244b/projects/Distributed%20SQLite.pdf | 2026-08-28 | low (student project; qualitative) |
+| SQLite WAL on NVMe: ~10–20k serialized INSERTs/s (~50 µs/row) with WAL pragmas — HN commenter, story 36208568 "Why SQLite is so great for the edge", 2023-06-06 — *sweep 2* | https://hn.algolia.com/api/v1/items/36208568 | 2026-08-28 | medium (single commenter; disk described only as NVMe) |
+| "libSQL is open source (MIT license)" — Turso engineer `avinassh`, HN Limbo thread (item 43535943), 2025-03-31; matches the repo's MIT LICENSE.md — *sweep 2* | https://hn.algolia.com/api/v1/items/43535943 | 2026-08-28 | high (employee statement) |
+| k0s README and stable docs contain no rqlite mention (checked directly) — gcore's "rqlite used in k0s" claim stays unsubstantiated — *sweep 2* | https://raw.githubusercontent.com/k0sproject/k0s/main/README.md, https://docs.k0sproject.io/stable/ | 2026-08-28 | high (for the check) |
+| NATS accepted to CNCF on 2018-03-15; graduation status not confirmed — *sweep 2* | https://www.cncf.io/projects/ | 2026-08-28 | high (acceptance date) |
+| TigerBeetle "DevHub" is not at `tigerbeetle.com/devhub` nor `github.com/tigerbeetle/devhub` (both 404) — public URL still unknown — *sweep 2* | direct fetches | 2026-08-28 | high (for the 404s) |
 
 ## Open questions
 
@@ -604,25 +621,32 @@ cannot settle).
 ### Not found in this sweep (rerun targets)
 
 - **Hacker News threads with real measured numbers.** The Algolia API was
-  unreachable; a rerun should search HN for "rqlite benchmark", "dqlite
-  benchmark", "LiteFS benchmark", "libSQL benchmark", "TigerBeetle
-  benchmark" and extract measured figures + hardware.
+  reachable only from the shell (*sweep 2*); a comment search for
+  rqlite/dqlite/LiteFS/libSQL/TigerBeetle benchmarks surfaced no head-to-head
+  numbers — only one generic SQLite data point (evidence log). A rerun with
+  working search should retry HN plus lobste.rs and Reddit for "rqlite
+  benchmark", "dqlite benchmark", "LiteFS benchmark", "libSQL benchmark",
+  "TigerBeetle benchmark".
 - **Any 2024–2026 rigorous third-party head-to-head benchmark** of the
-  Tier-1/tier-2 systems. Only the crude 2022 gcore test and vendor
-  self-reports exist in this sweep. A rerun should try: "replicated SQLite
-  benchmark 2025", "dqlite vs rqlite benchmark", "LiteFS vs dqlite", recent
-  YouTube/talk write-ups, and the [Stanford CS244b project PDF]
+  Tier-1/tier-2 systems. Only the crude 2022 gcore test, vendor
+  self-reports, and the qualitative 2020 Stanford CS244b student project
+  (evidence log) exist so far. Search engines were walled all day; a rerun
+  should try "replicated SQLite benchmark 2025", "dqlite vs rqlite
+  benchmark", "LiteFS vs dqlite", recent talk write-ups, and recover the
+  exact numbers from the [CS244b PDF]
   (https://www.scs.stanford.edu/20sp-cs244b/projects/Distributed%20SQLite.pdf)
-  which failed to fetch here.
-- **TigerBeetle DevHub performance page** — referenced in repo docs, public
-  URL not found. Rerun should also extract the "A Trillion Transactions"
-  numbers from the talk video into text.
-- **libSQL June-2024 licence-change outcome** — announced, not applied,
-  no primary source found for the plan or its resolution. Rerun should check
-  Turso's GitHub org issues and archived blog posts.
-- **"rqlite used in k0s"** — only the gcore blog claims it. Rerun: k0s
-  source/docs search.
-- **NATS CNCF graduation status** — membership confirmed, graduation not.
+  (the text layer came out garbled).
+- **TigerBeetle DevHub performance page** — referenced in repo docs; public
+  URL still unknown (*sweep 2*: `tigerbeetle.com/devhub` and
+  `github.com/tigerbeetle/devhub` are both 404). Rerun should also extract
+  the "A Trillion Transactions" numbers from the talk video into text.
+- **libSQL June-2024 licence-change plan** — announced, not applied; the
+  plan's own primary source is still missing, but the current state is
+  firmer: Turso engineer confirmed MIT on HN 2025-03-31 and the repo
+  LICENSE.md is MIT (*sweep 2*). Rerun: Turso's GitHub org issues and
+  archived blog posts for the 2024 announcement itself.
+- **NATS CNCF graduation status** — accepted 2018-03-15 (*sweep 2*);
+  graduation not confirmed.
 - **dqlite official benchmark numbers** — none exist as of this sweep; a
   rerun should also confirm the fsync-before-ack ordering in the source
   (currently inferred, medium confidence).
@@ -634,7 +658,20 @@ cannot settle).
   another) and whether historical `-raft-on-disk`-style flags existed.
 - **Fly.io blog post enumeration was partial** (Wayback CDX only); a rerun
   with search should check for "LiteFS benchmark" posts after 2025-04.
-- **Loro v1.0 announcement publication date** (page carries none).
+- **Loro v1.0 (Rust-rewrite era) announcement publication date** — the
+  blog page carries none; the npm `1.0.0` date (2023-03-23) is a different
+  "1.0" and must not be used.
+
+### Resolved or narrowed by sweep 2
+
+- **"rqlite used in k0s"** — checked directly: k0s README and stable docs
+  contain no rqlite mention (evidence log). The gcore claim stays
+  unsubstantiated until a primary k0s source says otherwise.
+- **libSQL current licence** — MIT, confirmed by a Turso engineer
+  (2025-03-31) and the repo's LICENSE.md; only the 2024 plan's own source
+  is still missing.
+- **CS244b PDF** — fetched and read; it is a 2020 student design project
+  with a qualitative rqlite comparison, not a benchmark table to cite.
 
 ### Decisions for the operator (block the harness, not the research)
 
@@ -701,7 +738,7 @@ cannot settle).
 - **Survey & methodology:** YCSB README, andrecasal/sqlite-vs-postgres-benchmark,
   intuitem.com/postgresql-vs-sqlite-2026-benchmark, deployn.de, pglite.dev/benchmarks,
   sqg.dev/blog/sqlite-driver-benchmark, benchANT, scs.stanford.edu CS244b
-  project page (unread).
+  project PDF (read; qualitative rqlite comparison — see evidence log).
 
 ## Appendix
 
