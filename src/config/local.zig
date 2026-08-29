@@ -375,7 +375,17 @@ fn appendArrayItem(
         backslash_parity = 0;
     }
     if (in_quotes) return error.InvalidValue; // unterminated
-    if (quote_count > 0 and quote_count != 2) return error.InvalidValue;
+    if (quote_count > 0) {
+        if (quote_count != 2) return error.InvalidValue;
+        // The closing quote must be the item's last character (after
+        // trimming): a trailing bare token after a quoted item is not a
+        // valid TOML string, and `unquote` would otherwise store it
+        // verbatim, quotes included — a garbage authority entry that can
+        // strand a configured cluster exactly like a ghost authority (bug
+        // 2026-08-30-config-array-trailing-token).
+        const trimmed = std.mem.trim(u8, item, " \t");
+        if (trimmed.len < 2 or trimmed[trimmed.len - 1] != '"') return error.InvalidValue;
+    }
     try out.append(allocator, try allocator.dupe(u8, unquote(item)));
 }
 
@@ -527,6 +537,20 @@ test "malformed authority arrays are refused, not silently parsed" {
     defer config3.deinit();
     const mid_quote = "[genesis]\nleadership.authorities = [\"a\"b\"]\n";
     try std.testing.expectError(error.InvalidValue, parse(test_alloc, mid_quote, &config3));
+
+    // A trailing bare token after a quoted item is not a TOML string; it
+    // used to slip through and be stored verbatim, quotes included (bug
+    // 2026-08-30-config-array-trailing-token).
+    var config4 = Config{ .allocator = test_alloc };
+    defer config4.deinit();
+    const trailing = "[genesis]\nleadership.authorities = [\"a\"x]\n";
+    try std.testing.expectError(error.InvalidValue, parse(test_alloc, trailing, &config4));
+
+    // Trailing whitespace after the closing quote is fine.
+    var config5 = Config{ .allocator = test_alloc };
+    defer config5.deinit();
+    const trailing_space = "[genesis]\nleadership.authorities = [\"a\" ]\n";
+    try parse(test_alloc, trailing_space, &config5);
 }
 
 test "bad values are refused" {
