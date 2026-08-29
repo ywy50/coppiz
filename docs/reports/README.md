@@ -139,3 +139,4 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-28 - making `zig build test` faster without dropping tests](investigations/2026-08-28-test-suite-quick-wins.md)
 - [2026-08-30 - a scalar `coppiz.toml` value with unbalanced quotes is stored verbatim, quote included](bugs/2026-08-30-toml-scalar-unbalanced-quote.md)
 - [2026-08-30 - an allowlist-only `[[peers]]` entry is dialed forever at the empty address](bugs/2026-08-30-allowlist-only-peer-dialed-forever.md)
+- [2026-08-30 - a refused `Store.open` leaks the journal state it had already built](bugs/2026-08-30-store-open-refusal-leaks-journal-state.md)

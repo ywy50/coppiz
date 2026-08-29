@@ -134,7 +134,7 @@ pub const Store = struct {
             .lock_file = lock_file,
             .journals = std.AutoHashMap([16]u8, *JournalDir).init(allocator),
         };
-        errdefer store.journals.deinit();
+        errdefer store.destroyJournals();
 
         try store.loadAll(data_dir);
         return store;
@@ -155,7 +155,11 @@ pub const Store = struct {
     }
 
     /// Closes every file and releases the directory lock.
-    pub fn deinit(self: *Store) void {
+    /// Releases every loaded journal - segment descriptors, index, the
+    /// directory handle and the struct - and the map itself. Shared with
+    /// `open`'s error path, which would otherwise free the map's table and
+    /// leak every journal already loaded when a later one refuses.
+    fn destroyJournals(self: *Store) void {
         var it = self.journals.valueIterator();
         while (it.next()) |jd_ptr| {
             const jd = jd_ptr.*;
@@ -166,6 +170,10 @@ pub const Store = struct {
             self.allocator.destroy(jd);
         }
         self.journals.deinit();
+    }
+
+    pub fn deinit(self: *Store) void {
+        self.destroyJournals();
         self.lock_file.unlock(self.io);
         self.lock_file.close(self.io);
         self.data_dir.close(self.io);
@@ -769,6 +777,17 @@ pub const Store = struct {
             .head_records_len = 0,
             .next_ordinal = 0,
         };
+        // Everything below fills `jd` in place, and several steps refuse:
+        // a corrupt or truncated segment (G3/G5) is a supported outcome, not
+        // an exotic one. Without this the index table, the segment list and
+        // the descriptors of the segments already adopted are all lost. The
+        // directory handle is not closed here - the `errdefer sub.close`
+        // above owns it, and `jd.dir` is the same handle.
+        errdefer {
+            for (jd.segments.items) |seg| seg.file.close(self.io);
+            jd.segments.deinit(self.allocator);
+            jd.index.deinit();
+        }
 
         // Collect segment files in name order (zero-padded: lexicographic
         // equals numeric).
@@ -1224,6 +1243,51 @@ test "mid-file corruption refuses the open and names the journal (G3)" {
     try std.testing.expectEqual(@as(usize, 1), n);
     one[0] ^= 0x40;
     try file.writePositionalAll(tio, &one, segment.header_len + 60);
+
+    try std.testing.expectError(error.Corrupt, env.openStore());
+}
+
+test "a refused open frees the journal state it had already built" {
+    // The G3 refusal is a supported outcome, and loadJournal builds the
+    // JournalDir in place before it can happen: the index table, the
+    // segment list and the descriptors of the segments already adopted were
+    // all lost on the way out, and Store.open's own errdefer freed the
+    // journals map without its values, so an earlier journal was lost whole.
+    // std.testing.allocator reports the leak.
+    var env = TestEnv.init();
+    defer env.deinit();
+    const bad_id = "0123456789abcdef".*;
+    const good_id = "fedcba9876543210".*;
+
+    {
+        const store = try env.openStore();
+        defer store.deinit();
+        try store.createJournal(bad_id, [_]u8{0} ** 32);
+        try appendN(store, bad_id, 3);
+        // A second, healthy journal: whichever the directory scan reaches
+        // first, one of the two error paths carries it.
+        try store.createJournal(good_id, [_]u8{0} ** 32);
+        try appendN(store, good_id, 2);
+    }
+
+    // Flip a byte inside the *second* record, so the scan indexes the first
+    // one before it breaks - the index map is allocated by then - and a
+    // valid third record after the break makes it mid-file corruption
+    // rather than a torn tail.
+    const seg_path = try std.fmt.allocPrint(test_alloc, "data/{x}/seg-00000001", .{bad_id});
+    defer test_alloc.free(seg_path);
+    const record_len = segment.record_prefix_len + slot.encoded_len +
+        entry.header_len + "payload".len;
+    const at = segment.header_len + record_len + 60;
+    {
+        const file = try env.tmp.dir.openFile(tio, seg_path, .{ .mode = .read_write });
+        defer file.close(tio);
+        var one: [1]u8 = undefined;
+        const n = try file.readPositionalAll(tio, &one, at);
+        try std.testing.expectEqual(@as(usize, 1), n);
+        one[0] ^= 0x40;
+        try file.writePositionalAll(tio, &one, at);
+    }
 
     try std.testing.expectError(error.Corrupt, env.openStore());
 }
