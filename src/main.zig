@@ -198,8 +198,11 @@ fn cmdInit(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    var data_dir = try std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true });
-    errdefer data_dir.close(io);
+    // `journal.init` owns the handle from here (it closes it on every
+    // path); closing it here too would close a descriptor the allocator's own
+    // file operations may already have recycled (bug
+    // 2026-08-29-init-data-dir-double-close).
+    const data_dir = try std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true });
     try journal.init(gpa, io, data_dir, cfg.genesis.items, first_journal, &journal.wallClock);
 }
 
