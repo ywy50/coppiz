@@ -419,11 +419,17 @@ pub const FoldState = struct {
         try self.checkAuthorSeq(en);
         const max_bytes = self.settings.getU64(schema.keyIndex("journal.max_entry_bytes").?);
         if (en.payload.len > max_bytes) return error.TooLarge;
+        // A record from a past term is pre-failover data a follower kept
+        // when a new leader was elected; its journal-scoped control records
+        // were valid under the term's own leader then, and refusing them on
+        // reopen would brick the store (bug
+        // 2026-08-28-sweep3-pre-failover-settings-replay).
+        const pre_failover = sl.epoch < cluster.epoch.?.number;
         switch (en.kind) {
             .data => {},
-            .settings => try self.applyJournalSettings(sl, en, cluster),
+            .settings => try self.applyJournalSettings(sl, en, cluster, pre_failover),
             .stale => try self.applyStale(sl, en),
-            .checkpoint => try self.applyCheckpoint(sl, en, cluster),
+            .checkpoint => try self.applyCheckpoint(sl, en, cluster, pre_failover),
             .genesis, .create_journal => return error.WrongJournalType,
             .join, .leave, .epoch, .merge => return error.WrongJournalType,
         }
@@ -672,8 +678,9 @@ pub const FoldState = struct {
         sl: *const slot.Slot,
         en: *const entry.Entry,
         cluster: *const FoldState,
+        pre_failover: bool,
     ) ApplyError!void {
-        try checkAuthorIsLeader(en, cluster.epoch.?.leader);
+        try checkAuthorIsLeader(en, if (pre_failover) sl.leader else cluster.epoch.?.leader);
         var payload = settings_fold.decodePayload(self.allocator, en.payload) catch |err|
             return mapSettingsDecodeError(err);
         defer payload.deinit(self.allocator);
@@ -707,8 +714,9 @@ pub const FoldState = struct {
         sl: *const slot.Slot,
         en: *const entry.Entry,
         cluster: *const FoldState,
+        pre_failover: bool,
     ) ApplyError!void {
-        try checkAuthorIsLeader(en, cluster.epoch.?.leader);
+        try checkAuthorIsLeader(en, if (pre_failover) sl.leader else cluster.epoch.?.leader);
         const payload = decodeCheckpointPayload(en.payload) catch return error.BadControlPayload;
         if (slot.Position.order(payload.expire_through, sl.position()) == .gt) {
             return error.BadCheckpoint;
@@ -720,10 +728,15 @@ pub const FoldState = struct {
         // stamp (OQ 60). `merge.settle_ms` is cluster-scoped, so the value
         // comes from the cluster's fold, not this journal's; the merge fact
         // itself lives on the control fold too (a data fold never sees a
-        // merge entry — bug 2026-08-28-merge-settle-rule-dead).
-        if (cluster.last_merge) |merge| {
-            const settle = cluster.settings.getU64(schema.keyIndex("merge.settle_ms").?);
-            if (sl.slot_ts_ms < merge.slot_ts_ms +| settle) return error.MergeSettling;
+        // merge entry — bug 2026-08-28-merge-settle-rule-dead). A
+        // historical (pre-failover) checkpoint predates the merge by
+        // construction and must replay as it folded (bug
+        // 2026-08-28-sweep3-pre-failover-settings-replay).
+        if (!pre_failover) {
+            if (cluster.last_merge) |merge| {
+                const settle = cluster.settings.getU64(schema.keyIndex("merge.settle_ms").?);
+                if (sl.slot_ts_ms < merge.slot_ts_ms +| settle) return error.MergeSettling;
+            }
         }
         // The default configuration removes nothing (ttl.enforce = off,
         // stale.cleanup = keep): skip the O(entries) candidates pass, which
@@ -2291,4 +2304,46 @@ test "a redelivery below the author's last_seq does not lower it" {
         error.DuplicateConflict,
         cluster.data.applyData(&cluster.control, &sl4, &e2_conflict),
     );
+}
+
+test "pre-failover journal settings replay on reopen, not refused" {
+    // Bug 2026-08-28-sweep3-pre-failover-settings-replay: a data journal's
+    // records from a past term are the pre-failover data a follower kept;
+    // its journal-scoped settings were valid under that term's leader and
+    // must fold on replay, not refuse with NotLeader against the new one.
+    var fix = Fix.init();
+    var io_state = std.Io.Threaded.init(test_alloc, .{});
+    const second = crypto.sign.Ed25519.KeyPair.generate(io_state.io());
+    const second_id = deriveMemberId(second.public_key.toBytes());
+
+    var cluster = try clusterWithDataJournal(&fix);
+    defer {
+        cluster.control.deinit();
+        cluster.data.deinit();
+    }
+    try cluster.control.members.append(test_alloc, .{
+        .id = second_id,
+        .public_key = second.public_key.toBytes(),
+        .seniority = .{ .epoch = 1, .seq = 4 },
+        .address = try test_alloc.dupe(u8, ""),
+    });
+    // The failover: epoch 2, the second member leads.
+    cluster.control.epoch = .{ .number = 2, .leader = second_id, .reason = "test" };
+
+    // A fresh data fold replays the pre-failover journal-scoped settings
+    // record (authored by the founder, epoch 1).
+    var data = try FoldState.init(test_alloc, false, fix.data_id);
+    defer data.deinit();
+    const ttl_default = schema.keyIndex("ttl.default_ms").?;
+    const changes = [_]validate.Change{
+        .{ .key = ttl_default, .value = .{ .u64 = 5000 } },
+    };
+    const pl = SettingsPayload{ .scope = .journal, .journal_id = fix.data_id, .changes = &changes };
+    const pl_buf = try test_alloc.alloc(u8, settings_fold.payloadLen(pl));
+    defer test_alloc.free(pl_buf);
+    try settings_fold.encodePayload(pl, pl_buf);
+    const en = try fix.entryFor(.settings, fix.data_id, 1, 0, pl_buf);
+    const sl = try fix.slotFor(1, 1, entry.entryHash(&en), slot.genesis_prev, 1000);
+    try data.applyData(&cluster.control, &sl, &en);
+    try std.testing.expectEqual(@as(u64, 5000), data.settings.getU64(ttl_default));
 }
