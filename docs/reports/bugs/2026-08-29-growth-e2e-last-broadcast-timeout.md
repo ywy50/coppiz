@@ -101,6 +101,46 @@ The next step in *Resolution* below is still the right one, and is now the
 only one left that separates the hypotheses: capture the three serve stderr
 logs from a failing run.
 
+## A second step can time out too (2026-08-29, `src/net/` wire sweep)
+
+One occurrence in seven `zig build test` runs across three worktrees, and it
+was **not** at `pollRead(&c, "m2")`:
+
+```
+error: 'main.test.process-level: a live cluster grows 1 → 2 → 3 members over
+TCP, founder stays leader' failed:
+       .../src/main.zig:1426:5: in pollRead (test)
+           return error.Timeout;
+       .../src/main.zig:1372:20: in test.process-level: a live cluster grows
+           const read_b = try pollRead(&b, "m1");
+Build Summary: 21/23 steps succeeded (1 failed); 303/304 tests passed
+```
+
+An immediate re-run of the same tree was green (304/304), as with every
+other recorded occurrence. So the symptom is "a joiner never sees the newest
+record", not specifically "C never sees `m2`", and any explanation has to
+cover both steps.
+
+The `m1` step has a candidate the `m2` step does not, recorded as a
+candidate and **not** established here - no serve logs were captured:
+
+- `onSlot` returns early while the member is backfilling
+  (`if (self.syncing or self.merging_from != null) return;`), and the report
+  above establishes that nothing re-requests a dropped *newest* record.
+- The test guards C against exactly that. Its own comment says so: "C's
+  leader view updates once its control chain folds; its data backfill may
+  still be running, and a broadcast during it is dropped", and it polls
+  `m1` on C before appending `m2`.
+- B has no equivalent guard. Between `waitStatus(&b, "leader <a>")` and
+  A's `append m1` there is nothing that proves B's data backfill has
+  finished, so a `syncing` B can drop the `m1` broadcast and then wait out
+  the 20 s.
+
+If that is what fires at the `m1` step, it is a defect in the test's
+sequencing there and a product defect in the missing recovery - the same
+missing recovery the report already names. It says nothing about the `m2`
+step, where C's backfill is proven complete before the append.
+
 ## Resolution
 
 Not fixed. The next step is to capture the failing run's three serve
