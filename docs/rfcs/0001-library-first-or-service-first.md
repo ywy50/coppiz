@@ -213,7 +213,7 @@ the protocol clean enough that D stays possible".
 - Is a C ABI needed sooner than the service API, for hosts that link C but
   not Zig? (first non-Zig consumer.)
 - Should the replication protocol be public (D) from v1, or internal until
-  1.0? ([OQ 19](../open-questions.md))
+  1.0? ([OQ 19](../open-questions.md#oq-19))
 
 ## Next steps / action items
 

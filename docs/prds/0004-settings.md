@@ -92,7 +92,7 @@ is a new set of keys, not a schema break.
 
 A `settings` entry names its scope and, for
 journal scope, the journal. Cluster-scoped settings live in the cluster's
-control journal - see [open question 7](../open-questions.md) on whether that
+control journal - see [open question 7](../open-questions.md#oq-7) on whether that
 is a separate chain or the first journal.
 
 **Bootstrap.** The founder's local config carries `[genesis]` with the initial
@@ -170,7 +170,7 @@ mechanism that PRD 0002 and PRD 0003 populate.
 | Valid keys, invalid combination | refused, naming the cross-key rule |
 | Journal setting found in local config | startup error naming the key and the layer it belongs to |
 | Local `[genesis]` differs from the chain after init | ignored; `coppiz doctor` warns |
-| Two leaders append conflicting `settings` during a partition | both slotted on their branches; after merge the surviving branch's value wins for the merged chain *and* the losing branch's `settings` entries are re-slotted as no-ops - re-applying them is [open question 33](../open-questions.md) |
+| Two leaders append conflicting `settings` during a partition | both slotted on their branches; after merge the surviving branch's value wins for the merged chain *and* the losing branch's `settings` entries are re-slotted as no-ops - re-applying them is [open question 33](../open-questions.md#oq-33) |
 
 ## Acceptance criteria
 
@@ -190,7 +190,7 @@ mechanism that PRD 0002 and PRD 0003 populate.
 
 ## Open questions / future work
 
-- Where cluster-scoped settings live ([OQ 7](../open-questions.md)).
+- Where cluster-scoped settings live ([OQ 7](../open-questions.md#oq-7)).
 - Merge semantics for conflicting `settings` on two branches ([OQ 33]).
 - TOML parser choice ([OQ 35]).
 - Whether settings should be signed by an operator key distinct from member

@@ -108,7 +108,7 @@ first non-Zig consumer ([ADR 0007](adrs/0007-the-library-is-the-primary-surface.
 (PRD 0005); `src/federation/` (later) group membership, ownership, routing,
 parity. Pure logic (codecs, fold, election, merge, expiry) is kept I/O-free
 so it can be unit-tested and driven by a deterministic simulator
-([OQ 27](open-questions.md)).
+([OQ 27](open-questions.md#oq-27)).
 
 ## Hosts
 

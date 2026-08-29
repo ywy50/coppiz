@@ -26,7 +26,7 @@ The library (`src/root.zig` and everything under `src/journal/`,
 standard library only, links no libc beyond what the host links, and
 declares no fetched dependencies in `build.zig.zon`. The node binary may
 vendor (not fetch) a TOML parser under `vendor/` for `coppiz.toml`
-([OQ 35](../open-questions.md)); nothing under the library may import it.
+([OQ 35](../open-questions.md#oq-35)); nothing under the library may import it.
 
 ## Consequences
 
@@ -37,7 +37,7 @@ vendor (not fetch) a TOML parser under `vendor/` for `coppiz.toml`
   API churns with `std` pre-1.0 (RFC 0001 names this as its main sink).
 - Cryptography is limited to what `std.crypto` ships; a primitive it lacks
   (a different signature scheme, an AEAD for wire encryption) is either in
-  `std` or is not available - [OQ 23](../open-questions.md) is bounded by
+  `std` or is not available - [OQ 23](../open-questions.md#oq-23) is bounded by
   this.
 - No SQLite, no LMDB, no RocksDB: the storage engine is our own append-only
   segment format (PRD 0001), which is the right shape for a log but means

@@ -27,15 +27,15 @@ phases 1–3.
 The leader checkpoints on `checkpoint.every_ms`, or when
 `checkpoint.pending_bytes` of removable payload has accumulated (probed as
 data arrives, never by a per-tick full scan); the defaults stay the
-placeholders of [OQ 10](../open-questions.md). Compaction runs at the same
+placeholders of [OQ 10](../open-questions.md#oq-10). Compaction runs at the same
 chain position on every member - the follower drops the payloads when the
 checkpoint folds - so the bytes, not just the fold marks, match.
 
 A journal
 that has been compacted cannot yet be joined or backfilled by a new member:
 the sync path refuses compacted records, an interaction now reachable
-([OQ 43](../open-questions.md)). The merge-with-checkpoints determinism
-([OQ 44](../open-questions.md)) is next in the simulator's scenarios.
+([OQ 43](../open-questions.md#oq-43)). The merge-with-checkpoints determinism
+([OQ 44](../open-questions.md#oq-44)) is next in the simulator's scenarios.
 
 ## Problem
 
@@ -94,7 +94,7 @@ chain position.
 - **No secure erasure.** Delete drops the payload from live segments; it does
   not scrub disk blocks or backups.
 - **No leader-side staleness in v1.** Only the author. Extending it to the
-  leader or an operator role is [open question 6](../open-questions.md).
+  leader or an operator role is [open question 6](../open-questions.md#oq-6).
 
 ## Design
 
@@ -131,7 +131,7 @@ retention without forcing expiry. A journal under
 **Soft expiry: what a reader sees.** A read at local time `now` hides an entry
 whose expiry instant ≤ `now - ttl.grace_ms`. This is the one place a local
 clock is used, and it only affects *visibility on this member*, never bytes.
-`grace_ms` (default 0; [open question 9](../open-questions.md)) lets an
+`grace_ms` (default 0; [open question 9](../open-questions.md#oq-9)) lets an
 operator tolerate skew between the leader that stamped the slot and the
 member that reads it. Under `mark_stale`, a TTL-reached entry reads as
 stale; under `delete`, as expired; `include_stale` / `include_expired` show
@@ -162,7 +162,7 @@ self-modifying system needs, and costs 164 bytes per removed entry - the
 draft header layout of [PRD 0001](0001-journal-core.md) summed. `none` is
 for journals where volume dominates. Removing a *slot* is never allowed - it
 would break the chain - so the journal's slot count only grows; the cost of that
-is [open question 24](../open-questions.md).
+is [open question 24](../open-questions.md#oq-24).
 
 **Who triggers a checkpoint.** The leader, on a cadence: `checkpoint.every_ms`
 (default 60 s) or when `checkpoint.pending_bytes` of removable payload has
@@ -238,9 +238,9 @@ clock it did not stamp.
 
 | Condition | Behaviour |
 |---|---|
-| `stale` authored while `stale.enforce = off` | refused by every member, `staleness_disabled`; the author's `author_seq` is still consumed (the entry exists, it is just refused a slot) - [open question 11](../open-questions.md) |
-| `stale` names another author's entry | refused by every member, `not_author`; the author's `author_seq` is still consumed (the entry exists, it is just refused a slot) - [open question 11](../open-questions.md) |
-| `stale` names an unknown entry id | held like any gap (PRD 0001); refused `unknown_target` if the target never arrives within `sync.gap_timeout_ms` ([OQ 56](../open-questions.md)) |
+| `stale` authored while `stale.enforce = off` | refused by every member, `staleness_disabled`; the author's `author_seq` is still consumed (the entry exists, it is just refused a slot) - [open question 11](../open-questions.md#oq-11) |
+| `stale` names another author's entry | refused by every member, `not_author`; the author's `author_seq` is still consumed (the entry exists, it is just refused a slot) - [open question 11](../open-questions.md#oq-11) |
+| `stale` names an unknown entry id | held like any gap (PRD 0001); refused `unknown_target` if the target never arrives within `sync.gap_timeout_ms` ([OQ 56](../open-questions.md#oq-56)) |
 | Follower clock far ahead of the leader | follower hides entries early (soft); bytes unaffected; `grace_ms` is the knob |
 | Follower clock far behind | follower shows expired entries until a checkpoint removes them; bytes unaffected |
 | Leader clock jumps forward | expiry instants pass early for entries slotted afterwards; nothing retroactive - earlier slots keep their stamps |
@@ -268,13 +268,13 @@ clock it did not stamp.
 ## Open questions / future work
 
 - Whether `stale.who` should grow `leader` or an operator role, and what
-  authorizes it ([OQ 6](../open-questions.md)).
+  authorizes it ([OQ 6](../open-questions.md#oq-6)).
 - `grace_ms` default and whether it should be derived from observed skew
-  ([OQ 9](../open-questions.md)).
-- Checkpoint cadence defaults ([OQ 10](../open-questions.md)).
+  ([OQ 9](../open-questions.md#oq-9)).
+- Checkpoint cadence defaults ([OQ 10](../open-questions.md#oq-10)).
 - Slot count grows forever even under `retain = none`; whether an
   *archival checkpoint* (a signed root that lets old slots be archived) is
-  needed, and when ([OQ 24](../open-questions.md)).
+  needed, and when ([OQ 24](../open-questions.md#oq-24)).
 - Whether the `stale` cause is itself switchable per journal - settled: the
-  schema above gates it with `stale.enforce` ([OQ 57](../open-questions.md),
+  schema above gates it with `stale.enforce` ([OQ 57](../open-questions.md#oq-57),
   resolved 2026-08-27).

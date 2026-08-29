@@ -2,16 +2,22 @@
 
 The cross-cutting register of what the design does not yet settle. Every
 PRD and RFC points here by number (`OQ n`); numbers are stable - a resolved
-question keeps its number and gets a **Resolved** line naming the record
+question keeps its number and gets a **Resolved** [RESOLVED] line naming the record
 that settled it (an ADR, a PRD Design section, or a measurement), never a
 deletion. Add new questions at the end of the section they belong to.
 
 Ordering inside each section is by what blocks implementation first.
 "Blocks" names the phase that cannot start until the answer exists.
+Numbers are stable IDs assigned as questions were raised; sections
+order them by blocking priority, so the numbers are not sequential
+within a section. Every entry is anchored (`#oq-n`) for direct links
+and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
+`PARTIAL`.
 
 ## A. Trust and product stance
 
-1. **What is the trust model - crash faults only, or misbehaving members?**
+<a id="oq-1"></a>
+1. **What is the trust model - crash faults only, or misbehaving members?** [OPEN]
    The brief requires join order to be unspoofable "by any member", which is
    a partial-distrust requirement, while clanker's research rejected BFT on a
    single-operator premise. The design as drafted authenticates every member
@@ -21,7 +27,8 @@ Ordering inside each section is by what blocks implementation first.
    guarantee is wanted, what is the threat: a compromised host, a buggy
    build, a second operator? *Blocks:* nothing yet; shapes PRD 0003 merge and
    any future `quorum` mode. *Answer from:* the operator.
-2. **At n = 2 under `seniority`, is AP-with-merge the right default?** Two
+<a id="oq-2"></a>
+2. **At n = 2 under `seniority`, is AP-with-merge the right default?** [RESOLVED] Two
    leaders during a partition, healed by deterministic re-slotting (PRD
    0003), versus `configured` + `stall` where the non-authority side refuses
    writes. The brief's "2 instances … define a specific one who is the
@@ -31,7 +38,8 @@ Ordering inside each section is by what blocks implementation first.
    **Resolved 2026-08-29** (operator): `seniority` stays the default - the
    AP-with-merge posture at n = 2 is accepted, with `configured` + `stall`
    available per cluster as the CP alternative.
-3. **Default `write.ack`: `local` or `slotted`?** `local` keeps a partitioned
+<a id="oq-3"></a>
+3. **Default `write.ack`: `local` or `slotted`?** [OPEN] `local` keeps a partitioned
    member writing (AP); `slotted` waits for a position (CP-ish, and even then
    a position can move once at merge unless the mode forbids two leaders).
    The shipped write path acknowledges at the slot everywhere - `node.append`,
@@ -47,10 +55,12 @@ Ordering inside each section is by what blocks implementation first.
    *Blocks:* none (the slot-ack write path shipped); the `local` variant and
    its layer stay open. *Answer from:* the operator; also
    clanker's RFC 0019 open question 1 ("stall or keep working").
-38. **Service API auth.** If RFC 0001 keeps a service API, what authenticates
+<a id="oq-38"></a>
+38. **Service API auth.** [OPEN] If RFC 0001 keeps a service API, what authenticates
     a caller off loopback - a static token, member keys, mTLS? v1 drafts
     loopback-only with a warning. *Blocks:* PRD 0005 phase 4.
-40. **Public claims need reopening.** Everything in research 0001 is carried
+<a id="oq-40"></a>
+40. **Public claims need reopening.** [RESOLVED] Everything in research 0001 is carried
     from clanker's reading dates; before the README or a release cites an
     external fact, reopen it.
     **Resolved 2026-08-27** (operator): the external claims the public README
@@ -63,7 +73,8 @@ Ordering inside each section is by what blocks implementation first.
 
 ## B. Ordering, epochs and merge
 
-7. **One chain per journal, or one per cluster?** Per journal (as drafted)
+<a id="oq-7"></a>
+7. **One chain per journal, or one per cluster?** [RESOLVED] Per journal (as drafted)
    keeps journals independently prunable and lets a consumer follow one
    stream cheaply; per cluster gives a single `(epoch, seq)` for everything
    and one place for cluster-scoped settings. The compromise - a control
@@ -74,13 +85,15 @@ Ordering inside each section is by what blocks implementation first.
    journal, with the cluster's control journal its own chain carrying
    `genesis`, `create_journal`, cluster-scoped `settings`, and (with PRD
    0003) membership and epochs. Recorded in PRD 0001's status.
-8. **Per-journal or cluster-level leadership?** Drafted cluster-level (one
+<a id="oq-8"></a>
+8. **Per-journal or cluster-level leadership?** [OPEN] Drafted cluster-level (one
    leader sequences all journals). Per-journal leadership spreads load and
    isolates a hot journal, at the cost of N elections and N failure detectors.
    *Blocks:* none - v1 shipped cluster-level leadership; measurement decides
    whether per-journal leadership is ever needed. *Answer from:* measurement,
    after a single leader is shown to saturate.
-11. **An `author_seq` gap that never fills; refused entries consume a seq.**
+<a id="oq-11"></a>
+11. **An `author_seq` gap that never fills; refused entries consume a seq.** [RESOLVED]
     A member that crashes after assigning `author_seq = n` locally but before
     forwarding leaves a permanent hole; a refused entry (e.g. a `stale` for
     someone else's entry) also burns a number. Options: allow gaps (dense
@@ -94,7 +107,8 @@ Ordering inside each section is by what blocks implementation first.
     last seq is accepted only when byte-identical to the recorded one), so
     the unslotted-queue replay after a crash is idempotent. Recorded in PRD
     0001's status.
-12. **`tiebreak = freshest` semantics.** "Highest acknowledged `(epoch,
+<a id="oq-12"></a>
+12. **`tiebreak = freshest` semantics.** [RESOLVED] "Highest acknowledged `(epoch,
     seq)`" across epochs is not totally ordered after a merge; the draft
     freezes the evaluation at election. Is the extra mode worth its
     definition cost, given `syncing` members are already excluded? *Blocks:*
@@ -102,11 +116,13 @@ Ordering inside each section is by what blocks implementation first.
     freezing.
     **Resolved 2026-08-29** (operator): `freshest` stays a selectable
     `tiebreak` value with the shipped election-time semantics.
-31. **Read consistency.** Reads are local. Is "read your own writes" enough,
+<a id="oq-31"></a>
+31. **Read consistency.** [OPEN] Reads are local. Is "read your own writes" enough,
     or do consumers need a linearizable read (ask the leader for its head
     and wait for it)? clanker's board fold is tolerant; a claim/lease
     consumer would not be. *Blocks:* nothing in v1; shapes the read API.
-33. **Conflicting `settings` on two branches.** After a merge the surviving
+<a id="oq-33"></a>
+33. **Conflicting `settings` on two branches.** [RESOLVED] After a merge the surviving
     branch's value wins and the losing branch's `settings` entries are
     re-slotted as no-ops (PRD 0004). Should they instead re-apply in order
     (last writer wins by merged position)?
@@ -115,14 +131,16 @@ Ordering inside each section is by what blocks implementation first.
     no-ops. Re-applying in order stays a merge-rule change away. Recorded in
     PRD 0003's status.
     *Blocks:* PRD 0003 phase 3.
-37. **Failure-detector timings and leader lease.** Heartbeat 1 s, suspect at
+<a id="oq-37"></a>
+37. **Failure-detector timings and leader lease.** [OPEN] Heartbeat 1 s, suspect at
     5 s are placeholders. Is there a leader *lease* (the old leader stops
     slotting when it cannot hear a majority of its last-known members), or
     does it keep slotting until it sees a newer epoch? Without a lease, a
     leader that is partitioned from everyone keeps writing on its own
     branch - which is the AP behaviour, so this is OQ 2 again from the
     leader's side. *Blocks:* PRD 0003 phase 5.
-60. **`merge.settle_ms` default.** 30 s is a placeholder, on the record like
+<a id="oq-60"></a>
+60. **`merge.settle_ms` default.** [OPEN] 30 s is a placeholder, on the record like
     the failure-detector timings above (OQ 37):
     [PRD 0002](prds/0002-ttl-and-staleness.md) bars a checkpoint for slots
     newer than the last `merge` until it passes, so the value must exceed the
@@ -135,42 +153,49 @@ Ordering inside each section is by what blocks implementation first.
 
 ## C. Membership
 
-4. **Seniority on rejoin.** Drafted: only a `leave` entry resets seniority; a
+<a id="oq-4"></a>
+4. **Seniority on rejoin.** [OPEN] Drafted: only a `leave` entry resets seniority; a
    crash or network absence keeps it. Should a long absence
    (`evict_after_ms`) convert to a `leave`? That makes eviction change the
    leader order, which is either the point or a surprise. *Blocks:* none -
    phase 1 shipped with "only a `leave` resets seniority"; changing it is one
    fold rule.
-5. **Changing leadership settings when `reconfigurable = false`.** Drafted as
+<a id="oq-5"></a>
+5. **Changing leadership settings when `reconfigurable = false`.** [OPEN] Drafted as
    an offline procedure (`coppiz reconfigure` on one stopped member, others
    backfill it). Is "stop everything" acceptable, or is a signed operator
    override (OQ 22) wanted so the lock can be lifted live by someone who is
    not a member? *Blocks:* none in the shipped surface (phase 5 shipped
    without the offline procedure); `coppiz reconfigure` is not a command yet.
-20. **Eviction of dead members.** Default never. An evicted member's entries
+<a id="oq-20"></a>
+20. **Eviction of dead members.** [OPEN] Default never. An evicted member's entries
     stay; only its seniority and its seat in `max_members` go. Who evicts
     under `configured` when the leader is the dead one? *Blocks:* none -
     eviction shipped (`membership.evict_after_ms`, default 0); the
     dead-leader case stays open.
-21. **How the allowlist learns a newcomer's key.** Out of band - the operator
+<a id="oq-21"></a>
+21. **How the allowlist learns a newcomer's key.** [OPEN] Out of band - the operator
     copies the public key into `[[peers]]` - or a one-time join token the
     founder prints and the newcomer presents, after which the key is bound.
     clanker's mesh binds identity to a TLS pin in its phase 2. *Blocks:*
     none - admission shipped (`allowlist`/`prompt`/`open`); how the
     allowlist learns the key out of band stays open.
-22. **Key rotation and compromise; an operator key.** A member's key is its
+<a id="oq-22"></a>
+22. **Key rotation and compromise; an operator key.** [OPEN] A member's key is its
     identity; rotating it is a `leave` + `join` (new seniority) as drafted,
     which is punitive for routine rotation. And should *operator* actions
     (settings, reconfigure, evict) be signed by a key that is not any
     member's, so a compromised leader cannot reconfigure the cluster?
     *Blocks:* nothing in v1; must be decided before 1.0 because it changes
     the `join` payload.
-25. **Topology past 32 members.** Full mesh is O(n²) connections. Options:
+<a id="oq-25"></a>
+25. **Topology past 32 members.** [OPEN] Full mesh is O(n²) connections. Options:
     leader-star (followers connect only to the leader; backfill from any),
     gossip (SWIM-style membership with fan-out trees). clanker's research
     named 32 as the point where "the surveyed products earn their weight".
     *Blocks:* nothing until a cluster approaches it.
-58. **Ordering of concurrent `join`s within one batch.** The admitter decides
+<a id="oq-58"></a>
+58. **Ordering of concurrent `join`s within one batch.** [RESOLVED] The admitter decides
     *when* to write a `join`, so it can order concurrent admissions - never
     ahead of an already-slotted member, which is the bound RFC 0002 accepts
     (its option A). Ordering same-batch joins by newcomer id instead of
@@ -185,25 +210,30 @@ Ordering inside each section is by what blocks implementation first.
 
 ## D. TTL, staleness and retention
 
-6. **Who may mark stale beyond the author.** The brief is explicit that only
+<a id="oq-6"></a>
+6. **Who may mark stale beyond the author.** [OPEN] The brief is explicit that only
    the author may; the schema key `stale.who` exists so `leader` or an
    operator role can be added. Is there a use case (cleaning up after a dead
    member) strong enough to add it? *Blocks:* nothing in v1.
-9. **`ttl.grace_ms` default and derivation.** Read-side skew tolerance.
+<a id="oq-9"></a>
+9. **`ttl.grace_ms` default and derivation.** [OPEN] Read-side skew tolerance.
    Could be derived from the observed offset between local clock and the
    leader's `slot_ts_ms` at the head. *Blocks:* none - the default (0)
    shipped; derivation from observed skew stays open.
-10. **Checkpoint cadence defaults.** 60 s / 64 MiB are placeholders. Too
+<a id="oq-10"></a>
+10. **Checkpoint cadence defaults.** [OPEN] 60 s / 64 MiB are placeholders. Too
     frequent spams control entries on every member; too rare delays reclaim.
     *Blocks:* PRD 0002 phase 4.
-24. **Slot count grows forever.** Under `retain = none` a removed entry still
+<a id="oq-24"></a>
+24. **Slot count grows forever.** [OPEN] Under `retain = none` a removed entry still
     costs one slot (~170 bytes) forever, because removing a slot breaks the
     chain. A long-lived high-churn journal needs an *archival checkpoint*: a
     leader-signed root over a prefix that lets members drop the slots
     behind it while keeping verifiability from the root. That is a second
     chain-level mechanism and is out of v1. When does it become necessary?
     *Blocks:* nothing in v1; measure slot growth on the first consumer.
-43. **What "full state" means under `retain = none`.** A member that joined
+<a id="oq-43"></a>
+43. **What "full state" means under `retain = none`.** [OPEN] A member that joined
     after a checkpoint never sees removed payloads; it has the full *chain*
     but not every byte that ever existed. PRD 0003's "definitely has the
     full state" should be defined as "at head of the chain", and the docs
@@ -213,7 +243,8 @@ Ordering inside each section is by what blocks implementation first.
     journal that has checkpointed cannot be joined or backfilled until this
     is answered. *Blocks:* PRD 0003 phase 1 wording; the sync path's
     refusal is the current behaviour.
-57. **Is author-marked staleness itself switchable per journal?** [ADR
+<a id="oq-57"></a>
+57. **Is author-marked staleness itself switchable per journal?** [RESOLVED] [ADR
     0002](adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md)
     records that *whether either cause is active … [is] a per-journal
     setting*, and its title calls both mutations opt-in. But the schema
@@ -242,14 +273,16 @@ Ordering inside each section is by what blocks implementation first.
 
 ## E. Storage and format
 
-13. **Does `author_ts_ms` belong in the signed header?** It is informational,
+<a id="oq-13"></a>
+13. **Does `author_ts_ms` belong in the signed header?** [RESOLVED] It is informational,
     never used for order or expiry; removing it shrinks every entry by 8
     bytes and removes a field consumers might wrongly trust. *Blocks:* PRD
     0001 phase 1 (cheap before the format freezes).
     **Resolved 2026-08-27** (by the format freeze): the field shipped in the
     signed entry header - the codec, fold and PRD 0001 all carry it; removing
     it now is a format break, not the cheap change the draft called it.
-14. **`fsync` defaults.** `every` on the leader and `batched` on followers as
+<a id="oq-14"></a>
+14. **`fsync` defaults.** [OPEN] `every` on the leader and `batched` on followers as
     drafted. A follower that loses its tail re-backfills, so `batched` is
     safe for it; is `every` on the leader acceptable at the write rates
     clanker needs (tens per second, not thousands)? *Blocks:* none - phase 3
@@ -257,18 +290,21 @@ Ordering inside each section is by what blocks implementation first.
     (followers may set `batched`); whether that default is right at clanker's
     write rates stays open, and RFC 0003 is the open thread on what the knob
     governs. *Answer from:* measurement.
-17. **Snapshot format.** A verified fold at a slot, so restart and join do
+<a id="oq-17"></a>
+17. **Snapshot format.** [OPEN] A verified fold at a slot, so restart and join do
     not replay from genesis. Is it a serialized fold state (versioned
     struct) or a compacted copy of the chain? When may a member serve a
     snapshot to a joiner instead of slots? *Blocks:* none - phase 3 shipped
     without snapshots (deferred in PRD 0001's status); reopen when restart or
     join cost is measured.
-26. **Format versioning and rolling upgrade.** Entry, slot, segment, snapshot
+<a id="oq-26"></a>
+26. **Format versioning and rolling upgrade.** [OPEN] Entry, slot, segment, snapshot
     and wire each carry a version. Can a cluster run two binary versions
     during an upgrade? Drafted: a reader refuses a newer version, so the
     leader must be upgraded *last* (it writes). Needs a written procedure
     and a test. *Blocks:* first release.
-36. **Maximum entry size and large payloads.** `journal.max_entry_bytes`
+<a id="oq-36"></a>
+36. **Maximum entry size and large payloads.** [PARTIAL] `journal.max_entry_bytes`
     default is unset. clanker's streams are 1–2 KB lines; sessions are up to
     1.75 MB and are explicitly *not* a first consumer. A blob shape (chunked
     entries, or content-addressed side storage) is roadmap. *Blocks:* PRD
@@ -280,12 +316,14 @@ Ordering inside each section is by what blocks implementation first.
     **Resolved 2026-08-29** (operator): the value stays operator-configurable
     - the key is a live-changeable journal setting - and the provisional
     16 MiB default stands until measurement replaces it.
-39. **Backup and restore.** A data directory copied while the node runs may
+<a id="oq-39"></a>
+39. **Backup and restore.** [OPEN] A data directory copied while the node runs may
     hold a torn tail (recovered at open) - is `cp -r` a supported backup, or
     does `coppiz export` exist? Restoring a member from backup must not
     resurrect a `leave` or fork the chain; the chain makes this detectable,
     but the procedure needs a runbook. *Blocks:* first release.
-55. **Size bounds: defaults shipped, overflow behaviour settled.** PRD 0001
+<a id="oq-55"></a>
+55. **Size bounds: defaults shipped, overflow behaviour settled.** [RESOLVED] PRD 0001
     G6 requires the journal cap (`cluster.max_journals`) and the
     unslotted-queue bound (`sync.unslotted_max_bytes`) enforced with a test
     that trips each. Provisional defaults now ship for all three bounds
@@ -305,7 +343,8 @@ Ordering inside each section is by what blocks implementation first.
     - the journal cap and entry size are chain settings, the queue bound a
     local-config key - and the provisional defaults stand until measurement.
     The `genesis`-at-cap refusal question stays open.
-56. **The `sync.*` knobs have no layer and no values.** Three settings are
+<a id="oq-56"></a>
+56. **The `sync.*` knobs have no layer and no values.** [OPEN] Three settings are
     named in the PRDs but appear in no settings table: `sync.page_bytes`
     (backfill page bound, PRD 0001 *Backfill*), `sync.lag_slots` (when a
     `syncing` member counts as at head, and so leader-eligible, PRD 0003
@@ -326,7 +365,8 @@ Ordering inside each section is by what blocks implementation first.
     `provisional_page_bytes`; that is a code change. `lag_slots` and
     `gap_timeout_ms` stay open.)
 
-61. **What bounds per-process memory?** [PRD 0001](prds/0001-journal-core.md)
+<a id="oq-61"></a>
+61. **What bounds per-process memory?** [OPEN] [PRD 0001](prds/0001-journal-core.md)
     goal 6 requires entry size, journal count *and per-process memory* to be
     bounded by settings, but only the first two have keys
     (`journal.max_entry_bytes`, `cluster.max_journals`; the unslotted queue adds
@@ -339,7 +379,8 @@ Ordering inside each section is by what blocks implementation first.
     the behaviour at the bound stay open. *Answer from:* measurement, like
     OQ 54.
 
-62. **What makes the cluster e2e spin a core for minutes, intermittently?**
+<a id="oq-62"></a>
+62. **What makes the cluster e2e spin a core for minutes, intermittently?** [OPEN]
     Running a test binary directly (not through `zig build test`'s protocol)
     stuck three times at ~100% CPU for 10+ minutes in three io worker
     threads - twice at `e2e (G4)` (node.zig:3118) and once at the journal
@@ -390,9 +431,11 @@ Ordering inside each section is by what blocks implementation first.
     `Store.rebuildIndex` now deinitializes and re-initializes the position
     map instead of `clearRetainingCapacity`-and-refill, eliminating the
     cross-rebuild state-carrying path the captured stack implicated
-    ([investigation](2026-08-29-oq62-index-rebuild-hardening.md) - linked
+    ([investigation](reports/investigations/2026-08-29-oq62-index-rebuild-hardening.md) - linked
     from the sweep findings). This is hardening, not a claimed fix: the
-    root cause is still unconfirmed, and the second captured stack (an io
+    root cause is still unconfirmed.
+
+    The second captured stack (an io
     worker in `checkpointForBroadcast` → `Store.append` → `fsync`) was
     checked and reads as the G4 leader's normal checkpoint cadence under
     load, not a second spin mechanism. The repro + bisect above still
@@ -400,7 +443,8 @@ Ordering inside each section is by what blocks implementation first.
 
 ## F. Transport and wire
 
-19. **Replication wire: own binary framing or HTTP?** clanker's spike used
+<a id="oq-19"></a>
+19. **Replication wire: own binary framing or HTTP?** [RESOLVED] clanker's spike used
     HTTP because it was there; a member-to-member protocol with heartbeats,
     streaming slots and backfill pages is more naturally a length-prefixed
     binary stream over one TCP connection. If RFC 0001's option D (observer
@@ -419,33 +463,38 @@ Ordering inside each section is by what blocks implementation first.
     in-memory hub whose directed edges `drop` and `heal` - the same loop
     code runs under both, which is the OQ 27 shape. Recorded in PRD 0003's
     status and implemented in `src/net/`.
-23. **Wire encryption.** Plain TCP on loopback/RFC1918 for v1 (clanker's mesh
+<a id="oq-23"></a>
+23. **Wire encryption.** [OPEN] Plain TCP on loopback/RFC1918 for v1 (clanker's mesh
     made the same call); for anything else, TLS - Zig `std` has a TLS client
     but no server - or a Noise-style handshake over the member keys we
     already have, using `std.crypto`'s X25519 + ChaCha20-Poly1305. ADR 0001
     bounds this to what `std` ships. *Blocks:* any non-private deployment.
-28. **Backpressure.** A slow follower under a fast leader: does the leader
+<a id="oq-28"></a>
+28. **Backpressure.** [OPEN] A slow follower under a fast leader: does the leader
     buffer (bounded by what?), drop to backfill mode for that follower, or
     slow every writer? Drafted nowhere yet. *Blocks:* none - the transport
     shipped; a slow follower's effect on the leader stays unmeasured.
 
 ## G. Embedding, API and clanker
 
-15. **Library-first or service-first.** [RFC 0001](rfcs/0001-library-first-or-service-first.md).
+<a id="oq-15"></a>
+15. **Library-first or service-first.** [RESOLVED] [RFC 0001](rfcs/0001-library-first-or-service-first.md).
     *Blocks:* PRD 0005 phases 1 and 3.
     **Resolved 2026-08-28** (operator): option A - library-first. The library
     is the primary surface, the node binary its wrapper, and the service API
     stays deferred as a wrapper module behind the first non-Zig consumer.
     Recorded in [ADR 0007](adrs/0007-the-library-is-the-primary-surface.md);
     PRD 0005's steps 1–3 shipped with the decision.
-30. **Integration path with clanker.** clanker's RFC 0019 stage-1 spike is
+<a id="oq-30"></a>
+30. **Integration path with clanker.** [OPEN] clanker's RFC 0019 stage-1 spike is
     specified in clanker's tree and unrun. Run it there first (throwaway) and
     then build coppiz, or build coppiz's core and make the spike *use* coppiz?
     The second avoids building the cursor logic twice; the first gives
     clanker an answer without waiting. Which code survives? *Blocks:* PRD
     0005 phase 5. *Answer from:* the operator, jointly with clanker's RFC
     0019 next steps.
-34. **Journal lifecycle.** Who may create a journal (any member? leader only?
+<a id="oq-34"></a>
+34. **Journal lifecycle.** [PARTIAL] Who may create a journal (any member? leader only?
     a setting?), and can one be *dropped* - which would be the only
     non-chain deletion - or only frozen (no further appends) and expired
     away? *Blocks:* PRD 0001 phase 4 (`node.journal(name)` semantics).
@@ -458,7 +507,8 @@ Ordering inside each section is by what blocks implementation first.
     so "leader-only" is the intended rule, not yet the enforced one.
     *Blocks:* none - phase 4 shipped; the bypass is a code fix.
     (Operator, 2026-08-29: track the fix - the bug stays the enforcement gap.)
-35. **TOML parser for `coppiz.toml`.** Vendor clanker's (same toolchain,
+<a id="oq-35"></a>
+35. **TOML parser for `coppiz.toml`.** [RESOLVED] Vendor clanker's (same toolchain,
     already patched for 0.16) or hand-roll the subset the local config
     needs. ADR 0001 allows vendoring, not fetching. *Blocks:* PRD 0004
     phase 4.
@@ -466,13 +516,15 @@ Ordering inside each section is by what blocks implementation first.
     `src/config/local.zig` - a closed key set, quote-aware since the
     2026-08-29 TOML fixes; no `vendor/` directory exists, so ADR 0001's
     vendor allowance went unused.
-42. **Cursor and id encoding for consumers.** `epoch:seq` text cursors and
+<a id="oq-42"></a>
+42. **Cursor and id encoding for consumers.** [OPEN] `epoch:seq` text cursors and
     `author:author_seq` ids are drafted; is a single opaque token better for
     an HTTP API, and should ids be exposed to consumers at all or only
     cursors? *Blocks:* none - the API shipped with `(epoch, seq)` cursors
     and `(author, author_seq)` ids; the opaque-token question stays open
     with the service API.
-46. **Which non-clanker hosts are the design targets?** coppiz is
+<a id="oq-46"></a>
+46. **Which non-clanker hosts are the design targets?** [OPEN] coppiz is
     general-purpose by brief (clarified 2026-08-21), but every concrete
     constraint so far comes from one host. Naming two or three other host
     shapes - a CLI tool that runs in short processes, a long-lived service on
@@ -481,7 +533,8 @@ Ordering inside each section is by what blocks implementation first.
     host in `examples/` is the roadmap's way of keeping this honest. *Blocks:*
     nothing; shapes PRD 0005's API before it freezes. *Answer from:* the
     operator.
-47. **Several processes on one data directory, SQLite-style.** SQLite lets
+<a id="oq-47"></a>
+47. **Several processes on one data directory, SQLite-style.** [OPEN] SQLite lets
     N processes open one file (file locks, busy timeout); clanker relies on
     that today for its session databases, with `run`/`repl` processes
     writing beside `serve`. coppiz v1 flocks the directory to one process and
@@ -499,7 +552,8 @@ Ordering inside each section is by what blocks implementation first.
 
 ## H. Project, process and quality
 
-16. **The name.** `spine` is the codename from clanker's RFC 0019 ("the
+<a id="oq-16"></a>
+16. **The name.** [RESOLVED] `spine` is the codename from clanker's RFC 0019 ("the
     spine") and is generic enough to collide on package indexes and search.
     Decide before publishing; check the Zig package namespace, GitHub, and
     crates/npm for collisions. Candidates considered: `spine`, `journallet`,
@@ -513,7 +567,8 @@ Ordering inside each section is by what blocks implementation first.
     metaphor (stools persist, poles harvested) is the one the spelling
     carries, not the COP-iss pronunciation.
     *Blocks:* none; was first public release.
-18. **Licence.** Not chosen. clanker's research tracked licences of every
+<a id="oq-18"></a>
+18. **Licence.** [RESOLVED] Not chosen. clanker's research tracked licences of every
     surveyed store (BUSL, CSL, Apache, MIT) as a selection criterion; coppiz
     should be unambiguous from the first public commit.
     **Resolved 2026-08-27** (operator): Apache-2.0 - [ADR
@@ -521,7 +576,8 @@ Ordering inside each section is by what blocks implementation first.
     file and the `license` field in `build.zig.zon` (with `LICENSE` in its
     `.paths`) ship it. *Blocks:* first public commit; also a `LICENSE` path
     in `build.zig.zon`.
-27. **Testing strategy: deterministic simulation.** TigerBeetle's VOPR-style
+<a id="oq-27"></a>
+27. **Testing strategy: deterministic simulation.** [RESOLVED] TigerBeetle's VOPR-style
     simulator (a seeded, single-threaded run of many nodes with injected
     partitions, crashes, clock skew and message reorder) is the one testing
     discipline clanker's research named worth copying. PRD 0001–0003's
@@ -533,12 +589,14 @@ Ordering inside each section is by what blocks implementation first.
     0003 phases 1–3, and the node loop is written to be drivable by it.
     Recorded in PRD 0003's status.
     *Blocks:* PRD 0003 phase 1 (it changes how the node loop is written).
-29. **Observability.** `coppiz status` / `node.status()`: leader, epoch, head,
+<a id="oq-29"></a>
+29. **Observability.** [OPEN] `coppiz status` / `node.status()`: leader, epoch, head,
     members and states, lag per follower, pending checkpoint bytes, last
     merge. Metrics format (Prometheus text?) and where logs go. *Blocks:*
     none - `coppiz status`/`members`/`doctor` shipped; the metrics format
     and log destination stay open.
-32. **Clock assumptions.** `slot_ts_ms` is the leader's wall clock; TTL
+<a id="oq-32"></a>
+32. **Clock assumptions.** [RESOLVED] `slot_ts_ms` is the leader's wall clock; TTL
     depends on it; nothing depends on monotonic time except failure
     detection. Document the assumption (NTP-disciplined, skew in seconds not
     hours) and what breaks outside it (early/late visibility only, never
@@ -549,13 +607,15 @@ Ordering inside each section is by what blocks implementation first.
     only, never divergence, and a backwards jump is clamped so expiry is
     delayed, never advanced. Failure detection is the one monotonic-time
     path, as the question noted.
-41. **Record-store tooling.** clanker maintains its `docs/` stores with
+<a id="oq-41"></a>
+41. **Record-store tooling.** [OPEN] clanker maintains its `docs/` stores with
     sandboxed tools (`clanker rfc`, `clanker adr`, …) that write
     compare-and-swap and keep the inventories in sync. coppiz's stores are
     hand-maintained for now; inventories drift the way clanker's did before
     its tools existed. Reuse clanker's tools pointed at this tree, or accept
     hand maintenance until the project is bigger? *Blocks:* nothing.
-44. **Determinism of fold under merge *with* checkpoints.** PRD 0002's rule
+<a id="oq-44"></a>
+44. **Determinism of fold under merge *with* checkpoints.** [RESOLVED] PRD 0002's rule
     (each branch's checkpoint removes only what its own fold names; no
     checkpoint within `merge.settle_ms` of a merge) is reasoned, not
     tested. The simulator (OQ 27) is where it gets tested; until then it is
@@ -565,7 +625,8 @@ Ordering inside each section is by what blocks implementation first.
     **Resolved 2026-08-29** (operator): schedule the merge-with-checkpoints
     scenario in the simulator (OQ 27's second half); the determinism claim is
     pinned by that scenario when it lands.
-45. **CI and toolchain pin.** Which Zig build to pin in CI (0.16.0 release),
+<a id="oq-45"></a>
+45. **CI and toolchain pin.** [OPEN] Which Zig build to pin in CI (0.16.0 release),
     and whether to test musl and glibc targets there. The merge-gate half of
     this question is settled in-tree rather than in CI: `zig build test` runs
     the lint gates - formatting, the 100-column cap, test registration,
@@ -573,7 +634,8 @@ Ordering inside each section is by what blocks implementation first.
     and build.zig names this question for the CI half that remains open.
     *Blocks:* the first external contribution; the repository's own commits
     are gated locally by `zig build test` today.
-59. **Does the fetchable package carry the design docs?** The `.paths` list
+<a id="oq-59"></a>
+59. **Does the fetchable package carry the design docs?** [OPEN] The `.paths` list
     in `build.zig.zon` - the declaration of what the package contains -
     names only `CHANGELOG.md`, `README.md`, `RELEASES.md`, `build.zig`,
     `build.zig.zon` and `src/`. Every design record lives under `docs/`,
@@ -590,13 +652,15 @@ Ordering inside each section is by what blocks implementation first.
 
 ## I. Scaling past one group (PRD 0006)
 
-48. **Grouping unit and range key.** Ownership by whole journal is the
+<a id="oq-48"></a>
+48. **Grouping unit and range key.** [OPEN] Ownership by whole journal is the
     drafted unit; the drafted split key is the author-id prefix so each
     author's stream stays in one group. Is that enough for hosts whose
     journals have many authors and one hot range, or is a payload-derived
     key needed (which breaks `author_seq` density)? *Blocks:* PRD 0006
     phase 3. *Answer from:* OQ 46's host shapes; measurement.
-49. **When does the group count need to be uneven?** Under `seniority`,
+<a id="oq-49"></a>
+49. **When does the group count need to be uneven?** [RESOLVED] Under `seniority`,
     `configured` and `combined` a federation of 2 or 4 groups elects like 2
     or 4 members do; only a majority-vote (`quorum`) mode at the federation
     level needs an odd count.
@@ -616,18 +680,21 @@ Ordering inside each section is by what blocks implementation first.
     rules there: federation validation checks a representative against its
     group's own chain, and federation `suspect_after_ms` must exceed a
     group's internal election time.
-50. **Parity code and reconstruction cost.** Reed–Solomon over GF(2⁸) in
+<a id="oq-50"></a>
+50. **Parity code and reconstruction cost.** [OPEN] Reed–Solomon over GF(2⁸) in
     `std`-only Zig is feasible; k, m defaults, fragment size, and what a
     read of a parity range costs (k network fetches + decode) against a
     follower copy are unmeasured. Also: does parity apply to the chain's
     *slots* or only to payloads, given `ttl.retain`? *Blocks:* PRD 0006
     phase 4.
-51. **Cross-group routing and read semantics.** Forwarding an append to the
+<a id="oq-51"></a>
+51. **Cross-group routing and read semantics.** [OPEN] Forwarding an append to the
     owner is drafted; a read of a non-owned journal either forwards (one
     round-trip, fresh) or hits a follower copy (local, lagging). Which is the
     default, and does `write.ack` mean "owner slotted" or "local forwarded"?
     Relates to OQ 3 and OQ 31. *Blocks:* PRD 0006 phase 2.
-52. **What group identity must the core headers carry now?** Drafted:
+<a id="oq-52"></a>
+52. **What group identity must the core headers carry now?** [OPEN] Drafted:
     segment headers carry journal id + sequencing group id; entry headers
     carry the journal id but no group id ([PRD
     0001](prds/0001-journal-core.md)), and slot headers carry neither (the
@@ -635,12 +702,14 @@ Ordering inside each section is by what blocks implementation first.
     Is the implication enough for a verifier in another group, or should
     the slot carry the group id explicitly (16 more bytes per slot,
     forever)? *Blocks:* PRD 0001 phase 1 - the format freeze.
-53. **Membership and discovery at 10⁵.** A new instance must find *a*
+<a id="oq-53"></a>
+53. **Membership and discovery at 10⁵.** [OPEN] A new instance must find *a*
     member of *some* group: seed lists in local config (drafted), a
     directory journal in the federation, or DNS. Which, and how does an
     instance choose a group to join (operator-assigned, nearest, smallest)?
     *Blocks:* PRD 0006 phase 1.
-54. **Measurements that replace the tier numbers.** 32 per group and
+<a id="oq-54"></a>
+54. **Measurements that replace the tier numbers.** [OPEN] 32 per group and
     ~1,000 / ~100,000 per tier are intent. The first measurement set: size-1
     append latency; per-member connection count and memory at 8, 16, 32
     members; append-to-visible p50/p99 across one group; join/backfill time

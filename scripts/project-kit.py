@@ -257,7 +257,11 @@ def link_is_valid(source: Path, target: str) -> bool:
         return False
     if not fragment or destination.suffix != ".md":
         return True
-    anchors = {anchor(line.lstrip("#").strip()) for line in destination.read_text(encoding="utf-8").splitlines() if line.startswith("#")}
+    text = destination.read_text(encoding="utf-8")
+    anchors = {anchor(line.lstrip("#").strip()) for line in text.splitlines() if line.startswith("#")}
+    # HTML anchors (<a id="...">) are valid targets too; the open-questions
+    # register uses them so 'OQ n' links can jump to a specific entry.
+    anchors |= set(re.findall(r'<a\s+id="([^"]+)"', text))
     return fragment in anchors
 
 

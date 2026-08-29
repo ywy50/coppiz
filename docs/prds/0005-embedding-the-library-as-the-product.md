@@ -46,7 +46,7 @@ A replicated journal cannot be *that* simple in every respect - it has peers,
 a key, a listener - but it can be that simple *at size 1* and grow from there
 by configuration of the same node ([ADR 0003](../adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
 The last SQLite property, several processes on one file, is the one coppiz
-does not inherit for free and is [OQ 47](../open-questions.md).
+does not inherit for free and is [OQ 47](../open-questions.md#oq-47).
 
 Who this is for: any program that needs a durable, replicated, append-only
 record shared across processes or machines and finds that the existing
@@ -137,13 +137,13 @@ property coppiz does not have yet: SQLite lets N processes share one file
 through file locks and a busy timeout, and a host that runs several short
 processes on one machine (clanker's `run`s beside its `serve`) would expect
 the same. The v1 answer is "the long-lived process owns the directory, the
-short-lived ones talk to it", and [OQ 47](../open-questions.md) asks whether
+short-lived ones talk to it", and [OQ 47](../open-questions.md#oq-47) asks whether
 coppiz should instead support multi-process opens natively.
 
 **The node binary** is `src/main.zig`: the library plus a TOML config, a
 CLI (`init`, `serve`, `append`, `read`, `head`, `status`, `members`,
 `doctor`, `settings`, `admit`; `settings schema` is PRD 0004's). The
-offline `reconfigure` of [OQ 5](../open-questions.md) and the format
+offline `reconfigure` of [OQ 5](../open-questions.md#oq-5) and the format
 `migrate` named in Failure modes are not commands yet. The service API
 on a listen address is deferred behind the first non-Zig consumer
 ([ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md)); its shape when
@@ -227,7 +227,7 @@ example: its RFC 0019 and stage-1 spike note.
 | Host opens a data directory another process holds | `open` fails `locked`; never two nodes on one directory (v1; OQ 47) |
 | Host never calls `run()`/`tick()` | local appends work at size 1; with peers, nothing replicates and the failure detector never runs - `doctor` names it |
 | Library version and on-disk version differ | `open` refuses unknown newer formats; older formats are migrated only by an explicit `coppiz migrate` |
-| Service API reachable without auth | v1 binds loopback by default; a non-loopback bind without the auth setting is a startup warning ([OQ 38](../open-questions.md)) |
+| Service API reachable without auth | v1 binds loopback by default; a non-loopback bind without the auth setting is a startup warning ([OQ 38](../open-questions.md#oq-38)) |
 
 ## Acceptance criteria
 
@@ -255,7 +255,7 @@ example: its RFC 0019 and stage-1 spike note.
 ## Open questions / future work
 
 - Library-first or service-first - decided: option A ([ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md);
-  [RFC 0001](../rfcs/0001-library-first-or-service-first.md) decided, [OQ 15](../open-questions.md) resolved).
+  [RFC 0001](../rfcs/0001-library-first-or-service-first.md) decided, [OQ 15](../open-questions.md#oq-15) resolved).
 - Several processes on one data directory, SQLite-style ([OQ 47]).
 - Which non-clanker hosts are the design targets, and what they need that
   clanker does not ([OQ 46]).

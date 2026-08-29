@@ -240,7 +240,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the survivor rule shared with election. The four control kinds fold in
   `chain.zig` instead of being refused as unimplemented, and the fold hash
   now covers the epoch, the last merge and member addresses.
-- The deterministic simulator ([OQ 27](docs/open-questions.md)): a seeded,
+- The deterministic simulator ([OQ 27](docs/open-questions.md#oq-27)): a seeded,
   single-threaded world of in-memory nodes driving the pure
   fold/election/merge functions with injected partitions, crashes, clock
   skew and reordered delivery. Scenarios: partition-heal-merge (G7 core),
@@ -248,10 +248,10 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   reorder, `configured` + `stall` (G4 core), and clock skew. It pins the
   merge discipline - on heal every node re-folds from the last common slot.
 - The Apache-2.0 licence ([ADR 0006](docs/adrs/0006-the-library-is-apache-2-0-licensed.md),
-  [OQ 18](docs/open-questions.md) resolved): the `LICENSE` file and the
+  [OQ 18](docs/open-questions.md#oq-18) resolved): the `LICENSE` file and the
   `license` field in `build.zig.zon`, with `LICENSE` carried in the
   package's `.paths`. The external claims the README cites were reopened at
-  their sources ([OQ 40](docs/open-questions.md) resolved), recorded in
+  their sources ([OQ 40](docs/open-questions.md#oq-40) resolved), recorded in
   [research 0001](docs/research/0001-evidence-carried-from-the-state-store-survey.md)'s
   evidence log with this repo's read dates.
 
@@ -974,7 +974,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   extends it with `ownership_transfer`, which the PRD used without noting the
   extension; and the failure-detector defaults (`cluster.heartbeat_ms` 1 s,
   `cluster.suspect_after_ms` 5 s) now carry their inline citation to
-  [OQ 37](docs/open-questions.md), where they are registered as placeholders -
+  [OQ 37](docs/open-questions.md#oq-37), where they are registered as placeholders -
   every other placeholder default in the PRDs already named its open question.
 
 - Spec-currency pass: PRD 0004's acceptance criteria now cover the second
@@ -1060,7 +1060,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   `networkAllowed`, and the improve-ledger rewrite. Research 0001's evidence
   log now carries that row with its read date, so the "seventeen stores"
   figure is traceable in-repo instead of resting on the carried note alone
-  ([OQ 40](docs/open-questions.md) stays open for the remaining rows); the
+  ([OQ 40](docs/open-questions.md#oq-40) stays open for the remaining rows); the
   glossary defines `genesis` and `segment`, which every record used and only
   their derivatives (`founder`, `sealed segment`) defined.
 

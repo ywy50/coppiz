@@ -3,7 +3,7 @@
 ## TL;DR
 
 - **What failed:** `applyCheckpoint` gates checkpoints on `self.last_merge`, but `last_merge` is only ever set on the *control* fold (by `applyMerge`). Data folds never see a merge entry, so their `last_merge` is always `null` and the settle rule is dead code.
-- **Impact:** The [PRD 0002](../../prds/0002-ttl-and-staleness.md) / [OQ 60](../../open-questions.md) protection - "a checkpoint must not delete the other side's fresh writes on a clock it did not stamp" - never runs: after a healed merge, the survivor can immediately checkpoint and remove the loser's re-slotted, stale-marked entries without the `merge.settle_ms` window.
+- **Impact:** The [PRD 0002](../../prds/0002-ttl-and-staleness.md) / [OQ 60](../../open-questions.md#oq-60) protection - "a checkpoint must not delete the other side's fresh writes on a clock it did not stamp" - never runs: after a healed merge, the survivor can immediately checkpoint and remove the loser's re-slotted, stale-marked entries without the `merge.settle_ms` window.
 - **Resolution:** Still open. Statically validated (complete setter enumeration).
 
 ## Status
