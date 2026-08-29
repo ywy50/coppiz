@@ -41,7 +41,11 @@ pub const Conn = struct {
         self.shutdown_fn(self.ctx, io);
     }
 
-    /// The sole destructor; only safe once the reader task has exited.
+    /// The sole destructor; only safe once the reader task has exited, and
+    /// safe exactly once. It frees the connection, so a second call is a
+    /// use-after-free rather than a no-op - a `closed` flag on the
+    /// connection cannot say otherwise, because the flag is inside what the
+    /// first call freed (bug 2026-08-29-close-guard-in-freed-allocation).
     pub fn close(self: *const Conn, io: std.Io) void {
         self.close_fn(self.ctx, io);
     }
@@ -64,6 +68,7 @@ pub const Listener = struct {
         return self.accept_fn(self.ctx, io);
     }
 
+    /// The sole destructor, and safe exactly once: it frees the listener.
     pub fn close(self: *const Listener, io: std.Io) void {
         self.close_fn(self.ctx, io);
     }
@@ -105,7 +110,6 @@ pub const Transport = struct {
 pub const TcpConn = struct {
     allocator: std.mem.Allocator,
     stream: net.Stream,
-    closed: bool = false,
     /// The read buffer and the reader over it belong to the connection, not
     /// to one `recvFrame` call. A socket read is greedy: `Stream.Reader`
     /// hands the kernel both the caller's slice and its own buffer, and
@@ -145,10 +149,12 @@ pub const TcpConn = struct {
         try writer.interface.flush();
     }
 
+    /// Called exactly once; see `Conn.close`. The `closed` flag that used
+    /// to guard this lived in the allocation the next line frees, so a
+    /// second call read it back out of freed memory (bug
+    /// 2026-08-29-close-guard-in-freed-allocation).
     fn closeFn(ctx: *anyopaque, io: std.Io) void {
         const self: *TcpConn = @ptrCast(@alignCast(ctx));
-        if (self.closed) return;
-        self.closed = true;
         self.stream.close(io);
         self.allocator.destroy(self);
     }
@@ -173,7 +179,6 @@ pub const TcpConn = struct {
 pub const TcpListener = struct {
     allocator: std.mem.Allocator,
     server: net.Server,
-    closed: bool = false,
 
     fn acceptFn(ctx: *anyopaque, io: std.Io) !Conn {
         const self: *TcpListener = @ptrCast(@alignCast(ctx));
@@ -187,10 +192,9 @@ pub const TcpListener = struct {
         return conn.conn();
     }
 
+    /// Called exactly once; see `Listener.close`.
     fn closeFn(ctx: *anyopaque, io: std.Io) void {
         const self: *TcpListener = @ptrCast(@alignCast(ctx));
-        if (self.closed) return;
-        self.closed = true;
         self.server.deinit(io);
         self.allocator.destroy(self);
     }
@@ -362,7 +366,6 @@ pub const PipeConn = struct {
     allocator: std.mem.Allocator,
     in: *Direction,
     out: *Direction,
-    closed: bool = false,
 
     fn recvFrame(ctx: *anyopaque, io: std.Io, allocator: std.mem.Allocator) framing.ReadError![]u8 {
         const self: *PipeConn = @ptrCast(@alignCast(ctx));
@@ -407,10 +410,11 @@ pub const PipeConn = struct {
         self.out.close(io);
     }
 
+    /// Called exactly once; see `Conn.close`. The directions themselves
+    /// are hub-owned and their own `closed` flags do survive, so closing
+    /// them twice (via `shutdown` then `close`) stays a no-op.
     fn closeFn(ctx: *anyopaque, io: std.Io) void {
         const self: *PipeConn = @ptrCast(@alignCast(ctx));
-        if (self.closed) return;
-        self.closed = true;
         self.in.close(io);
         self.out.close(io);
         self.allocator.destroy(self);
@@ -646,18 +650,16 @@ const HubListener = struct {
     hub: *Hub,
     address: []const u8,
     endpoint: *Hub.Endpoint,
-    closed: bool = false,
 
     fn acceptFn(ctx: *anyopaque, io: std.Io) !Conn {
         const self: *HubListener = @ptrCast(@alignCast(ctx));
         return self.endpoint.acceptConn(io);
     }
 
+    /// Called exactly once; see `Listener.close`.
     fn closeFn(ctx: *anyopaque, io: std.Io) void {
         const self: *HubListener = @ptrCast(@alignCast(ctx));
-        if (self.closed) return;
-        self.closed = true;
-        // `closed` is read under the endpoint mutex by pushConn and
+        // The endpoint's `closed` is read under the endpoint mutex by pushConn and
         // acceptConn; a close racing an accept/dial must not be a data race.
         // Capture the mutex before `self` is destroyed below.
         const ep_mutex = &self.endpoint.mutex;
@@ -986,6 +988,25 @@ fn twoFramesInOneSend(address: []const u8) error{Canceled}!void {
     // here would be graceful anyway, but waiting keeps the failure mode of
     // the test unambiguous.
     std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(200), .awake) catch {};
+}
+
+test "no self-freeing closer keeps its guard inside the allocation it frees" {
+    // `close` is the sole destructor of these four: it frees the allocation
+    // the struct lives in. A `closed: bool` on them could therefore only be
+    // read back out of freed memory, which is a use-after-free whose result
+    // depends on what the allocator did with the block - a recycled block
+    // reads `false` and the second close frees it a second time (bug
+    // 2026-08-29-close-guard-in-freed-allocation). The invariant is
+    // structural, so it is checked structurally rather than by provoking
+    // the misuse.
+    inline for (.{ TcpConn, TcpListener, PipeConn, HubListener }) |T| {
+        try std.testing.expect(!@hasField(T, "closed"));
+    }
+    // The two that do keep a flag are hub-owned: `Direction.close` and the
+    // endpoint's close mark state without freeing the struct, so those
+    // flags are read from live memory and stay.
+    try std.testing.expect(@hasField(Direction, "closed"));
+    try std.testing.expect(@hasField(Hub.Endpoint, "closed"));
 }
 
 test "a TCP conn keeps the bytes its socket read past the current frame" {
