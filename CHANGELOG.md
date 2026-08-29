@@ -57,6 +57,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   a merge now records the connection it sent its `merge_offer` on and acts
   on exactly one ack from exactly that connection.
 
+- A member's redial backoff no longer ratchets. `backoff_ms` only ever
+  doubled, so after a handful of dropped connections every member sat
+  permanently at the 8 s ceiling - which is above the 5 s default
+  `cluster.suspect_after_ms`, so any later blip, however brief, expired the
+  suspect timer before the redial was attempted and dropped the member out
+  of the election. The delay is now reset to its 250 ms floor as soon as a
+  connection to that member is established, on both the inbound and the
+  outbound handshake. Repeated failures still widen it to the same ceiling.
+
 ### Added
 
 - Election is now a function over an abstract member id, which is what PRD
