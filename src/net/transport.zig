@@ -433,6 +433,17 @@ pub const PipeConn = struct {
 /// freed by their own `Conn.close`.
 pub const Hub = struct {
     allocator: std.mem.Allocator,
+    /// Guards `endpoints`, `dropped` and `pipes`. Every node dials from its
+    /// own `dialMain` task, so `HubDialer.connectFn` runs concurrently with
+    /// itself and with `listen`, `drop` and `heal` from the test thread.
+    /// Two unsynchronised `pipes.append` calls that both grow each allocate
+    /// a backing buffer and then write `items.ptr`; the second write wins
+    /// and the first buffer has no owner left, which is the one leaked
+    /// allocation of bug 2026-08-29-hub-pipes-append-unsynchronised. The
+    /// two hash maps are the same class of race and are covered by the same
+    /// lock. `Endpoint` keeps its own mutex for `pending`; this one is
+    /// never held across an `Endpoint` call.
+    mutex: std.Io.Mutex = .init,
     /// address -> pending-connection queue of an endpoint.
     endpoints: std.StringHashMapUnmanaged(*Endpoint) = .empty,
     /// Directed edges currently partitioned, keyed "from\x00to".
@@ -515,7 +526,14 @@ pub const Hub = struct {
     /// address; a second registration is refused with `AddressInUse` (a
     /// `put` overwrite would leak the first endpoint and orphan its
     /// listener).
-    pub fn listen(self: *Hub, allocator: std.mem.Allocator, address: []const u8) !Listener {
+    pub fn listen(
+        self: *Hub,
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        address: []const u8,
+    ) !Listener {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         if (self.endpoints.contains(address)) return error.AddressInUse;
         const ep = try allocator.create(Endpoint);
         errdefer allocator.destroy(ep);
@@ -576,6 +594,8 @@ pub const Hub = struct {
         // `heal` and `deinit` are what free it.
         const probe = try edgeKey(allocator, from, to);
         defer allocator.free(probe);
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         if (!self.dropped.contains(probe)) {
             const key = try self.allocator.dupe(u8, probe);
             errdefer self.allocator.free(key);
@@ -592,14 +612,30 @@ pub const Hub = struct {
         }
     }
 
-    pub fn heal(self: *Hub, allocator: std.mem.Allocator, from: []const u8, to: []const u8) !void {
+    pub fn heal(
+        self: *Hub,
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        from: []const u8,
+        to: []const u8,
+    ) !void {
         const key = try edgeKey(allocator, from, to);
         defer allocator.free(key);
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         // remove() hands the stored key back; the map no longer owns it.
         if (self.dropped.fetchRemove(key)) |removed| self.allocator.free(removed.key);
     }
 
-    pub fn isDropped(self: *Hub, from: []const u8, to: []const u8) bool {
+    pub fn isDropped(self: *Hub, io: std.Io, from: []const u8, to: []const u8) bool {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        return self.isDroppedLocked(from, to);
+    }
+
+    /// `isDropped` for a caller that already holds the hub lock; the mutex
+    /// is not recursive, so `connectFn` cannot go through the public one.
+    fn isDroppedLocked(self: *Hub, from: []const u8, to: []const u8) bool {
         var buf: [512]u8 = undefined;
         const key = std.fmt.bufPrint(&buf, "{s}\x00{s}", .{ from, to }) catch return false;
         return self.dropped.contains(key);
@@ -645,8 +681,25 @@ const HubDialer = struct {
         to: []const u8,
     ) !Conn {
         const self: *HubDialer = @ptrCast(@alignCast(ctx));
-        if (self.hub.isDropped(self.from, to)) return error.ConnectionRefused;
-        const ep = self.hub.endpoints.get(to) orelse return error.ConnectionRefused;
+        // One critical section covers the drop check, the endpoint lookup
+        // and the `pipes` append: concurrent dials otherwise race the array
+        // list's growth and orphan one of the two backing buffers (bug
+        // 2026-08-29-hub-pipes-append-unsynchronised). It is released before
+        // `ep.pushConn`, which takes the endpoint's own mutex - the hub lock
+        // is never held across an `Endpoint` call.
+        self.hub.mutex.lockUncancelable(io);
+        var hub_locked = true;
+        errdefer if (hub_locked) self.hub.mutex.unlock(io);
+        if (self.hub.isDroppedLocked(self.from, to)) {
+            self.hub.mutex.unlock(io);
+            hub_locked = false;
+            return error.ConnectionRefused;
+        }
+        const ep = self.hub.endpoints.get(to) orelse {
+            self.hub.mutex.unlock(io);
+            hub_locked = false;
+            return error.ConnectionRefused;
+        };
         const hub_alloc = self.hub.allocator;
         const pipe = try hub_alloc.create(Pipe);
         errdefer hub_alloc.destroy(pipe);
@@ -682,6 +735,8 @@ const HubDialer = struct {
         // Last fallible step: the errdefers above free the pipe, so the hub
         // must not own it until nothing can still fail.
         try self.hub.pipes.append(hub_alloc, pipe);
+        self.hub.mutex.unlock(io);
+        hub_locked = false;
         ep.pushConn(io, to_conn.conn());
         _ = allocator; // connections are hub-owned; the caller's allocator is unused
         return from_conn.conn();
@@ -704,7 +759,7 @@ const tio = std.testing.io;
 test "hub connect delivers frames both ways" {
     var hub = Hub.init(test_alloc);
     defer hub.deinit(tio);
-    var listener = try hub.listen(test_alloc, "node-a");
+    var listener = try hub.listen(tio, test_alloc, "node-a");
     defer listener.close(tio);
     var dialer = try hub.dialer(test_alloc, "node-b");
     defer dialer.deinit();
@@ -747,7 +802,7 @@ fn acceptEchoThenExpectEof(listener: *Listener) error{Canceled}!void {
 test "a dropped edge refuses dials and ends live connections" {
     var hub = Hub.init(test_alloc);
     defer hub.deinit(tio);
-    var listener = try hub.listen(test_alloc, "node-a");
+    var listener = try hub.listen(tio, test_alloc, "node-a");
     defer listener.close(tio);
     var dialer = try hub.dialer(test_alloc, "node-b");
     defer dialer.deinit();
@@ -772,7 +827,7 @@ test "a dropped edge refuses dials and ends live connections" {
     );
 
     // Heal reopens the edge and a fresh connection works.
-    try hub.heal(test_alloc, "node-b", "node-a");
+    try hub.heal(tio, test_alloc, "node-b", "node-a");
     var group2: std.Io.Group = .init;
     group2.async(tio, acceptAndEcho, .{&listener});
     var conn2 = try dialer.connect(tio, test_alloc, "node-a");
@@ -792,15 +847,15 @@ test "dropping the same edge twice does not leak the second key" {
     // the key it already holds), so nothing ever freed it.
     try hub.drop(test_alloc, tio, "node-a", "node-b");
     try hub.drop(test_alloc, tio, "node-a", "node-b");
-    try std.testing.expect(hub.isDropped("node-a", "node-b"));
-    try hub.heal(test_alloc, "node-a", "node-b");
-    try std.testing.expect(!hub.isDropped("node-a", "node-b"));
+    try std.testing.expect(hub.isDropped(tio, "node-a", "node-b"));
+    try hub.heal(tio, test_alloc, "node-a", "node-b");
+    try std.testing.expect(!hub.isDropped(tio, "node-a", "node-b"));
 }
 
 test "hub send refuses an oversized frame" {
     var hub = Hub.init(test_alloc);
     defer hub.deinit(tio);
-    var listener = try hub.listen(test_alloc, "node-a");
+    var listener = try hub.listen(tio, test_alloc, "node-a");
     defer listener.close(tio);
     var dialer = try hub.dialer(test_alloc, "node-b");
     defer dialer.deinit();
@@ -819,7 +874,7 @@ test "hub send refuses an oversized frame" {
 test "pipe reader returns EndOfStream when the peer closes" {
     var hub = Hub.init(test_alloc);
     defer hub.deinit(tio);
-    var listener = try hub.listen(test_alloc, "node-a");
+    var listener = try hub.listen(tio, test_alloc, "node-a");
     defer listener.close(tio);
     var dialer = try hub.dialer(test_alloc, "node-b");
     defer dialer.deinit();
@@ -840,9 +895,9 @@ fn acceptAndClose(listener: *Listener) error{Canceled}!void {
 test "hub listen refuses a duplicate address" {
     var hub = Hub.init(test_alloc);
     defer hub.deinit(tio);
-    var l1 = try hub.listen(test_alloc, "node-a");
+    var l1 = try hub.listen(tio, test_alloc, "node-a");
     defer l1.close(tio);
-    try std.testing.expectError(error.AddressInUse, hub.listen(test_alloc, "node-a"));
+    try std.testing.expectError(error.AddressInUse, hub.listen(tio, test_alloc, "node-a"));
 
     // The first listener is untouched: it still accepts and echoes.
     var dialer = try hub.dialer(test_alloc, "node-b");
@@ -865,7 +920,7 @@ test "hub listen refuses a duplicate address" {
 fn hubRound(failing: std.mem.Allocator) !void {
     var hub = Hub.init(failing);
     defer hub.deinit(tio);
-    var listener = try hub.listen(failing, "node-a");
+    var listener = try hub.listen(tio, failing, "node-a");
     var group: std.Io.Group = .init;
     group.async(tio, acceptAndClose, .{&listener});
     defer {
