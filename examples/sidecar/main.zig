@@ -148,7 +148,7 @@ fn runEmbeddedDemo(gpa: std.mem.Allocator, io: std.Io) !void {
 
     var hub = transport.Hub.init(gpa);
     defer hub.deinit(io);
-    const listener = try hub.listen(gpa, "node-a");
+    const listener = try hub.listen(io, gpa, "node-a");
     const dialer = try hub.dialer(gpa, "node-a");
     var cn = try cluster.ClusterNode.init(gpa, io, node, .{
         .transport = dialer,

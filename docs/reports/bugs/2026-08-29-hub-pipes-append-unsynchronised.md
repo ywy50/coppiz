@@ -4,13 +4,12 @@
 
 - **What failed:** `cluster.node.test.e2e (b)` intermittently fails the leak check with one leaked allocation, traced to `std.ArrayListUnmanaged.ensureTotalCapacityPrecise` under `HubDialer.connectFn`.
 - **Impact:** `zig build test` is intermittently red with `1 leaks` and 0 failed tests. Observed twice in roughly ten local runs, on two different branches and two different bases.
-- **Resolution:** Open. The mechanism is identified; the fix is in `src/net/transport.zig`, which this session does not own.
+- **Resolution:** Fixed. `Hub` has a mutex, and `connectFn` holds it across the drop check, the endpoint lookup and the `pipes` append.
 
 ## Status
 
-Open. Filed by the session working `src/journal/`, `src/settings/`,
-`src/config/` and `src/main.zig`; the code is in `src/net/`, so the fix is
-left to that file's owner.
+Resolved. Filed by the session working `src/journal/`, `src/settings/`,
+`src/config/` and `src/main.zig`; fixed by the session owning `src/net/`.
 
 ## Symptom and impact
 
@@ -84,21 +83,40 @@ was not separated from the growth race by the evidence collected.
 
 ## Resolution
 
-Not fixed here. The shape a fix would take is a `std.Io.Mutex` on `Hub`
-held across `pipes.append`, the `endpoints` lookup and the `dropped` check,
-matching what `Endpoint` already does for `pending`. Confirming which of the
-two mechanisms fires would need a run under a thread sanitizer or an
-instrumented `append`.
+`Hub` gained a `std.Io.Mutex`, taken across every access to `endpoints`,
+`dropped` and `pipes`:
+
+- `HubDialer.connectFn` holds it from the drop check through the endpoint
+  lookup to `pipes.append`, and releases it before `ep.pushConn`. The hub
+  lock is never held across an `Endpoint` call, so the two mutexes cannot
+  form a cycle.
+- `listen`, `drop`, `heal` and `isDropped` take it too. Those four grew an
+  `io` parameter, since `std.Io.Mutex` needs one; every call site is a test
+  or an example.
+- `isDroppedLocked` exists because the mutex is not recursive and
+  `connectFn` needs the check while already holding it.
+
+`Hub.deinit` is left unlocked: it runs at teardown, after every dialer and
+listener is done, and it sets `self.* = undefined`.
+
+The predicted mechanism is not *proven* to be the one that fired - the
+original leak was never reproduced on demand, so there is nothing to
+re-run as a control. What is established is that the concurrent access was
+real and is now serialized. The honest claim is that the race is gone, not
+that this specific leak has been observed to stop.
 
 ## Verification
 
-None - the defect is open.
+- `zig build test --summary all` green: 23/23 steps, 295/295 tests, with the
+  lock in and every call site updated.
+- Not verified by reproduction: the leak is intermittent and was not
+  reproducible on demand before the fix, so its absence in any one run
+  proves nothing. See the caveat under *Resolution*.
 
 ## Follow-up
 
-While it is open, a `1 leaks` line in `cluster.node` e2e (b) with all tests
-passing is this bug rather than the change under test. Re-run before
-investigating a diff, and gate an untouched base when it recurs.
+The follow-up note that a `1 leaks` line in e2e (b) is this bug no longer
+applies; a leak there is now a real finding again.
 
 ## References
 

@@ -2833,7 +2833,7 @@ test "the loop serves a wire client over the hub: hello, append, read" {
 
     var hub = net.transport.Hub.init(test_alloc);
     defer hub.deinit(tio);
-    const listener = try hub.listen(test_alloc, "node-a");
+    const listener = try hub.listen(tio, test_alloc, "node-a");
     const dialer = try hub.dialer(test_alloc, "node-a");
 
     var node = try journal.Node.open(test_alloc, tio, data_dir, .{ .replay_forward = true });
@@ -2908,7 +2908,7 @@ test "append without hello is dropped and does not write" {
 
     var hub = net.transport.Hub.init(test_alloc);
     defer hub.deinit(tio);
-    const listener = try hub.listen(test_alloc, "node-a");
+    const listener = try hub.listen(tio, test_alloc, "node-a");
     const dialer = try hub.dialer(test_alloc, "node-a");
 
     var node = try journal.Node.open(test_alloc, tio, data_dir, .{ .replay_forward = true });
@@ -2957,7 +2957,7 @@ test "hello whose member id does not derive from the key is refused" {
 
     var hub = net.transport.Hub.init(test_alloc);
     defer hub.deinit(tio);
-    const listener = try hub.listen(test_alloc, "node-a");
+    const listener = try hub.listen(tio, test_alloc, "node-a");
     const dialer = try hub.dialer(test_alloc, "node-a");
 
     var node = try journal.Node.open(test_alloc, tio, data_dir, .{ .replay_forward = true });
@@ -3049,9 +3049,9 @@ test "e2e (b): partition a 2-member seniority cluster, write on both sides, heal
 
     var hub = net.transport.Hub.init(test_alloc);
     defer hub.deinit(tio);
-    const listener_a = try hub.listen(test_alloc, "a");
+    const listener_a = try hub.listen(tio, test_alloc, "a");
     const dialer_a = try hub.dialer(test_alloc, "a");
-    const listener_b = try hub.listen(test_alloc, "b");
+    const listener_b = try hub.listen(tio, test_alloc, "b");
     const dialer_b = try hub.dialer(test_alloc, "b");
 
     const b_key = b_kp.public_key.toBytes();
@@ -3171,8 +3171,8 @@ test "e2e (b): partition a 2-member seniority cluster, write on both sides, heal
     try std.testing.expectEqual(@as(usize, 0), reply_b.refusal.len);
 
     // Heal; the loops redial and the merge converges.
-    try hub.heal(test_alloc, "a", "b");
-    try hub.heal(test_alloc, "b", "a");
+    try hub.heal(tio, test_alloc, "a", "b");
+    try hub.heal(tio, test_alloc, "b", "a");
 
     // Poll: both nodes read both entries from "main".
     {
@@ -3301,7 +3301,7 @@ fn triNodeInit(
         // data is throwaway; the tested logic does not depend on durability.
         .fsync = .never,
     });
-    const listener = try hub.listen(test_alloc, listen_addr);
+    const listener = try hub.listen(tio, test_alloc, listen_addr);
     const dialer = try hub.dialer(test_alloc, listen_addr);
     var cn = try ClusterNode.init(test_alloc, tio, node, .{
         .transport = dialer,
@@ -3450,10 +3450,10 @@ test "e2e (c): configured leadership with a stall fallback never elects without 
     }
 
     // Heal: the same leader holds and everyone converges on it.
-    try hub.heal(test_alloc, "a", "b");
-    try hub.heal(test_alloc, "b", "a");
-    try hub.heal(test_alloc, "a", "c");
-    try hub.heal(test_alloc, "c", "a");
+    try hub.heal(tio, test_alloc, "a", "b");
+    try hub.heal(tio, test_alloc, "b", "a");
+    try hub.heal(tio, test_alloc, "a", "c");
+    try hub.heal(tio, test_alloc, "c", "a");
     {
         const deadline = wallMs(tio) + 20_000;
         var converged = false;
@@ -3506,7 +3506,7 @@ test "driveCheckpoints skips MergeSettling instead of stopping the loop" {
 
     var hub = net.transport.Hub.init(test_alloc);
     defer hub.deinit(tio);
-    const listener = try hub.listen(test_alloc, "node-a");
+    const listener = try hub.listen(tio, test_alloc, "node-a");
     const dialer = try hub.dialer(test_alloc, "node-a");
 
     var node = try journal.Node.open(test_alloc, tio, data_dir, .{
@@ -4329,7 +4329,7 @@ test "(PRD 0005 G5) no thread exists before start(), and the size-1 path needs n
 
     var hub = net.transport.Hub.init(test_alloc);
     defer hub.deinit(oio);
-    var listener = try hub.listen(test_alloc, "solo");
+    var listener = try hub.listen(tio, test_alloc, "solo");
     const dialer = try hub.dialer(test_alloc, "solo");
     var cn = try ClusterNode.init(test_alloc, oio, node, .{
         .transport = dialer,

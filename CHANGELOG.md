@@ -52,6 +52,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the same shape are gone with it: a seed peer named twice in `[[peers]]`
   leaked its second retry key, and a `ClusterNode.init` that failed its own
   setup freed the struct without freeing the tables it had built.
+- The in-memory hub transport is safe to dial concurrently. `Hub` guarded
+  none of its three fields while every node dialled from its own task, so
+  two `pipes.append` calls that both grew the list orphaned one of the two
+  backing buffers - an intermittent `1 leaks` on an otherwise green
+  `zig build test`. `Hub` has a mutex now, held across the drop check, the
+  endpoint lookup and the append. `Hub.listen`, `drop`, `heal` and
+  `isDropped` take an `io` parameter as a result.
 
 - A TCP connection no longer loses frames the kernel delivered together.
   `recvFrame` built its read buffer per call, so bytes the socket read past

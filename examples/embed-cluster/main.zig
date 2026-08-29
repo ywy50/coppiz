@@ -108,7 +108,7 @@ fn spawnNode(
     if (keypair) |kp| try journal.writeMemberKey(gpa, io, data_dir, kp);
     var node = try journal.Node.open(gpa, io, data_dir, .{ .replay_forward = true });
     errdefer node.deinit();
-    const listener = try hub.listen(gpa, address);
+    const listener = try hub.listen(io, gpa, address);
     const dialer = try hub.dialer(gpa, address);
     const seeds: []const []const u8 = if (seed) |s| blk: {
         const list = try gpa.alloc([]const u8, 1);
@@ -280,10 +280,10 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
         const deadline = wallMs(io) + 300;
         while (wallMs(io) < deadline) {}
     }
-    try hub.heal(gpa, "a", "b");
-    try hub.heal(gpa, "b", "a");
-    try hub.heal(gpa, "a", "c");
-    try hub.heal(gpa, "c", "a");
+    try hub.heal(io, gpa, "a", "b");
+    try hub.heal(io, gpa, "b", "a");
+    try hub.heal(io, gpa, "a", "c");
+    try hub.heal(io, gpa, "c", "a");
     {
         const deadline = wallMs(io) + 15_000;
         var healthy = false;
