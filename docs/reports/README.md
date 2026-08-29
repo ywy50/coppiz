@@ -79,6 +79,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - wire length checks compute in the peer's own narrow int type: an 84-byte hello aborts an unadmitted node](bugs/2026-08-29-wire-length-checks-narrow-int.md)
 - [2026-08-29 - a deferred `leave` that refuses leaves a freed payload in the merge list, and the next free of it is a double free](bugs/2026-08-29-merge-deferred-leaves-double-free.md)
 - [2026-08-29 - `TcpConn.recvFrame` throws away every byte the socket read past the current frame](bugs/2026-08-29-tcp-recvframe-drops-buffered-bytes.md)
+- [2026-08-29 - three cluster allocations are owned by nobody when the step after them fails](bugs/2026-08-29-cluster-alloc-ownership-error-paths.md)
 - [2026-08-28 - sweep3: a chainless joiner whose first tick fires before admission never backfills](bugs/2026-08-28-sweep3-joiner-syncing-race.md)
 - [2026-08-28 - sweep3: an accepted append between ~8 MB and 16 MB can never be replicated](bugs/2026-08-28-sweep3-oversized-entry-unreplicable.md)
 - [2026-08-28 - sweep3: `decodeRecord` length-prefix arithmetic overflows u32 - remote crash](bugs/2026-08-28-sweep3-record-length-overflow.md)
