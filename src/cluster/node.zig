@@ -1912,11 +1912,22 @@ pub const ClusterNode = struct {
     /// A new leader's first act: the epoch entry at (epoch+1, 1), signed by
     /// the new leader itself.
     fn appendEpoch(self: *ClusterNode, reason: epoch.Reason) !void {
+        return self.appendEpochFor(reason, self.node.member_id);
+    }
+
+    /// The epoch entry at (epoch+1, 1), naming `new_leader`. The slot is
+    /// always signed by this member; the fold accepts that in two shapes
+    /// (`epoch.applyEpoch`) - a post-failure election, where the author and
+    /// the named leader are the same member announcing itself, and a
+    /// *handover*, where the current leader signs an epoch naming someone
+    /// else. `appendEpoch` is the first shape; a mode change is the second
+    /// (PRD 0003 *Live reconfiguration*).
+    fn appendEpochFor(self: *ClusterNode, reason: epoch.Reason, new_leader: [16]u8) !void {
         const fold = &self.node.control;
         const number = fold.epoch.?.number + 1;
         var payload: [epoch.epoch_payload_len]u8 = undefined;
         epoch.encodeEpochPayload(
-            .{ .number = number, .reason = reason, .leader = self.node.member_id },
+            .{ .number = number, .reason = reason, .leader = new_leader },
             &payload,
         );
         const en = try self.signedEntry(.epoch, fold.journal_id, &payload, 0);
@@ -3022,6 +3033,51 @@ pub const ClusterNode = struct {
                 },
             };
         try self.ackClient(conn_id, authored.id, "");
+        if (is_control) try self.handOverAfterSettings(changes);
+    }
+
+    /// The `leadership.*` half of PRD 0003 *Live reconfiguration*.
+    ///
+    /// > the `settings` entry is accepted; the current leader appends it,
+    /// > then appends an `epoch` with `reason = mode_change` and the leader
+    /// > the new mode selects (which may be itself). The handover is one
+    /// > slot wide: the old leader stops slotting after the `epoch` entry
+    /// > and forwards to the new one.
+    ///
+    /// Without it the term never changed hands on the record: the member
+    /// the new mode elects noticed on its own next tick and opened a term
+    /// with `reason = leader_lost`, which is a false statement about what
+    /// happened - nothing was lost - and left the old leader slotting under
+    /// the new mode until that tick landed. The epoch is one slot wide
+    /// because folding it is what makes `isLeader` false here.
+    ///
+    /// Nothing is appended when the mode elects the same member, when the
+    /// change touches no `leadership.*` key, or when the new settings elect
+    /// nobody (`fallback = stall` with no live authority) - in the last
+    /// case the cluster is meant to stall, and an epoch naming a leader
+    /// would be the one thing that stops it stalling.
+    fn handOverAfterSettings(self: *ClusterNode, changes: []const validate.Change) !void {
+        if (!self.isLeader()) return;
+        if (!touchesLeadership(changes)) return;
+        const inputs = self.electionInputs();
+        const views = try self.viewsFor();
+        defer self.allocator.free(views);
+        const elected = election.leader(inputs, views) orelse return;
+        const current = self.node.control.epoch.?.leader;
+        if (std.mem.eql(u8, &elected, &current)) return;
+        try self.appendEpochFor(.mode_change, elected);
+    }
+
+    /// Whether a cluster-scoped settings change touches a key the election
+    /// reads. `leadership.reconfigurable` is deliberately included: flipping
+    /// it changes nothing the election reads today, but it is a
+    /// `leadership.*` key and the check is over the prefix, not over a list
+    /// that would drift from the schema.
+    fn touchesLeadership(changes: []const validate.Change) bool {
+        for (changes) |c| {
+            if (std.mem.startsWith(u8, schema.keys[c.key].name, "leadership.")) return true;
+        }
+        return false;
     }
 
     // -- election inputs -----------------------------------------------------
@@ -5553,4 +5609,213 @@ test "shutdown wakes every host thread parked on the loop" {
     // A shutdown is not a refusal by the cluster: the entry may still be in
     // the durable queue, so the host is told the call was cancelled.
     deinitLocalRead(&queued_read, test_alloc);
+}
+
+test "(PRD 0003) a live leadership change hands the term over in one slot" {
+    // PRD 0003 *Live reconfiguration*: with `reconfigurable = true` the
+    // current leader appends the `settings` entry, "then appends an `epoch`
+    // with `reason = mode_change` and the leader the new mode selects
+    // (which may be itself). The handover is one slot wide: the old leader
+    // stops slotting after the `epoch` entry and forwards to the new one."
+    //
+    // Nothing appended a `mode_change` epoch. The term changed hands only
+    // when the newly-elected member's own next tick noticed and opened a
+    // term with `reason = leader_lost` - a false statement about what
+    // happened - and until that tick the old leader went on slotting under
+    // the new mode.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "a");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "a",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+    try std.testing.expect(cn.isLeader());
+
+    // A second member, admitted and live, so the new mode has someone else
+    // to elect. The loop is not running: admission and liveness are set
+    // here directly, which is what a completed handshake would have done.
+    const b_kp = crypto.sign.Ed25519.KeyPair.generate(oio);
+    const b_key = b_kp.public_key.toBytes();
+    const b_id = chain.deriveMemberId(b_key);
+    try cn.admitNewcomer(.{
+        .member_id = b_id,
+        .public_key = b_key,
+        .genesis_hash = cn.node.group_hash,
+        .address = "b",
+    });
+    try cn.members.put(test_alloc, b_id, .{
+        .address = try test_alloc.dupe(u8, "b"),
+        .public_key = b_key,
+        .state = .member,
+        .last_heard_ms = 1,
+    });
+    try std.testing.expect(cn.node.control.memberById(b_id) != null);
+
+    const Sink = struct {
+        fn send(_: *anyopaque, _: std.Io, _: []const u8) net.transport.SendError!void {}
+        fn recv(
+            _: *anyopaque,
+            _: std.Io,
+            _: std.mem.Allocator,
+        ) net.transport.RecvError![]u8 {
+            return error.EndOfStream;
+        }
+        fn nop(_: *anyopaque, _: std.Io) void {}
+    };
+    var sink_ctx: u8 = 0;
+    try cn.conns.put(test_alloc, 9, .{ .conn = .{
+        .ctx = &sink_ctx,
+        .recv_frame = Sink.recv,
+        .send_frame = Sink.send,
+        .shutdown_fn = Sink.nop,
+        .close_fn = Sink.nop,
+    } });
+
+    // The operator moves the cluster to `configured` with B as the only
+    // authority - a mode under which this member is no longer the leader.
+    const b_hex = try std.fmt.allocPrint(test_alloc, "{x}", .{b_id});
+    defer test_alloc.free(b_hex);
+    const mode_key = schema.keyIndex("leadership.mode").?;
+    const auth_key = schema.keyIndex("leadership.authorities").?;
+    const changes = [_]validate.Change{
+        .{ .key = mode_key, .value = .{
+            .enum_value = schema.enumValue(mode_key, "configured").?,
+        } },
+        .{ .key = auth_key, .value = .{ .string_list = &.{b_hex} } },
+    };
+    const encoded = try test_alloc.alloc(u8, settings_fold.changesLen(&changes));
+    defer test_alloc.free(encoded);
+    try settings_fold.encodeChanges(&changes, encoded);
+
+    const epoch_before = cn.node.control.epoch.?.number;
+    try cn.onSettings(9, .{ .journal = "__cluster__", .changes = encoded });
+
+    // One epoch, named for what it is, naming the member the new mode
+    // elects - and this member is no longer the leader, so it stops
+    // slotting and forwards from here.
+    const now = cn.node.control.epoch.?;
+    try std.testing.expectEqual(epoch_before + 1, now.number);
+    try std.testing.expectEqualSlices(u8, &b_id, &now.leader);
+    try std.testing.expectEqualStrings("mode_change", now.reason);
+    try std.testing.expect(!cn.isLeader());
+}
+
+test "(PRD 0003) a leadership change that elects the same member appends no epoch" {
+    // The handover is only for a change of leader. A `leadership.*` change
+    // that leaves this member elected must not churn the epoch, or every
+    // authority-list edit would cost a term.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "a");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "a",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    const b_kp = crypto.sign.Ed25519.KeyPair.generate(oio);
+    const b_key = b_kp.public_key.toBytes();
+    const b_id = chain.deriveMemberId(b_key);
+    try cn.admitNewcomer(.{
+        .member_id = b_id,
+        .public_key = b_key,
+        .genesis_hash = cn.node.group_hash,
+        .address = "b",
+    });
+    try cn.members.put(test_alloc, b_id, .{
+        .address = try test_alloc.dupe(u8, "b"),
+        .public_key = b_key,
+        .state = .member,
+        .last_heard_ms = 1,
+    });
+
+    const Sink = struct {
+        fn send(_: *anyopaque, _: std.Io, _: []const u8) net.transport.SendError!void {}
+        fn recv(
+            _: *anyopaque,
+            _: std.Io,
+            _: std.mem.Allocator,
+        ) net.transport.RecvError![]u8 {
+            return error.EndOfStream;
+        }
+        fn nop(_: *anyopaque, _: std.Io) void {}
+    };
+    var sink_ctx: u8 = 0;
+    try cn.conns.put(test_alloc, 9, .{ .conn = .{
+        .ctx = &sink_ctx,
+        .recv_frame = Sink.recv,
+        .send_frame = Sink.send,
+        .shutdown_fn = Sink.nop,
+        .close_fn = Sink.nop,
+    } });
+
+    // `configured` naming *this* member: the mode changes, the leader does
+    // not.
+    const a_hex = try std.fmt.allocPrint(test_alloc, "{x}", .{cn.node.member_id});
+    defer test_alloc.free(a_hex);
+    const mode_key = schema.keyIndex("leadership.mode").?;
+    const auth_key = schema.keyIndex("leadership.authorities").?;
+    const changes = [_]validate.Change{
+        .{ .key = mode_key, .value = .{
+            .enum_value = schema.enumValue(mode_key, "configured").?,
+        } },
+        .{ .key = auth_key, .value = .{ .string_list = &.{a_hex} } },
+    };
+    const encoded = try test_alloc.alloc(u8, settings_fold.changesLen(&changes));
+    defer test_alloc.free(encoded);
+    try settings_fold.encodeChanges(&changes, encoded);
+
+    const epoch_before = cn.node.control.epoch.?.number;
+    try cn.onSettings(9, .{ .journal = "__cluster__", .changes = encoded });
+    try std.testing.expectEqual(epoch_before, cn.node.control.epoch.?.number);
+    try std.testing.expect(cn.isLeader());
+
+    // And a change that touches no `leadership.*` key never looks at the
+    // election at all.
+    const journals_key = schema.keyIndex("cluster.max_journals").?;
+    const other = [_]validate.Change{.{ .key = journals_key, .value = .{ .u32 = 7 } }};
+    const other_encoded = try test_alloc.alloc(u8, settings_fold.changesLen(&other));
+    defer test_alloc.free(other_encoded);
+    try settings_fold.encodeChanges(&other, other_encoded);
+    try cn.onSettings(9, .{ .journal = "__cluster__", .changes = other_encoded });
+    try std.testing.expectEqual(epoch_before, cn.node.control.epoch.?.number);
+    try std.testing.expect(cn.isLeader());
 }
