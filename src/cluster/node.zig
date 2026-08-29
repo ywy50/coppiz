@@ -1730,6 +1730,16 @@ pub const ClusterNode = struct {
             self.closeConn(conn_id);
             return;
         };
+        // A forwarded entry is a live author's bytes: it must carry its
+        // payload. The compacted shape (payload_omitted) is legitimate only
+        // for stored records; accepting it here would let any member forge
+        // entries with arbitrary payload_len/payload_hash that the fold
+        // slots and every read allocates payload_len bytes for (bug
+        // 2026-08-28-sweep3-header-only-entry-accepted).
+        if (en.payload_omitted) {
+            self.closeConn(conn_id);
+            return;
+        }
         // Only data entries are forwarded. Control entries are
         // leader-authored directly; accepting a member's self-signed
         // control entry here would route it through the fold's re-slot
@@ -1943,6 +1953,17 @@ pub const ClusterNode = struct {
 
     fn onSlot(self: *ClusterNode, conn_id: u64, m: message.SlotMsg) !void {
         const en = m.en orelse return;
+        // A live broadcast carries the entry's bytes. The compacted shape
+        // (payload_omitted) is legitimate only for stored records - a
+        // replay, a sync page, or a merge re-slot (m.reslotted). Accepting
+        // it live would let any member forge entries with arbitrary
+        // payload_len and payload_hash, bypassing payload integrity and
+        // max_entry_bytes, and drive payload_len-sized allocations on every
+        // read (bug 2026-08-28-sweep3-header-only-entry-accepted).
+        if (!m.reslotted and en.payload_omitted) {
+            self.closeConn(conn_id);
+            return;
+        }
         const jid = en.journal;
         // Sync pages carry everything; broadcasts are dropped while
         // backfilling or merging (the loser is still slotting its branch).
@@ -3111,6 +3132,92 @@ test "append without hello is dropped and does not write" {
     try conn.send(tio, buf);
     try std.testing.expectError(error.EndOfStream, conn.recv(tio, test_alloc));
 
+    const jid = node.journalIdByName("main").?;
+    try std.testing.expectEqual(@as(usize, 0), node.journals.get(jid).?.fold.entries.count());
+}
+
+test "a compacted-shaped forward is refused: payload_omitted is never live" {
+    // Bug 2026-08-28-sweep3-header-only-entry-accepted: entry.decode accepts
+    // the compacted shape (header only, payload_len > 0) with no evidence a
+    // checkpoint dropped the payload, and the fold skips the payload-hash
+    // check for it — so a member could forward a forged header with an
+    // arbitrary payload_len/payload_hash, the leader would slot it, and
+    // every read would allocate payload_len bytes. A forwarded entry is a
+    // live author's bytes and must carry its payload.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(tio, "data", .default_dir) catch {};
+    {
+        const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, tio, data_dir, &.{}, "main", &journal.wallClock);
+    }
+    const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(tio);
+    const listener = try hub.listen(tio, test_alloc, "node-a");
+    const dialer = try hub.dialer(test_alloc, "node-a");
+
+    var node = try journal.Node.open(test_alloc, tio, data_dir, .{ .replay_forward = true });
+    defer node.deinit();
+    var cn = try ClusterNode.init(test_alloc, tio, node, .{
+        .transport = dialer,
+        .listener = listener,
+        .address = "node-a",
+        .allowlist = &.{},
+    });
+    defer {
+        cn.stop();
+        cn.waitForStop();
+        cn.deinit();
+        listener.close(tio);
+        dialer.deinit();
+    }
+    cn.start();
+
+    var conn = try dialer.connect(tio, test_alloc, "node-a");
+    defer conn.close(tio);
+    // A helloed conn (the node's own id and key: admitted) so the message
+    // is processed at all.
+    const hello = message.Message{ .hello = .{
+        .member_id = node.member_id,
+        .public_key = node.keypair.public_key.toBytes(),
+        .genesis_hash = [_]u8{0} ** 32,
+        .address = "node-a",
+    } };
+    const hbuf = try test_alloc.alloc(u8, message.encodedLen(hello));
+    defer test_alloc.free(hbuf);
+    message.encode(hello, hbuf);
+    try conn.send(tio, hbuf);
+    const ack_bytes = try conn.recv(tio, test_alloc); // the hello_ack
+    test_alloc.free(ack_bytes);
+
+    // A forged compacted-shaped header: payload_len beyond the frame cap,
+    // arbitrary payload_hash, self-signed.
+    var forged = entry.Entry{
+        .kind = .data,
+        .journal = node.journalIdByName("main").?,
+        .author = node.member_id,
+        .author_seq = 1,
+        .author_ts_ms = 0,
+        .ttl_ms = 0,
+        .payload_hash = [_]u8{0xAB} ** 32,
+        .signature = undefined,
+        .payload_len = 0xffff_ffff,
+        .payload_omitted = true,
+        .payload = &.{},
+    };
+    forged.signature = (try entry.sign(node.keypair, &forged)).toBytes();
+    var header: [entry.header_len]u8 = undefined;
+    entry.encodeHeader(&forged, &header);
+    const m = message.Message{ .forward = .{ .entry_bytes = &header } };
+    const buf = try test_alloc.alloc(u8, message.encodedLen(m));
+    defer test_alloc.free(buf);
+    message.encode(m, buf);
+    try conn.send(tio, buf);
+
+    // The leader closes the conn and slots nothing.
+    try std.testing.expectError(error.EndOfStream, conn.recv(tio, test_alloc));
     const jid = node.journalIdByName("main").?;
     try std.testing.expectEqual(@as(usize, 0), node.journals.get(jid).?.fold.entries.count());
 }

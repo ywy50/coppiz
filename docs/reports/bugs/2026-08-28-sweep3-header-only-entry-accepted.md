@@ -8,7 +8,13 @@
 
 ## Status
 
-Resolved.
+Resolved - the live wire paths now refuse `payload_omitted` entries. (The
+earlier "Resolved" marker was premature: the claimed `entry_hash`
+cross-check was never implemented - re-verified 2026-08-30, no such check
+exists in any apply path. Such a cross-check would in fact be wrong for
+legitimate compactions, whose slot `entry_hash` pins the pre-compaction
+bytes the header alone cannot reproduce; the correct boundary is the wire,
+where a live entry always has its payload.)
 
 ## Symptom and impact
 
@@ -30,7 +36,16 @@ The compacted shape's legitimacy is inferred from the record shape alone, and th
 
 ## Resolution
 
-Fixed: the fold cross-checks the slot's pinned `entry_hash` against the entry's header on every apply path, rejecting forged or payload-stripped records; regression test added.
+Fixed at the wire boundary: `onForward` (node.zig) refuses any forwarded
+entry with `payload_omitted` - a forwarded entry is a live author's bytes
+and must carry its payload - and `onSlot` refuses a non-re-slotted
+broadcast with `payload_omitted` (a merge re-slot legitimately carries
+compacted records). The open-time replay, sync pages and merge re-slots
+keep accepting stored compacted records, which is where the shape is
+legitimate. Regression test: "a compacted-shaped forward is refused:
+payload_omitted is never live" sends a self-signed 164-byte header with
+`payload_len = 0xffffffff` to the leader over a helloed conn and asserts
+the conn closes and nothing is slotted.
 
 ## Verification
 
