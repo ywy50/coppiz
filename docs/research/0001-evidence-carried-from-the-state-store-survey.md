@@ -1,15 +1,15 @@
-# Research — Evidence carried from clanker's state-store survey (RFC 0019)
+# Research - Evidence carried from clanker's state-store survey (RFC 0019)
 
 ## Status
 
-Draft — compiled 2026-08-21 from clanker's records; most rows are **carried,
+Draft - compiled 2026-08-21 from clanker's records; most rows are **carried,
 not re-verified here**. Every claim traces to a clanker source named under
 Scope and method, all read there on 2026-08-21; the evidence log gives the
 finer-grained source and date where one row covers it. The rows the public
-README cites — etcd, rqlite, dqlite, TigerBeetle, and the Zig-store-gap
-search — were reopened at their sources in this repo on 2026-08-27 and are
+README cites - etcd, rqlite, dqlite, TigerBeetle, and the Zig-store-gap
+search - were reopened at their sources in this repo on 2026-08-27 and are
 marked **reopened** in the evidence log ([OQ 40](../open-questions.md)); the
-rest remain carried — reopen a source before quoting it as current.
+rest remain carried - reopen a source before quoting it as current.
 
 Research is evidence, not a decision: it records what exists, how good it is,
 and how confident the finding is. The decision that follows belongs in an
@@ -25,32 +25,32 @@ inherit as requirements?
 
 - **No general-purpose Zig-native replicated store exists.** TigerBeetle is
   the only Zig database of note and its schema is fixed to accounts and
-  transfers — `high`, clanker research option P (read 2026-08-16).
+  transfers - `high`, clanker research option P (read 2026-08-16).
 - **The operator's direction is a standalone, public Zig project, embeddable
-  library and/or small service API, designed with clanker in mind** —
+  library and/or small service API, designed with clanker in mind** -
   `high`, clanker RFC 0019 option T *Packaging* (2026-08-19). This repo is
   that project; [RFC 0001](../rfcs/0001-library-first-or-service-first.md)
   is the surface decision it names.
-- **Append-only single-writer streams replicate with no consensus** —
+- **Append-only single-writer streams replicate with no consensus** -
   fan-out plus id-dedup plus a per-stream cursor; clanker's chat fan-out
-  already does it — `medium` (design reasoning, spike not run), RFC 0019
+  already does it - `medium` (design reasoning, spike not run), RFC 0019
   option T and the stage-1 spike note. This is why coppiz's content
   replication needs no consensus and only *order* needs a leader (PRD 0001).
 - **BFT buys nothing under one operator; tamper evidence does.** The
   realistic bad writer is a correlated defect, which BFT cannot absorb; a hash
   chain is addable for one hash per record and clanker's improve ledger has
-  already had a prefix silently rewritten — `high` on the reasoning, resting
+  already had a prefix silently rewritten - `high` on the reasoning, resting
   on the single-operator premise (research option R, 2026-08-19). coppiz
   adopts the chain and signatures and declines BFT; the premise is
   [OQ 1](../open-questions.md).
 - **Quorum stores cannot serve n = 2 and stall a minority partition;
   gossip/CRDT stores converge but "converge ≠ correct".** etcd/Consul/
   rqlite/dqlite need a majority; Corrosion/Marmot accept writes everywhere and
-  resolve by CRDT or HLC last-write-wins — `high`, verified at source by
+  resolve by CRDT or HLC last-write-wins - `high`, verified at source by
   clanker 2026-08-18. coppiz's answer is append-only content (no conflict to
   resolve) plus mode-selectable leadership (PRD 0003), which is neither row.
 - **clanker's data is four shapes, and only ~16 KB needs compare-and-swap.**
-  Append logs, small mutable documents, single-owner blobs, claims — `high`,
+  Append logs, small mutable documents, single-owner blobs, claims - `high`,
   measured in clanker's tree 2026-08-16. The first coppiz consumer is the
   append-log shape (PRD 0005).
 
@@ -74,8 +74,8 @@ clanker-specific and must not leak into the library's API.
 
 | Finding (clanker's) | What coppiz does with it | Where |
 |---|---|---|
-| clanker vendors the SQLite amalgamation and writes per-session databases directly in-process; cross-process contention is SQLite file locking plus a 5 s busy timeout (read 2026-08-21: its ADR 0033, `src/util/sqlite.zig`) | the "several processes, one file" property is the one SQLite habit coppiz v1 lacks — *general* | PRD 0005, OQ 47 |
-| clanker's mesh already replicates a session's `events` stream to peers at `cursor + 1` over loopback HTTP (ADR 0033) | that stream is a one-author coppiz journal; the first consumer shape — *general* (any single-writer stream) | PRD 0005 |
+| clanker vendors the SQLite amalgamation and writes per-session databases directly in-process; cross-process contention is SQLite file locking plus a 5 s busy timeout (read 2026-08-21: its ADR 0033, `src/util/sqlite.zig`) | the "several processes, one file" property is the one SQLite habit coppiz v1 lacks - *general* | PRD 0005, OQ 47 |
+| clanker's mesh already replicates a session's `events` stream to peers at `cursor + 1` over loopback HTTP (ADR 0033) | that stream is a one-author coppiz journal; the first consumer shape - *general* (any single-writer stream) | PRD 0005 |
 | Guests reach state only through a `ck_*` host function under a manifest grant, never a path or socket | The library runs inside the host's `serve`; guests never see coppiz | PRD 0005 route A |
 | `networkAllowed` matches hostname and never port, so a loopback grant admits any local service | A sidecar + HTTP route is for experiments only | PRD 0005 route B, RFC 0001 |
 | "No second daemon" (PRD 0011 non-goal) | Library-first | RFC 0001 |
@@ -85,7 +85,7 @@ clanker-specific and must not leak into the library's API.
 | Two serves on one host are two members (distinct ids, ports, dirs) | Same rule; one data dir per node, flocked | PRD 0005 |
 | Guest arena / `max_fs_bytes` 1 MiB | Backfill pages bounded by `sync.page_bytes` | PRD 0001 |
 | Improve ledger prefix silently rewritten once | Hash chain + signatures from v1, not later | PRD 0001, ADR 0002 |
-| Stage-1 spike: three journeys — burst, backfill, hostile wire | Adopted as coppiz's first e2e shape | PRD 0005 |
+| Stage-1 spike: three journeys - burst, backfill, hostile wire | Adopted as coppiz's first e2e shape | PRD 0005 |
 
 ## Options found (as clanker assessed them, carried)
 
@@ -95,7 +95,7 @@ clanker-specific and must not leak into the library's API.
 | etcd | full per host, CP | best lease/CAS primitives; 1.5 MiB request cap; quorum stalls minority | 2026-08-18 |
 | rqlite / dqlite | full per host, CP | the two packaging shapes (service / embedded library); single writer through Raft leader | 2026-08-16 |
 | Corrosion + cr-sqlite | full per host, AP | full replication at fleet scale is real; Rust daemon; CRDT converge ≠ correct | 2026-08-18 |
-| Marmot | full per host, AP tunable | per-write ONE/QUORUM/ALL is a useful knob; rows may sync out of order — bad for logs | 2026-08-16 |
+| Marmot | full per host, AP tunable | per-write ONE/QUORUM/ALL is a useful knob; rows may sync out of order - bad for logs | 2026-08-16 |
 | NATS JetStream KV | per-stream replicas | streams + watch + KV; pre-1.0 Zig client | 2026-08-18 |
 | TigerBeetle | central replicated, CP | the Zig blueprint: fixed-width records, deterministic fold, bounded allocation, deterministic simulation testing; not the engine | 2026-08-19 |
 | CometBFT / Fabric / immudb / Hypercore / OrbitDB | ledger family | decomposed: total order and tamper evidence survive; BFT and PKI do not; p2p logs show single-owner logs + fold extend to multi-writer with Merkle integrity | 2026-08-19 |
@@ -104,7 +104,7 @@ clanker-specific and must not leak into the library's API.
 
 ## Out-of-the-box options
 
-- **Already in the tree (clanker's):** `chatrooms.fanOut` — at-least-once
+- **Already in the tree (clanker's):** `chatrooms.fanOut` - at-least-once
   fan-out with id-dedup; the spike generalizes it with a cursor. coppiz's
   replication is that design with a leader-assigned total order on top.
 - **Standard library / OS primitive:** Zig `std.crypto` has Ed25519 and

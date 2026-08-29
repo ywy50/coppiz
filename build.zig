@@ -263,6 +263,18 @@ fn addChecks(
     lint_step.dependOn(&TestRegistrationStep.create(b).step);
     lint_step.dependOn(&GateCoverageStep.create(b).step);
     test_step.dependOn(lint_step);
+
+    // `zig build docs-check` runs the project-kit documentation checks (the
+    // agents-setup rules: no em dashes in prose, no paragraph over 700
+    // characters, no broken local links, the generated index current, report
+    // timelines stamped). The script is tracked at scripts/project-kit.py so
+    // the check is reproducible from a fresh clone without .local/; the step
+    // is opt-in and not part of `zig build test`.
+    const docs_check = b.addSystemCommand(&.{ "python3", "scripts/project-kit.py", "docs-check" });
+    docs_check.setName("docs-check");
+    docs_check.setCwd(b.path("."));
+    const docs_check_step = b.step("docs-check", "Run the project-kit documentation checks");
+    docs_check_step.dependOn(&docs_check.step);
 }
 
 /// The paths every analysis gate covers, relative to the build root: all

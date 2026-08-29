@@ -1,8 +1,8 @@
-# Bug — `Node.createJournal` is a dead public API with a latent compile error
+# Bug - `Node.createJournal` is a dead public API with a latent compile error
 
 ## TL;DR
 
-- **What failed:** `journal.Node.createJournal` (pub) reads `group_id.entry_hash` on a `[32]u8` — a compile error that no build gate catches, because nothing calls the function and the gate's `refAllDecls` does not analyze method bodies.
+- **What failed:** `journal.Node.createJournal` (pub) reads `group_id.entry_hash` on a `[32]u8` - a compile error that no build gate catches, because nothing calls the function and the gate's `refAllDecls` does not analyze method bodies.
 - **Impact:** The first host (PRD 0005: the library is the product) that calls the documented journal-creation API gets a build failure. Meanwhile the error is invisible in every gate run.
 - **Resolution:** Still open. Statically validated.
 

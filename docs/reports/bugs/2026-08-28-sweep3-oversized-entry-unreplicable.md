@@ -1,4 +1,4 @@
-# Bug — An accepted append between ~8 MB and 16 MB can never be replicated: broadcast, sync and read all exceed the frame bound
+# Bug - An accepted append between ~8 MB and 16 MB can never be replicated: broadcast, sync and read all exceed the frame bound
 
 ## TL;DR
 
@@ -15,7 +15,7 @@ Open.
 Size facts: `framing.max_body_bytes = 8 MiB` (`framing.zig:25`); `journal.max_entry_bytes` default 16 MiB (`schema.zig:66`); record size ≈ `348 + payload.len` (segment 59 + slot 25 + entry 34 + payload). A payload in (8 MiB − 348, 16 MiB] passes every accept check:
 
 - `onAppend` checks only the 16 MiB fold setting; the queue bound (64 MiB) also passes.
-- **Broadcast:** the slot body is `2 + 1 + 4 + recordSize` ≈ 9 MiB for a 9 MiB payload → `writeFrame` returns `OversizedFrame` → `broadcastToMembers` swallows it (`catch {}`, `node.zig:1139`). No member receives the slot; a follower-side client's forward is never acked (`pending_clients` waits forever — no `peer_gone`, no `reforwardQueue`).
+- **Broadcast:** the slot body is `2 + 1 + 4 + recordSize` ≈ 9 MiB for a 9 MiB payload → `writeFrame` returns `OversizedFrame` → `broadcastToMembers` swallows it (`catch {}`, `node.zig:1139`). No member receives the slot; a follower-side client's forward is never acked (`pending_clients` waits forever - no `peer_gone`, no `reforwardQueue`).
 - **Sync:** `onSyncReq`'s "first record is always encoded" rule (`node.zig:1115-1130`) puts the big record into the page regardless of `max_bytes` → page exceeds 8 MiB → `sendMessage` fails → `onFrame` closes the conn (`node.zig:619`) → the requester redials and re-requests the same page forever.
 - **Backfill:** a joiner over such a journal stays `syncing` forever.
 - **Read:** `coppiz read` of the journal over the wire hits the same oversized frame and the conn closes.
@@ -38,7 +38,7 @@ Not yet fixed. Suggested direction: refuse appends whose encoded record would ex
 
 ## Follow-up
 
-The frame cap is also the floor for the sync-page "first record always encoded" rule — a page that must contain an oversized record can never be served.
+The frame cap is also the floor for the sync-page "first record always encoded" rule - a page that must contain an oversized record can never be served.
 
 ## References
 

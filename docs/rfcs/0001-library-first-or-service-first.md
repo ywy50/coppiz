@@ -1,8 +1,8 @@
-# RFC 0001 — Library-first or service-first: which surface leads the design
+# RFC 0001 - Library-first or service-first: which surface leads the design
 
 ## Status
 
-Decided — 2026-08-28, option A (library-first; the node binary is a thin
+Decided - 2026-08-28, option A (library-first; the node binary is a thin
 wrapper). [ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md)
 records the choice; PRD 0005's steps 1–3 (the embedded write path and the
 `examples/` hosts) shipped with it, and its step-4 service API stays deferred
@@ -18,9 +18,9 @@ reversal supersedes that ADR; this file keeps the reasoning that produced it.
 
 ## Overview
 
-**Decision to make.** Which of the two integration surfaces — an embeddable
+**Decision to make.** Which of the two integration surfaces - an embeddable
 Zig library (the dqlite shape) or a standalone node with a service API (the
-rqlite shape) — is the primary contract whose design drives the other?
+rqlite shape) - is the primary contract whose design drives the other?
 
 **Why now.** The two shapes pull the core in different directions from the
 first line of code: who owns I/O and threads (the host, or the node), whether
@@ -46,13 +46,15 @@ equals doubles the stable surface before there is one user.
    file.
 
 **Out of scope.** The wire protocol for replication between members ([OQ
-19](../open-questions.md)) — that exists in either shape. Language bindings
+19](../open-questions.md)) - that exists in either shape. Language bindings
 beyond Zig (roadmap).
 
 ## Current state
 
 Nothing of the design is implemented; `src/root.zig` carries only the package
-version so far. clanker's shared state was JSON/JSONL files under
+version so far.
+
+clanker's shared state was JSON/JSONL files under
 `state/` when RFC 0019 surveyed it (2026-08-19); since its ADR 0033
 (accepted 2026-08-20) sessions are per-session SQLite databases written
 directly in-process, their append-only `events` stream replicating to mesh
@@ -64,7 +66,7 @@ host*). The stage-1 spike RFC 0019 names has not been run.
 
 ## Options considered
 
-### Option A — Library-first; the node binary is a thin wrapper
+### Option A - Library-first; the node binary is a thin wrapper
 
 - **What it is:** `src/root.zig` is the product. `Node.open(io, alloc,
   options)` returns a handle; the host supplies `std.Io` and drives `run()`.
@@ -83,13 +85,13 @@ host*). The stage-1 spike RFC 0019 names has not been run.
   to pick up a coppiz fix).
 - **Cost to adopt:** none beyond building the core; this is the default
   direction of the PRDs as drafted.
-- **Cost to leave:** moderate — moving to service-first later means the API
+- **Cost to leave:** moderate - moving to service-first later means the API
   becomes request/response and the host's `std.Io` ownership inverts.
 - **Evidence:** clanker RFC 0019 option T Packaging paragraph; dqlite's role
-  in LXD (embedded, no separate process) — read 2026-08-16 in clanker's
+  in LXD (embedded, no separate process) - read 2026-08-16 in clanker's
   research note, carried here ([research 0001](../research/0001-evidence-carried-from-the-state-store-survey.md)).
 
-### Option B — Service-first; the library is internal
+### Option B - Service-first; the library is internal
 
 - **What it is:** the `coppiz` node and its HTTP/JSON API are the product; the
   Zig library exists but is not a stable contract. Hosts, clanker included,
@@ -107,12 +109,12 @@ host*). The stage-1 spike RFC 0019 names has not been run.
   process to append a line; every call pays a request.
 - **Cost to adopt:** the API and its versioning are on the critical path
   before any consumer exists.
-- **Cost to leave:** high — consumers bound to HTTP shapes.
+- **Cost to leave:** high - consumers bound to HTTP shapes.
 - **Evidence:** rqlite (HTTP API, standalone process) per clanker's research
   note; clanker `src/sandbox/host.zig` `networkAllowed` glob-matches hostname
   and never examines port (RFC 0019 option A).
 
-### Option C — Both are first-class, one tree
+### Option C - Both are first-class, one tree
 
 - **What it is:** commit to both contracts from the start, each with its own
   compatibility promise.
@@ -123,7 +125,7 @@ host*). The stage-1 spike RFC 0019 names has not been run.
 - **Cost to adopt:** roughly double the surface work for the first year.
 - **Evidence:** design reasoning; no external source.
 
-### Option D — Out of the box: clients are observer members
+### Option D - Out of the box: clients are observer members
 
 - **What it is:** no separate service API at all. A non-Zig client joins the
   cluster as a *non-voting, non-authoring observer* that speaks the
@@ -133,14 +135,14 @@ host*). The stage-1 spike RFC 0019 names has not been run.
 - **Pros:** one protocol, one implementation; observers get follow/backfill
   for free; no HTTP stack in the node.
 - **Cons:** a client must implement entry signing and chain verification to
-  participate — a heavier client than `curl`; the replication protocol becomes
+  participate - a heavier client than `curl`; the replication protocol becomes
   a public contract, which constrains how freely it can change; admission
   now has to distinguish members from observers.
 - **Cost to adopt:** a client library per language instead of an HTTP doc.
 - **Evidence:** this is how Hypercore-family peers consume logs (clanker
-  research option R) — design reasoning, not measurement.
+  research option R) - design reasoning, not measurement.
 
-### Status quo — do nothing
+### Status quo - do nothing
 
 - **What it is:** no coppiz; clanker keeps files and its in-tree fan-out.
 - **Pros:** zero work.
@@ -176,7 +178,7 @@ host*). The stage-1 spike RFC 0019 names has not been run.
 
 ## Recommendation
 
-**Recommended option:** A — library-first, with the node binary in the same
+**Recommended option:** A - library-first, with the node binary in the same
 tree from day one and the service API added as a wrapper module when the
 first non-Zig consumer appears (and designed so that option D remains
 possible: the replication protocol is specified, not incidental).
@@ -223,12 +225,12 @@ the protocol clean enough that D stays possible".
 
 ## References
 
-- [ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md) — the
+- [ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md) - the
   decision this RFC produced.
-- clanker [RFC 0019 — Shared state store](https://github.com/maci0/clanker/blob/main/docs/rfcs/0019-shared-state-store.md),
-  option T *Packaging* — names this decision.
-- clanker PRD 0011 (mesh) — "no second daemon", "serve owns sockets".
+- clanker [RFC 0019 - Shared state store](https://github.com/maci0/clanker/blob/main/docs/rfcs/0019-shared-state-store.md),
+  option T *Packaging* - names this decision.
+- clanker PRD 0011 (mesh) - "no second daemon", "serve owns sockets".
 - [Research 0001](../research/0001-evidence-carried-from-the-state-store-survey.md)
-  — dqlite/rqlite/etcd shapes as surveyed there.
-- [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md) — the two routes
+  - dqlite/rqlite/etcd shapes as surveyed there.
+- [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md) - the two routes
   into clanker.

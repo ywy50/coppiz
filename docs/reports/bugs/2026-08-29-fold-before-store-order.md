@@ -1,8 +1,8 @@
-# Bug — Control/checkpoint writes fold before the store write: an I/O error leaves the fold one record ahead and the chain unreopenable
+# Bug - Control/checkpoint writes fold before the store write: an I/O error leaves the fold one record ahead and the chain unreopenable
 
 ## TL;DR
 
-- **What failed:** `checkpointForBroadcast` (and the control-append paths) apply the entry to the in-memory fold *before* `store.append`; the tier-0 data path does the opposite. If the store write fails (ENOSPC/EIO), the fold is permanently one record ahead of the store — the next write chains from a phantom head, and reopen fails `BadPrevHash`.
+- **What failed:** `checkpointForBroadcast` (and the control-append paths) apply the entry to the in-memory fold *before* `store.append`; the tier-0 data path does the opposite. If the store write fails (ENOSPC/EIO), the fold is permanently one record ahead of the store - the next write chains from a phantom head, and reopen fails `BadPrevHash`.
 - **Impact:** A transient I/O error during a checkpoint (or control append) silently poisons the chain; on the cluster path `onSlot` swallows the error, so the member keeps serving a fold the store cannot reproduce.
 - **Resolution:** Still open. Statically validated.
 

@@ -1,8 +1,8 @@
-# ADR 0001 — The core is Zig 0.16 with the standard library only
+# ADR 0001 - The core is Zig 0.16 with the standard library only
 
 ## Status
 
-Accepted — 2026-08-21.
+Accepted - 2026-08-21.
 
 ## Context
 
@@ -37,10 +37,10 @@ vendor (not fetch) a TOML parser under `vendor/` for `coppiz.toml`
   API churns with `std` pre-1.0 (RFC 0001 names this as its main sink).
 - Cryptography is limited to what `std.crypto` ships; a primitive it lacks
   (a different signature scheme, an AEAD for wire encryption) is either in
-  `std` or is not available — [OQ 23](../open-questions.md) is bounded by
+  `std` or is not available - [OQ 23](../open-questions.md) is bounded by
   this.
 - No SQLite, no LMDB, no RocksDB: the storage engine is our own append-only
   segment format (PRD 0001), which is the right shape for a log but means
   owning torn-write recovery and compaction ourselves.
-- Reversing this — fetching a dependency into the library — is a visible
+- Reversing this - fetching a dependency into the library - is a visible
   `build.zig.zon` change and needs a superseding ADR naming what it buys.

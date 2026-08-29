@@ -1,8 +1,8 @@
-# Bug — `truncate`'s `errdefer` double-closes the adopted segment when `rebuildIndex` fails after the swap
+# Bug - `truncate`'s `errdefer` double-closes the adopted segment when `rebuildIndex` fails after the swap
 
 ## TL;DR
 
-- **What failed:** `truncate` registers `errdefer file.close(self.io)` for the fresh head file and never disarms it; the segment is adopted into `jd.segments` before `rebuildIndex`, whose failure runs the errdefer and closes a file the journal now owns — `Store.deinit` closes it again (double-close).
+- **What failed:** `truncate` registers `errdefer file.close(self.io)` for the fresh head file and never disarms it; the segment is adopted into `jd.segments` before `rebuildIndex`, whose failure runs the errdefer and closes a file the journal now owns - `Store.deinit` closes it again (double-close).
 - **Impact:** Error-path only: an OOM/IO failure in `rebuildIndex` during a merge truncate leaves the journal with a closed head handle and a deinit panic.
 - **Resolution:** Still open. Statically validated.
 
@@ -28,7 +28,7 @@ try self.rebuildIndex(jd);              // :585 — OOM/IO here → errdefer clo
 
 ## Reproduction
 
-Not dynamically reproduced (needs `rebuildIndex` to fail — OOM in `readRecordRegion`'s alloc, or an IO error); statically certain.
+Not dynamically reproduced (needs `rebuildIndex` to fail - OOM in `readRecordRegion`'s alloc, or an IO error); statically certain.
 
 ## Root cause
 

@@ -1,4 +1,4 @@
-# Investigation — runtime speedup sweep: findings and disposition
+# Investigation - runtime speedup sweep: findings and disposition
 
 ## TL;DR
 
@@ -7,7 +7,7 @@
 - **Finding:** a sweep of `src/` found 18 concrete waste sites. Eight are
   pure same-semantics refactors and are implemented across four stacked PRs
   (this report links each to its investigation report); the rest are
-  durability, format, or contract trade-offs that need an RFC or a reviewer —
+  durability, format, or contract trade-offs that need an RFC or a reviewer -
   led by the append fsync discipline ([RFC 0003](../../rfcs/0003-append-durability-fsync-policy.md)).
 - **Resolution:** four implementation PRs, one RFC PR, plus this record of
   the full sweep.
@@ -16,7 +16,7 @@
 
 Resolved for the implemented subset; the deferred items are tracked below
 with their required next step. Environment findings (flaky gate, OQ 62
-spin) are recorded — not closed.
+spin) are recorded - not closed.
 
 ## Trigger and scope
 
@@ -30,7 +30,7 @@ on. The gate was also observed on this machine: green when clean
 intermittently under `zig build test`, and the OQ 62 CPU spin reproduced
 once (a lib_tests binary at 112% CPU for 9+ minutes after a failed run).
 
-## Findings — implemented (same semantics, verified green)
+## Findings - implemented (same semantics, verified green)
 
 | # | Site | Fix | PR | Report |
 |---|---|---|---|---|
@@ -51,28 +51,28 @@ Each PR ran `zig build test` on this machine: 261/261 pass, exit 0, lint
 green (PR 3's first run failed only the 100-column cap on one wrapped call,
 fixed before merge).
 
-## Findings — deferred, with required next step
+## Findings - deferred, with required next step
 
 | # | Site | Why deferred | Next step |
 |---|---|---|---|
-| 13 | append pays 3 fsyncs; queue ignores `storage.fsync`; `clear` barrier redundant | durability trade-off | [RFC 0003](../../rfcs/0003-append-durability-fsync-policy.md) — recommended: knob governs the queue, `clear` never syncs |
+| 13 | append pays 3 fsyncs; queue ignores `storage.fsync`; `clear` barrier redundant | durability trade-off | [RFC 0003](../../rfcs/0003-append-durability-fsync-policy.md) - recommended: knob governs the queue, `clear` never syncs |
 | 14 | `Queue.remove` rewrites the whole file per trim (O(k²) I/O on a burst) | on-disk format change (tombstone/watermark/batched drain) | separate RFC, linked from RFC 0003's out-of-scope |
 | 15 | per-frame decode dupes every variable-length part | the owning-decoder contract is a documented invariant (`message.zig:6-8`) with tests | RFC; benchmark the win before proposing the borrow change |
 | 16 | leader re-encodes for broadcast what it wrote to store | touches every broadcast call site; the follower-side win (#7) landed first | reviewer pass, or fold into the message-layer work in #15 |
 | 17 | leader verifies its own just-written entry + slot (2 Ed25519 verifies/append) | changes where validation happens | reviewer decision; the redundant `entryHash`/`slotHash` recompute is trivially safe on its own |
 | 18 | `store.read` two positional reads per record (`readById`) | the prefix probe is load-bearing for compacted records | only meaningful with a sized-read API; low value until reads matter |
-| 19 | `applySettings` deep-clones the whole state per settings entry | control-plane frequency; ownership-safe shallow-clone needs a deinit contract change | low priority — revisit with the ownership work in #15 |
+| 19 | `applySettings` deep-clones the whole state per settings entry | control-plane frequency; ownership-safe shallow-clone needs a deinit contract change | low priority - revisit with the ownership work in #15 |
 | 20 | sim `viewsFor` allocates per leader evaluation | callers consume immediately, but a scratch buffer needs a documented borrow discipline | easy once #11 is in; not yet needed |
 | 21 | heartbeat body allocated per member per interval | tiny constant, most frequent message | skip unless profiling shows it |
 | 22 | sim `processInbox` rescans from 0 per applied message | the rescan is load-bearing (chainability + epoch drops) | careful cursor work; inboxes are small today |
 
-## Findings — environment (this machine, 2026-08-29)
+## Findings - environment (this machine, 2026-08-29)
 
 - **The gate is flaky under `zig build test`:** the process-level `status`
   test (via `waitStatus`) intermittently cannot reach the serve within its
   30 s poll; direct runs of the same binary pass. Runs 1, 2, 3, 5 failed;
   run 4 was green. The serve children's stderr is `.ignore`
-  (`main.zig:922-927`), so a serve crash would be invisible — the leading
+  (`main.zig:922-927`), so a serve crash would be invisible - the leading
   suspect is startup delay under fsync-heavy concurrent load (every e2e
   append pays 3 barriers under `.every`), which RFC 0003 directly addresses.
   Not confirmed; a serve-side stderr capture is the next diagnostic.
@@ -80,7 +80,7 @@ fixed before merge).
   minutes after a failed `zig build test` run (run 2). No stack was
   captured. The report's prior evidence (~20 clean direct runs) stands; the
   gate-run reproduction is new.
-- **lib_tests is ~3.5 min here vs ~30 s on the 2026-08-28 machine** — the
+- **lib_tests is ~3.5 min here vs ~30 s on the 2026-08-28 machine** - the
   e2e cluster tests dominate; the fixed wall-clock waits are unchanged, so
   the delta is the polls converging at this machine's speed.
 
@@ -91,6 +91,6 @@ fixed before merge).
   [journal read](2026-08-29-runtime-sweep-journal-read.md),
   [queue and wire](2026-08-29-runtime-sweep-queue-wire.md),
   [sim and micro](2026-08-29-runtime-sweep-sim-micro.md)
-- [RFC 0003 — what does `storage.fsync` govern?](../../rfcs/0003-append-durability-fsync-policy.md)
-- [OQ 62 — the cluster e2e CPU spin](../../open-questions.md)
-- Prior art: [2026-08-28 — making `zig build test` faster without dropping tests](2026-08-28-test-suite-quick-wins.md)
+- [RFC 0003 - what does `storage.fsync` govern?](../../rfcs/0003-append-durability-fsync-policy.md)
+- [OQ 62 - the cluster e2e CPU spin](../../open-questions.md)
+- Prior art: [2026-08-28 - making `zig build test` faster without dropping tests](2026-08-28-test-suite-quick-wins.md)

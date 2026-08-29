@@ -1,16 +1,18 @@
-# PRD 0001 — Journal core: append-only entries, slots, and the hash chain
+# PRD 0001 - Journal core: append-only entries, slots, and the hash chain
 
 ## Status
 
-Shipped (single-member core) — 2026-08-27. Draft 2026-08-21; the
+Shipped (single-member core) - 2026-08-27. Draft 2026-08-21; the
 single-member phases 1–4 are implemented and tested (`zig build test`, 261
-tests). Source of truth: `src/journal/` — `entry.zig` and `slot.zig`
+tests). Source of truth: `src/journal/` - `entry.zig` and `slot.zig`
 (codecs, hashes, sign/verify), `chain.zig` (fold and validation), `expiry.zig`
 (PRD 0002 predicates), `segment.zig` and `store.zig` (on-disk segments,
 CRC, torn-tail recovery, compaction), `queue.zig` (unslotted queue),
 `journal.zig` (the single-member node), `src/settings/` (schema, fold,
 validation), `src/config/local.zig` (`coppiz.toml`), `src/main.zig` (the
-tier-0 CLI). The format magics are coppiz-derived (`CPPZ` entry, `CPSG`
+tier-0 CLI).
+
+The format magics are coppiz-derived (`CPPZ` entry, `CPSG`
 segment, `CPST` seal, `CPPQ` queue), not the draft's `SPNE`.
 
 This PRD is the data model every other PRD builds on: [0002](0002-ttl-and-staleness.md)
@@ -19,13 +21,15 @@ leadership), [0004](0004-settings.md) (settings), [0005](0005-embedding-the-libr
 (embedding). Terms are defined once in [the glossary](../glossary.md).
 
 Acceptance criteria on one member: **G3** (byte flips and removed slots
-detected at open, named by position — store CRC scan plus fold chain
-refusal), **G4** (kill -9 mid-append, no acknowledged write lost — torn-tail
+detected at open, named by position - store CRC scan plus fold chain
+refusal), **G4** (kill -9 mid-append, no acknowledged write lost - torn-tail
 truncation unit tests plus a process-level e2e that truncates the segment
 tail and reopens), **G5** (entry/segment/queue `version + 1` refused),
 **G6** (`journal.max_entry_bytes`, `cluster.max_journals`, and the queue
 bound each tripped by a test), **G7** (a member cannot forge another's
-entry — signature negative test). **G1** and **G2** (two members,
+entry - signature negative test).
+
+**G1** and **G2** (two members,
 byte-identical journals; hash-equal folds) need the replication transport,
 which phase 5 defers to PRD 0003; the fold-determinism hash is tested
 single-member.
@@ -35,7 +39,7 @@ journal with a cluster control journal (OQ 7 resolved); `author_seq` is
 monotone, gaps allowed (OQ 11 resolved); the `create_journal` control kind
 carries a new journal's id, name and initial settings (OQ 34, leader-only
 in v1); `join`/`leave`/`epoch`/`merge` fold since PRD 0003 phases 1–3
-(2026-08-27, [ADR 0005](../adrs/0005-join-order-is-slot-position.md)) —
+(2026-08-27, [ADR 0005](../adrs/0005-join-order-is-slot-position.md)) -
 until then they were refused as unimplemented. Snapshots are deferred (OQ
 17); the unslotted queue bound is local config with a provisional default
 (OQ 55).
@@ -45,11 +49,12 @@ until then they were refused as unimplemented. Snapshots are deferred (OQ
 A Zig program that wants a replicated, durable, append-only log today has
 two choices: run infrastructure beside itself (etcd, a database cluster, a
 replication daemon), or write files and hope. There is no library that a Zig
-program embeds the way it embeds SQLite — open a directory, append, read —
+program embeds the way it embeds SQLite - open a directory, append, read -
 whose replication, election and cleanup are already inside, and which grows
 from one process to a fleet without an operator standing up a cluster first.
-clanker's RFC 0019 surveyed seventeen candidates — stores and log/CRDT
-libraries alike — and confirmed that gap; the
+
+clanker's RFC 0019 surveyed seventeen candidates - stores and log/CRDT
+libraries alike - and confirmed that gap; the
 operator's direction (2026-08-19, clarified 2026-08-21) was to found the
 missing store as its own public, general-purpose project, with clanker as its
 first host rather than its owner. This is it.
@@ -58,8 +63,8 @@ The constraints that shape the core, taken from the brief (2026-08-21, with
 the clarification of the same day) and from RFC 0019's drivers:
 
 - **Append-only.** Entries are never edited in place. The only mutations are
-  the two [PRD 0002](0002-ttl-and-staleness.md) allows — TTL expiry and an
-  author marking its own entry stale — and both are opt-in per journal and
+  the two [PRD 0002](0002-ttl-and-staleness.md) allows - TTL expiry and an
+  author marking its own entry stale - and both are opt-in per journal and
   off by default.
 - **Every member of a group holds the group's journals in full.** A member that
   loses every peer still has everything its group owns; a peer that dies
@@ -92,7 +97,7 @@ the clarification of the same day) and from RFC 0019's drivers:
    is readable by its stable id `(author, author_seq)` forever, or until a
    PRD 0002 policy removes it.
 2. Every member folds the same journal to the same state: same entries, same
-   order, same settings, same membership — deterministically, from the log
+   order, same settings, same membership - deterministically, from the log
    alone.
 3. Any member can detect a rewritten, reordered, or truncated prefix at read
    time, and can prove which member authored any entry.
@@ -102,7 +107,7 @@ the clarification of the same day) and from RFC 0019's drivers:
    a version it does not know rather than misreading it.
 6. Entry size, journal count, and per-process memory are bounded by settings,
    not by what the host happens to allow. (The memory bound has no key in the
-   drafted schema and no criterion below — [OQ 61](../open-questions.md).)
+   drafted schema and no criterion below - [OQ 61](../open-questions.md).)
 
 ## Non-goals
 
@@ -114,7 +119,7 @@ the clarification of the same day) and from RFC 0019's drivers:
   indexes, no SQL, no joins in v1. Consumers fold the journal into whatever
   view they need (clanker's board is exactly such a fold, ADR 0001 there).
 - **No Byzantine fault tolerance.** Members are authenticated and their
-  entries signed, so a member cannot *impersonate* another or forge history —
+  entries signed, so a member cannot *impersonate* another or forge history -
   but a correct majority is not defended against a malicious minority that
   follows the protocol. The trust model is "one operator, authenticated
   members, defective-not-malicious writers". Whether that is the right model
@@ -141,15 +146,15 @@ heal". So:
 - A **slot** is where the journal put it: `(epoch, seq)`, assigned by the leader
   of that epoch, leader-signed, hash-chained to the previous slot. A slot
   references an entry by hash. An entry normally occupies exactly one slot;
-  after a partition merge it may be *re-slotted* — a new slot references the
+  after a partition merge it may be *re-slotted* - a new slot references the
   same, unchanged entry, and the old slot stays in the chain as history.
 
 Readers that care about identity use entry ids. Readers that care about
 order use slots. Both are stable in the sense that matters to them.
 
 **Byte order.** Every multi-byte integer in every fixed layout of this
-section — the entry header, the slot, and the segment record prefixes,
-headers and index under Storage — is little-endian whatever the writing
+section - the entry header, the slot, and the segment record prefixes,
+headers and index under Storage - is little-endian whatever the writing
 host's native order; a codec encodes fields individually and never casts a
 native struct onto its bytes.
 
@@ -174,7 +179,7 @@ frozen):
 
 `entry_hash` = SHA-256 of the whole header including signature; it is what a
 slot references. A `stale` mark names its target by *entry id*
-`(author, author_seq)`, not by this hash — the id carries the author, which
+`(author, author_seq)`, not by this hash - the id carries the author, which
 is what lets every member validate who marked ([PRD
 0002](0002-ttl-and-staleness.md)).
 
@@ -212,17 +217,17 @@ the same hash, and can be folded deterministically by every member:
 | `genesis` | the founder | creates the cluster and its first journal; carries initial settings and the founder's key | PRD 0003, 0004 |
 | `join` | an existing member (the admitter) | admits a new member: id, public key, address. Its slot is the new member's seniority | PRD 0003 |
 | `leave` | the leaving member, or the leader evicting it | removes a member; its seniority is gone | PRD 0003 |
-| `epoch` | the new leader | opens a leadership term: why (`leader_lost`, `mode_change`, `merge`, or `manual` — the reason list PRD 0003 defines), who | PRD 0003 |
+| `epoch` | the new leader | opens a leadership term: why (`leader_lost`, `mode_change`, `merge`, or `manual` - the reason list PRD 0003 defines), who | PRD 0003 |
 | `merge` | the surviving leader | imports another epoch's slots after a partition heals | PRD 0003 |
 | `settings` | the leader | changes one or more settings; refused by validation when the setting is not live-changeable | PRD 0004 |
 | `stale` | the target's author | marks one of the author's own entries stale | PRD 0002 |
-| `checkpoint` | the leader | makes removal deterministic: "every member may now drop entries expired through slot X — and entries marked stale, when `stale.cleanup = delete`" | PRD 0002 |
+| `checkpoint` | the leader | makes removal deterministic: "every member may now drop entries expired through slot X - and entries marked stale, when `stale.cleanup = delete`" | PRD 0002 |
 
 A control entry is validated by every member on receipt, not only by the
 leader. Validation is pure: a function of the entry, the slot, and the folded
 state up to the previous slot. That is the mechanism behind "cannot be
 spoofed": a `join` whose author is not a member, a `stale` whose author is not
-the target's author, a `settings` touching a frozen key — each is refused by
+the target's author, a `settings` touching a frozen key - each is refused by
 *every* member independently, so a single bad member cannot push it through.
 
 **Why append-only is what makes this small.** With no in-place update, two
@@ -247,7 +252,7 @@ two-phase commit anywhere.
    member.
 4. Each member validates the slot (chain, signature, leader is the current
    leader of that epoch), appends, and drops its copy of the entry from its
-   unslotted queue — the author's because it queued it in step 2, a
+   unslotted queue - the author's because it queued it in step 2, a
    follower's because it accepted it optimistically (see *Why append-only is
    what makes this small*).
 5. The client's `append` returns at one of two points, by setting
@@ -255,10 +260,10 @@ two-phase commit anywhere.
    it, or when the slot is back. `local` is the AP behaviour (a partitioned
    member keeps working); `slotted` is the CP behaviour (a write is not
    acknowledged until it has a position). Default is [open question 3](../open-questions.md);
-   the shipped path has no `write.ack` knob — `node.append`, the wire append
+   the shipped path has no `write.ack` knob - `node.append`, the wire append
    and `localAppend` all return at the slot.
 
-**Read path.** Reads are always local — every member has everything. The
+**Read path.** Reads are always local - every member has everything. The
 read API exposes: by slot range within an epoch, by entry id, by author, by
 kind, from a cursor with follow (push new slots to a callback), and the
 folded views (members, settings, leader). By default a read hides stale and
@@ -277,23 +282,29 @@ reached the leader's head, and a `syncing` member is never leader-eligible
 files of slots+entries in chain order, each record length-prefixed and
 CRC-checked so a torn tail write is detected and truncated at startup, and
 a sparse position→offset index per segment (position = `(epoch, seq)`;
-`seq` alone cannot key it — it restarts at 1 every epoch). The per-journal
+`seq` alone cannot key it - it restarts at 1 every epoch).
+
+The per-journal
 subdirectory is named for the journal's id in lowercase hex, never for its
 name: the name is a mutable setting, and keying a directory by a chosen
-string drags filesystem naming rules into journal identity — on
+string drags filesystem naming rules into journal identity - on
 case-insensitive filesystems such as Windows NTFS and macOS's default APFS,
 journals named `Foo` and `foo` would share one directory and one chain;
 Windows refuses reserved device names (`con`, `nul`) and names ending in a
 dot or space; a name carrying `/` or `\` escapes the member directory.
-None of that is spellable in hex digits. A segment's header carries the
+None of that is spellable in hex digits.
+
+A segment's header carries the
 format version, the journal id and the id of the group that sequenced it, so
 a segment is self-describing when it moves between groups (ownership
-transfer or parity reconstruction, PRD 0006); a **sealed** segment — one
-behind the head that will never be appended to — has a recorded hash and is
+transfer or parity reconstruction, PRD 0006); a **sealed** segment - one
+behind the head that will never be appended to - has a recorded hash and is
 the unit parity works on. The unslotted queue is its own
 small append file, bounded by `sync.unslotted_max_bytes` (value and overflow
-behaviour [OQ 55](../open-questions.md)). Everything else — membership,
-settings, leader, stale/expired sets — is folded from the log at open,
+behaviour [OQ 55](../open-questions.md)).
+
+Everything else - membership,
+settings, leader, stale/expired sets - is folded from the log at open,
 optionally from a snapshot (a verified fold at a named slot) to bound restart
 time.
 `fsync` policy is local config, not a chain setting
@@ -306,7 +317,7 @@ own id, name, chain, and PRD 0002 settings ("schema"). Membership and
 leadership are cluster-level (one leader sequences all journals) in v1, to
 keep one fold; per-journal leadership is [open question 8](../open-questions.md).
 The chain is per journal, not per cluster, because a journal is the unit
-PRD 0006 assigns to one group and encodes with parity — a cluster-wide chain
+PRD 0006 assigns to one group and encodes with parity - a cluster-wide chain
 could not be split ([open question 7](../open-questions.md) leans that way
 for this reason). The count of journals is itself bounded by settings
 (`cluster.max_journals`; value unset, [OQ 55](../open-questions.md)).
@@ -322,16 +333,16 @@ for this reason). The count of journals is itself bounded by settings
 **Implementation phases** (files are proposals; the first commit that
 creates them is the source of truth):
 
-1. `src/journal/entry.zig`, `src/journal/slot.zig` — codecs, hashes, sign and
+1. `src/journal/entry.zig`, `src/journal/slot.zig` - codecs, hashes, sign and
    verify, with unit tests and a fuzz test on the decoders (untrusted wire
    input). Pure, no I/O.
-2. `src/journal/chain.zig` — fold and validation: given a verified prefix state
+2. `src/journal/chain.zig` - fold and validation: given a verified prefix state
    and a `(slot, entry)` pair, accept or name the refusal. Pure. Table-driven
    tests for every control kind's validation rule.
-3. `src/journal/segment.zig`, `src/journal/store.zig` — on-disk segments,
+3. `src/journal/segment.zig`, `src/journal/store.zig` - on-disk segments,
    CRC, torn-tail recovery, index, snapshot. Tests open a store, crash it
    mid-write (truncate the file), reopen, and assert the verified head.
-4. `src/journal/journal.zig` — the single-member library API: open, append,
+4. `src/journal/journal.zig` - the single-member library API: open, append,
    read, follow. An e2e test runs the `coppiz` binary standalone.
 5. Replication (forward, broadcast, backfill) lands with PRD 0003, since it
    needs a leader to exist.
@@ -379,7 +390,7 @@ the ones that belong to the core specifically:
   cluster spanning all journals. Per-journal keeps journals independently
   prunable; per-cluster gives one seq for everything. (OQ 7)
 - Whether `author_ts_ms` belongs in the signed header at all, given it is
-  never used for ordering or expiry — it is there for consumers, and
+  never used for ordering or expiry - it is there for consumers, and
   removing it is cheaper before the format freezes than after. (OQ 13)
 - Snapshot format and when a member may serve a snapshot instead of slots
   to a joining peer. (OQ 17)

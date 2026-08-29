@@ -1,14 +1,14 @@
-# Bug — `Hub.listen` on a duplicate address silently replaces the first endpoint, contradicting its own contract
+# Bug - `Hub.listen` on a duplicate address silently replaces the first endpoint, contradicting its own contract
 
 ## TL;DR
 
-- **What failed:** `listen` uses `endpoints.put`, which *overwrites* an existing value. A second `listen` on the same address leaks the first endpoint and its key dupe, routes every dial to the newest endpoint, and leaves the first listener's accept loop blocked forever — while the comment claims "the map's first entry wins".
+- **What failed:** `listen` uses `endpoints.put`, which *overwrites* an existing value. A second `listen` on the same address leaks the first endpoint and its key dupe, routes every dial to the newest endpoint, and leaves the first listener's accept loop blocked forever - while the comment claims "the map's first entry wins".
 - **Impact:** Test/simulator misconfiguration (two nodes on one address) silently misroutes connections and leaks memory; the first listener never accepts and never errors.
 - **Resolution:** Still open. Statically validated (std `put` semantics verified).
 
 ## Status
 
-Resolved — a second `listen` on the same address is refused with
+Resolved - a second `listen` on the same address is refused with
 `AddressInUse`, matching the documented one-listener-per-address
 contract; regression test added.
 
@@ -31,8 +31,8 @@ Not dynamically reproduced; statically certain. Two `hub.listen(test_alloc, "nod
 ## Resolution
 
 Fixed: `listen` checks `self.endpoints.contains(address)` first and
-returns `error.AddressInUse` — first-wins, as the contract comment
-claimed — before any allocation, so a refused duplicate leaks nothing.
+returns `error.AddressInUse` - first-wins, as the contract comment
+claimed - before any allocation, so a refused duplicate leaks nothing.
 (The alternative, deliberate last-writer-wins with the orphan closed, was
 not chosen: refusing is what the comment documents.)
 
@@ -46,7 +46,7 @@ echoes.
 
 ## Follow-up
 
-None — contained. Related hub defects reported separately (errdefer double-free, `readInto` interior free).
+None - contained. Related hub defects reported separately (errdefer double-free, `readInto` interior free).
 
 ## References
 

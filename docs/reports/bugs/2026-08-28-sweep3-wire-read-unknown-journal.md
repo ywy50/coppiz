@@ -1,4 +1,4 @@
-# Bug — Wire read of an unknown journal silently succeeds with empty output; the local read errors
+# Bug - Wire read of an unknown journal silently succeeds with empty output; the local read errors
 
 ## TL;DR
 
@@ -12,7 +12,7 @@ Open.
 
 ## Symptom and impact
 
-`onReadReq` (`node.zig:2413-2420`): unknown name → empty page with `next = (0,0)`. The wire `append` path returns a named `unknown_journal` refusal, and the local read (`main.zig:392-393`) returns `error.UnknownJournal` — the read path is the odd one out.
+`onReadReq` (`node.zig:2413-2420`): unknown name → empty page with `next = (0,0)`. The wire `append` path returns a named `unknown_journal` refusal, and the local read (`main.zig:392-393`) returns `error.UnknownJournal` - the read path is the odd one out.
 
 ## Reproduction
 

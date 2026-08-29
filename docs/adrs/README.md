@@ -1,9 +1,9 @@
-# ADRs — architecture decision records
+# ADRs - architecture decision records
 
 An ADR records a decision that **has been made**: the constraint that forced
 it, the choice, and what that choice costs. The [RFC](../rfcs/) that may
 precede it argues the alternatives; this record is the answer. Neither store
-requires the other — a decision can be obvious enough to need no RFC, and an
+requires the other - a decision can be obvious enough to need no RFC, and an
 RFC can be withdrawn without ever producing an ADR.
 
 ## Quick start

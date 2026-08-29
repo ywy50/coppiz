@@ -1,9 +1,9 @@
-# Bug — The `freshest` tiebreak is dead in the node: every member's `last_ack` is the node's own head, and the node/simulator merge survivors can disagree
+# Bug - The `freshest` tiebreak is dead in the node: every member's `last_ack` is the node's own head, and the node/simulator merge survivors can disagree
 
 ## TL;DR
 
 - **What failed:** `viewsFor` sets `last_ack = self.node.control.head` for *every* member (peers included), so under `combined`/`freshest` all members compare equal and the tiebreak always falls to seniority. The heartbeat carries a real `last_ack` that the sender populates and the receiver drops. The merge survivor path (`viewOf`) feeds the node's own head as both branches' `last_ack`.
-- **Impact:** `tiebreak = freshest` never elects the more complete authority; and because the simulator computes survivors from per-branch heads, the node and the simulator can pick different survivors for the same two branches — breaking the deterministic-merge invariant between the two implementations.
+- **Impact:** `tiebreak = freshest` never elects the more complete authority; and because the simulator computes survivors from per-branch heads, the node and the simulator can pick different survivors for the same two branches - breaking the deterministic-merge invariant between the two implementations.
 - **Resolution:** Still open. Statically validated.
 
 ## Status
@@ -12,7 +12,18 @@ Open.
 
 ## Symptom and impact
 
-`election.View.last_ack` is documented as the member's own verified head for `tiebreak = freshest` (`election.zig`). The node fills it with its own head for everyone (`viewsFor`, `node.zig:2588`), so the freshest authority never wins. `sendHeartbeat` populates the wire `last_ack` with the sender's head (`node.zig:1149`; field at `message.zig:434-452`) but `onHeartbeat` never reads it (`node.zig:1862-1878`) — the field is written, transmitted, and dropped, strong evidence the per-member wiring was intended and lost. The merge path has the same defect: `viewOf` (`node.zig:2202-2215`) feeds the node's own head as *both* branch leaders' `last_ack`, while the simulator's `branchOf`/`viewsFor` use each branch's own head (`sim.zig:667, 379`).
+`election.View.last_ack` is documented as the member's own verified head for
+`tiebreak = freshest` (`election.zig`). The node fills it with its own head
+for everyone (`viewsFor`, `node.zig:2588`), so the freshest authority never
+wins. `sendHeartbeat` populates the wire `last_ack` with the sender's head
+(`node.zig:1149`; field at `message.zig:434-452`) but `onHeartbeat` never
+reads it (`node.zig:1862-1878`) - the field is written, transmitted, and
+dropped, strong evidence the per-member wiring was intended and lost.
+
+The merge path has the same defect: `viewOf` (`node.zig:2202-2215`) feeds
+the node's own head as *both* branch leaders' `last_ack`, while the
+simulator's `branchOf`/`viewsFor` use each branch's own head (`sim.zig:667,
+379`).
 
 ## Reproduction
 

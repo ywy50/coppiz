@@ -1,14 +1,14 @@
-# Bug — Hub `connectFn`/`listen` errdefer double-free on allocation failure
+# Bug - Hub `connectFn`/`listen` errdefer double-free on allocation failure
 
 ## TL;DR
 
-- **What failed:** In `HubDialer.connectFn`, the `Pipe` is appended to `hub.pipes` *before* the two `PipeConn` allocations; the earlier errdefers stay armed, so an OOM in either `create` frees the pipe while the hub still owns it — `Hub.deinit` frees it again. `Hub.listen` has the same shape: the endpoint is put into the map before its later allocations, and an OOM in the `address` dupe destroys an endpoint the map still holds.
+- **What failed:** In `HubDialer.connectFn`, the `Pipe` is appended to `hub.pipes` *before* the two `PipeConn` allocations; the earlier errdefers stay armed, so an OOM in either `create` frees the pipe while the hub still owns it - `Hub.deinit` frees it again. `Hub.listen` has the same shape: the endpoint is put into the map before its later allocations, and an OOM in the `address` dupe destroys an endpoint the map still holds.
 - **Impact:** Double-free/UB on the allocation-failure path of the hub transport (the in-memory transport used by the tests, the examples, and the simulator). Debug/GeneralPurposeAllocator panics; release builds corrupt the heap.
 - **Resolution:** Still open. Statically validated.
 
 ## Status
 
-Resolved — `connectFn`/`listen`/`dialer` perform every allocation before
+Resolved - `connectFn`/`listen`/`dialer` perform every allocation before
 touching the container, so no errdefer can free what the hub owns;
 regression test drives every allocation with a failing allocator.
 
@@ -25,7 +25,7 @@ try self.hub.pipes.append(hub_alloc, pipe);             // :586  — hub now own
 const from_conn = try hub_alloc.create(PipeConn);       // :588  — OOM here
 ```
 
-If `create(PipeConn)` (or the second one at `:595`) fails, the errdefers free `pipe.from`/`pipe.to`, deinit the directions, and destroy `pipe` — while `hub.pipes` still holds the pointer. `Hub.deinit` (`transport.zig:438-458`) later iterates `pipes`, frees `from`/`to`, deinits the directions, and destroys `pipe` again: double-free. In the window before deinit, `Hub.drop`/`isDropped` can also read the freed `from`/`to`.
+If `create(PipeConn)` (or the second one at `:595`) fails, the errdefers free `pipe.from`/`pipe.to`, deinit the directions, and destroy `pipe` - while `hub.pipes` still holds the pointer. `Hub.deinit` (`transport.zig:438-458`) later iterates `pipes`, frees `from`/`to`, deinits the directions, and destroys `pipe` again: double-free. In the window before deinit, `Hub.drop`/`isDropped` can also read the freed `from`/`to`.
 
 `listen` (`transport.zig:463-480`) is the same shape: `endpoints.put(allocator, duped_key, ep)` at `:467` puts `ep` into the map, then `dupe(address)` at `:472` can fail; the errdefer at `:465` destroys `ep` while the map still owns it → `Hub.deinit` destroys it again.
 
@@ -53,7 +53,7 @@ Fixed as suggested (allocate first, then insert):
 
 Regression test ("hub connect and listen never double-free on allocation
 failure"): runs one full hub lifecycle per failing allocation index
-(`std.testing.FailingAllocator` over GPA) until a round succeeds — any
+(`std.testing.FailingAllocator` over GPA) until a round succeeds - any
 double-free or leak panics under the GPA. Verified to fail (double-free
 panic) on the pre-fix ordering.
 

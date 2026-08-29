@@ -1,4 +1,4 @@
-# Bug — Header-only (`payload_omitted`) records are accepted as live entries: payload integrity and `max_entry_bytes` are bypassable
+# Bug - Header-only (`payload_omitted`) records are accepted as live entries: payload integrity and `max_entry_bytes` are bypassable
 
 ## TL;DR
 
@@ -14,11 +14,11 @@ Open.
 
 The compacted shape is detected purely from the record's byte length (`segment.zig:151-156`, `entry.zig:211-225`: `bytes.len == header_len and payload_len > 0`). Three guards all pass for a stripped entry:
 
-- `checkEntrySignature` (`chain.zig:471-475`) skips the payload-hash comparison when `payload_omitted` ("bytes are gone by design" — true for checkpoint compactions, but nothing checks this was a checkpoint).
-- `applyData`'s `TooLarge` check uses `en.payload.len` (0), not `en.payload_len` (`chain.zig:413`) — a header claiming `payload_len = 0xFFFFFFFF` sails through.
+- `checkEntrySignature` (`chain.zig:471-475`) skips the payload-hash comparison when `payload_omitted` ("bytes are gone by design" - true for checkpoint compactions, but nothing checks this was a checkpoint).
+- `applyData`'s `TooLarge` check uses `en.payload.len` (0), not `en.payload_len` (`chain.zig:413`) - a header claiming `payload_len = 0xFFFFFFFF` sails through.
 - **No code cross-checks `sl.entry_hash` against `entry.entryHash(en)`** (grep: the field is written at slot creation, `node.zig:1703`/`journal.zig:480`, and never verified in `applyControl`/`applyData`/the reslotted paths). The slot's `entry_hash` pins the true content; the fold never reads it against the entry.
 
-A peer that has seen an entry's header+slot can strip the payload (both remain signature-valid — the signature covers the header, which keeps `payload_len`/`payload_hash` unchanged), recompute the record CRC, and deliver it; receivers accept it as a new entry, store it durably, and serve an empty payload forever (later full copies are skipped as redeliveries, `node.zig:1980-1986`). Legit compaction is only safe incidentally (the checkpoint precedes it in chain order); the codec has no way to distinguish.
+A peer that has seen an entry's header+slot can strip the payload (both remain signature-valid - the signature covers the header, which keeps `payload_len`/`payload_hash` unchanged), recompute the record CRC, and deliver it; receivers accept it as a new entry, store it durably, and serve an empty payload forever (later full copies are skipped as redeliveries, `node.zig:1980-1986`). Legit compaction is only safe incidentally (the checkpoint precedes it in chain order); the codec has no way to distinguish.
 
 ## Reproduction
 
@@ -30,7 +30,7 @@ The compacted shape's legitimacy is inferred from the record shape alone, and th
 
 ## Resolution
 
-Not yet fixed. Suggested direction: verify `sl.entry_hash == entry.entryHash(en)` in the fold (this alone rejects stripped records — the hash includes the payload), and/or check `payload_len` against `max_entry_bytes` even for omitted payloads. A regression test should deliver a payload-stripped record for an unknown entry and expect a refusal.
+Not yet fixed. Suggested direction: verify `sl.entry_hash == entry.entryHash(en)` in the fold (this alone rejects stripped records - the hash includes the payload), and/or check `payload_len` against `max_entry_bytes` even for omitted payloads. A regression test should deliver a payload-stripped record for an unknown entry and expect a refusal.
 
 ## Verification
 

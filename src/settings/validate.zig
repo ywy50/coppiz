@@ -7,7 +7,7 @@
 //! - **live-changeability**, per key, against the state in force before the
 //!   entry: `leadership.*` is frozen by `leadership.reconfigurable = false`
 //!   (PRD 0003), and `reconfigurable` itself can only be flipped live from
-//!   true to false — the reverse is the offline procedure, which is why
+//!   true to false - the reverse is the offline procedure, which is why
 //!   genesis may set it freely (that path is `applyGenesis` in fold.zig).
 //! - **whole-state validity**, after all changes of the entry are applied:
 //!   the cross-key rules below, table-tested.
@@ -39,7 +39,7 @@ const reconfigurable_key = schema.keyIndex("leadership.reconfigurable").?;
 
 /// Whether a settings entry may touch `key_index` in the state in force
 /// before it. `always` keys are free; both leadership gates reduce to "is
-/// reconfigurable currently true" — the `reconfigurable` key's own rule
+/// reconfigurable currently true" - the `reconfigurable` key's own rule
 /// says it can only turn itself off live, which is exactly the same test.
 pub fn isLiveChangeable(key_index: u16, current: *const schema.SettingsState) bool {
     return switch (schema.keys[key_index].live_rule) {

@@ -1,14 +1,14 @@
-# Bug — Simulator `growLinks` reopens a closed partition every time a member joins
+# Bug - Simulator `growLinks` reopens a closed partition every time a member joins
 
 ## TL;DR
 
-- **What failed:** `World.growLinks` (called from `addMember`) fills the **entire** n×n link matrix with `true`, so every link that `partition` closed is silently reopened — while `partition_head`/`partition_sides` stay set.
+- **What failed:** `World.growLinks` (called from `addMember`) fills the **entire** n×n link matrix with `true`, so every link that `partition` closed is silently reopened - while `partition_head`/`partition_sides` stay set.
 - **Impact:** The simulator's core state model contradicts its own contracts: after `partition` + `addMember`, the two sides can hear each other again and broadcasts cross the partition, so any scenario relying on isolation (message counting, `.lost` views, a stall side that must stay authority-less) sees a healed world.
 - **Resolution:** Still open. Reproduced dynamically.
 
 ## Status
 
-Resolved — `growLinks` rebuilds the link matrix at the new stride,
+Resolved - `growLinks` rebuilds the link matrix at the new stride,
 preserving every link `partition` closed; regression test added.
 
 ## Symptom and impact
@@ -30,7 +30,7 @@ _ = try world.addMember(memberKey(2), "node-c", b);
 try std.testing.expect(!world.linkOpen(a, b)); // FAILS: linkOpen(a,b) == true
 ```
 
-The test fails with `TestUnexpectedResult` — `linkOpen(a, b)` is `true` after the add, i.e. the partition is gone. This contradicts `addMember`'s docstring ("Works during a partition: the leader of a side admits, so the newcomer joins *that* side") and `partition`'s contract ("links across sets close, so each side can only hear itself"). The shipped tests don't trip because cross-side messages are unchainable (`prev_slot_hash` references a slot the other side dropped) and get discarded at `heal` — the isolation loss is masked, not absent.
+The test fails with `TestUnexpectedResult` - `linkOpen(a, b)` is `true` after the add, i.e. the partition is gone. This contradicts `addMember`'s docstring ("Works during a partition: the leader of a side admits, so the newcomer joins *that* side") and `partition`'s contract ("links across sets close, so each side can only hear itself"). The shipped tests don't trip because cross-side messages are unchainable (`prev_slot_hash` references a slot the other side dropped) and get discarded at `heal` - the isolation loss is masked, not absent.
 
 ## Root cause
 
@@ -56,7 +56,7 @@ It only needed to initialize the *new* node's row and column (the appended `fals
 ## Resolution
 
 Fixed. The matrix width changes with the member count, so a flat
-extension would shift every existing cell's (row, column) meaning — the
+extension would shift every existing cell's (row, column) meaning - the
 report's simpler "init only the new row/column" suggestion would still
 misplace closed links. `growLinks` now copies the old matrix, resizes to
 `n × n`, rewrites the old cells at the new stride, and explicitly opens
@@ -66,7 +66,7 @@ matrix's flat range, so they must be set, not left to the resize).
 Regression test ("growLinks keeps a partition's closed links closed when
 a member joins"): partition a 2-node world, add a member, and assert the
 cross links (`a → b`, `b → a`) stay closed while the newcomer can reach
-its admitting side — the report's repro, previously
+its admitting side - the report's repro, previously
 `TestUnexpectedResult`. The existing "partitioned joins merge" scenario
 still passes with the links genuinely closed (the sides self-elect under
 the default mode).
@@ -78,7 +78,7 @@ the default mode).
 
 ## Follow-up
 
-None — contained to the simulator. Worth a test because the shipped "partitioned joins merge" scenario (sim.zig:852-883) exercises the exact sequence but never asserts isolation.
+None - contained to the simulator. Worth a test because the shipped "partitioned joins merge" scenario (sim.zig:852-883) exercises the exact sequence but never asserts isolation.
 
 ## References
 

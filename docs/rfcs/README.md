@@ -1,8 +1,8 @@
-# RFCs — requests for comment
+# RFCs - requests for comment
 
 An RFC presents a decision that has not been made yet: the options, what each
 one implies over time, and a recommendation with a confidence score. It is the
-step before an [ADR](../adrs/) — the ADR records what was chosen, this file
+step before an [ADR](../adrs/) - the ADR records what was chosen, this file
 records why the alternatives lost. Not every ADR needs an RFC, and not every
 RFC leads to one.
 

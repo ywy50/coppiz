@@ -1,8 +1,8 @@
-# ADR 0004 — The product is named coppiz
+# ADR 0004 - The product is named coppiz
 
 ## Status
 
-Accepted — 2026-08-27.
+Accepted - 2026-08-27.
 
 ## Context
 
@@ -15,8 +15,8 @@ change with it.
 The name has to survive TTL reclaim (a rolling window can shrink what a
 consumer sees, and under `retain = none` the payload bytes too) and the
 10⁵-instance story. Growth-only words (`accrete`) and miniature-only words
-(`bonsai`) fail one of those. `coppice` — woodland cut on a rotation so the
-stools resprout — maps onto the product: the stool is the chain, the poles
+(`bonsai`) fail one of those. `coppice` - woodland cut on a rotation so the
+stools resprout - maps onto the product: the stool is the chain, the poles
 are payloads harvested by TTL and checkpoint, and a woodland can be one
 stool or many acres. The English spelling is taken as a live Mac notes app
 (coppiceapp.com, App Store 2026). The Zig-looking spelling `coppiz` had no

@@ -1,4 +1,4 @@
-# ADR {{number}} — {{title}}
+# ADR {{number}} - {{title}}
 
 ## Status
 
@@ -22,7 +22,7 @@ the constraint still holds without reading the whole codebase.
 {{decision}}
 
 The choice, stated plainly in one or two sentences. Not the implementation
-detail — that lives in code and, if the decision is part of a larger
+detail - that lives in code and, if the decision is part of a larger
 feature, in the relevant PRD (`docs/prds/`). Link it if so.
 
 ## Consequences
@@ -31,5 +31,5 @@ feature, in the relevant PRD (`docs/prds/`). Link it if so.
 
 What this makes easy, what it makes hard or forecloses, and what it costs
 later if the context changes. Include the honest downside, not just the
-justification — an ADR that only argues for the decision isn't useful when
+justification - an ADR that only argues for the decision isn't useful when
 someone is deciding whether to revisit it.

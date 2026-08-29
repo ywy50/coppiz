@@ -1,8 +1,8 @@
-# Bug — `coppiz admit` panics on a key-only (chainless) directory instead of failing cleanly
+# Bug - `coppiz admit` panics on a key-only (chainless) directory instead of failing cleanly
 
 ## TL;DR
 
-- **What failed:** `cmdAdmit` calls `node.leader()`, which unwraps `control.epoch.?` — null for a directory holding only `member.key` (no chain) — a panic.
+- **What failed:** `cmdAdmit` calls `node.leader()`, which unwraps `control.epoch.?` - null for a directory holding only `member.key` (no chain) - a panic.
 - **Impact:** `coppiz admit` on a dir whose serve never joined a chain crashes with a stack trace instead of a clean refusal (`error.NotLeader`-style). Reachable in the `admission = prompt` flow, which records `pending.admit` on just such a node.
 - **Resolution:** Still open. Statically validated.
 

@@ -1,4 +1,4 @@
-# Bug — <short, user-visible failure>
+# Bug - <short, user-visible failure>
 
 ## TL;DR
 

@@ -1,4 +1,4 @@
-# Bug — The `coppiz.toml` subset parser is quote-unaware: `#` and `,` inside quoted values silently corrupt them
+# Bug - The `coppiz.toml` subset parser is quote-unaware: `#` and `,` inside quoted values silently corrupt them
 
 ## TL;DR
 
@@ -8,15 +8,15 @@
 
 ## Status
 
-Resolved — `stripComment` and `parseStringArray` are quote-aware; two
+Resolved - `stripComment` and `parseStringArray` are quote-aware; two
 regression tests cover `#` and `,` inside quoted values.
 
 ## Symptom and impact
 
-- `data_dir = "/var/lib/coppiz#prod"` parses to the string `"/var/lib/coppiz` — the `#prod` tail is dropped **and** the leading quote is kept, because `unquote` only strips quotes when both ends are quoted. Validated by a standalone repro: `Config.parse` returns that string (the test's expected value `/var/lib/coppiz#prod` fails).
-- `leadership.authorities = ["node-a,node-b"]` splits into two bogus entries `"node-a` and `node-b"` — both pass the length checks and reach the fold.
+- `data_dir = "/var/lib/coppiz#prod"` parses to the string `"/var/lib/coppiz` - the `#prod` tail is dropped **and** the leading quote is kept, because `unquote` only strips quotes when both ends are quoted. Validated by a standalone repro: `Config.parse` returns that string (the test's expected value `/var/lib/coppiz#prod` fails).
+- `leadership.authorities = ["node-a,node-b"]` splits into two bogus entries `"node-a` and `node-b"` - both pass the length checks and reach the fold.
 
-Both are legal TOML that the parser misreads without an error — exactly the "silently ignoring bad input" failure mode the module doc says it exists to prevent.
+Both are legal TOML that the parser misreads without an error - exactly the "silently ignoring bad input" failure mode the module doc says it exists to prevent.
 
 ## Reproduction
 
@@ -36,14 +36,14 @@ Expected: `/var/lib/coppiz#prod`. The comma case: `parseStringArray` on `["node-
 - `stripComment` (`:118-121`) cuts at the first `#` regardless of quote context. A later `#` is only a comment in TOML outside a basic string.
 - `parseStringArray` (`:271-289`) splits the array body on every `,` without tracking quote state, so a comma inside a quoted item splits it.
 
-`unquote` (`:292-296`) then cannot repair the damage — it requires both ends quoted, so a value cut at `#` keeps its leading quote.
+`unquote` (`:292-296`) then cannot repair the damage - it requires both ends quoted, so a value cut at `#` keeps its leading quote.
 
 ## Resolution
 
 Fixed. `stripComment` now tracks a `"` toggle and cuts only at a `#`
 outside a basic string; `parseStringArray` splits on commas only outside
 quotes (tracking the same toggle), so a quoted item survives whole.
-`unquote` is unchanged — with the scans fixed, its both-ends-quoted rule
+`unquote` is unchanged - with the scans fixed, its both-ends-quoted rule
 now always sees intact values.
 
 Regression tests (`config/local.zig`): `data_dir = "/var/lib/coppiz#prod"`
