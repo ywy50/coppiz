@@ -598,12 +598,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     [RFC 25](rfcs/0025-docs-in-package.md) (Discussion); this entry is the
     stable pointer. *Blocks:* the first host fetch (PRD 0005 phase 5) and the first public release.
 <a id="oq-48"></a>
-48. **Grouping unit and range key.** [OPEN] Ownership by whole journal is the
-    drafted unit; the drafted split key is the author-id prefix so each
-    author's stream stays in one group. Is that enough for hosts whose
-    journals have many authors and one hot range, or is a payload-derived
-    key needed (which breaks `author_seq` density)? *Blocks:* PRD 0006
-    phase 3. *Answer from:* OQ 46's host shapes; measurement.
+48. **Grouping unit and range key.** [OPEN]
+    The decision is explored in
+    [RFC 26](rfcs/0026-grouping-unit-range-key.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* PRD 0006 phase 3.
 <a id="oq-49"></a>
 49. **When does the group count need to be uneven?** [RESOLVED] Under `seniority`,
     `configured` and `combined` a federation of 2 or 4 groups elects like 2
@@ -626,33 +624,25 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     group's own chain, and federation `suspect_after_ms` must exceed a
     group's internal election time.
 <a id="oq-50"></a>
-50. **Parity code and reconstruction cost.** [OPEN] Reed–Solomon over GF(2⁸) in
-    `std`-only Zig is feasible; k, m defaults, fragment size, and what a
-    read of a parity range costs (k network fetches + decode) against a
-    follower copy are unmeasured. Also: does parity apply to the chain's
-    *slots* or only to payloads, given `ttl.retain`? *Blocks:* PRD 0006
-    phase 4.
+50. **Parity code and reconstruction cost.** [OPEN]
+    The decision is explored in
+    [RFC 27](rfcs/0027-parity-code.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* PRD 0006 phase 4; the defaults ride OQ 54's measurements.
 <a id="oq-51"></a>
-51. **Cross-group routing and read semantics.** [OPEN] Forwarding an append to the
-    owner is drafted; a read of a non-owned journal either forwards (one
-    round-trip, fresh) or hits a follower copy (local, lagging). Which is the
-    default, and does `write.ack` mean "owner slotted" or "local forwarded"?
-    Relates to OQ 3 and OQ 31. *Blocks:* PRD 0006 phase 2.
+51. **Cross-group routing and read semantics.** [OPEN]
+    The decision is explored in
+    [RFC 28](rfcs/0028-cross-group-routing.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* PRD 0006 phase 2.
 <a id="oq-52"></a>
-52. **What group identity must the core headers carry now?** [OPEN] Drafted:
-    segment headers carry journal id + sequencing group id; entry headers
-    carry the journal id but no group id ([PRD
-    0001](prds/0001-journal-core.md)), and slot headers carry neither (the
-    slot's `leader` member id implies the group via that group's chain).
-    Is the implication enough for a verifier in another group, or should
-    the slot carry the group id explicitly (16 more bytes per slot,
-    forever)? *Blocks:* PRD 0001 phase 1 - the format freeze.
+52. **What group identity must the core headers carry now?** [OPEN]
+    The decision is explored in
+    [RFC 29](rfcs/0029-group-identity-in-headers.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* PRD 0001 phase 1 - the format freeze.
 <a id="oq-53"></a>
-53. **Membership and discovery at 10⁵.** [OPEN] A new instance must find *a*
-    member of *some* group: seed lists in local config (drafted), a
-    directory journal in the federation, or DNS. Which, and how does an
-    instance choose a group to join (operator-assigned, nearest, smallest)?
-    *Blocks:* PRD 0006 phase 1.
+53. **Membership and discovery at 10⁵.** [OPEN]
+    The decision is explored in
+    [RFC 30](rfcs/0030-membership-discovery.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* PRD 0006 phase 1.
 <a id="oq-54"></a>
 54. **Measurements that replace the tier numbers.** [OPEN] 32 per group and
     ~1,000 / ~100,000 per tier are intent. The first measurement set: size-1

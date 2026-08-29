@@ -51,3 +51,8 @@ reference for what one would do ([OQ 41](../open-questions.md#oq-41)).
 | [0023](0023-rolling-upgrade.md) | Discussion | Format versioning and rolling upgrade (OQ 26) |
 | [0024](0024-backup-restore.md) | Discussion | Backup and restore (OQ 39) |
 | [0025](0025-docs-in-package.md) | Discussion | Does the fetchable package carry the design docs? (OQ 59) |
+| [0026](0026-grouping-unit-range-key.md) | Discussion | Grouping unit and range key (OQ 48) |
+| [0027](0027-parity-code.md) | Discussion | Parity code and reconstruction cost (OQ 50) |
+| [0028](0028-cross-group-routing.md) | Discussion | Cross-group routing and read semantics (OQ 51) |
+| [0029](0029-group-identity-in-headers.md) | Discussion | What group identity the core headers carry now (OQ 52) |
+| [0030](0030-membership-discovery.md) | Discussion | Membership and discovery at 10⁵ (OQ 53) |
