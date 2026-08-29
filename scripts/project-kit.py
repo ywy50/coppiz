@@ -264,6 +264,11 @@ def link_is_valid(source: Path, target: str) -> bool:
 def command_docs_check(root: Path, cfg: dict, _args: argparse.Namespace) -> int:
     failures: list[str] = []
     docs = docs_root(root, cfg)
+    # Documentation also lives at the repository root: the README and the
+    # records kept beside it. The readability rules (links, paragraph
+    # length, em dashes) apply to them like to docs/.
+    root_docs = ("README.md", "CHANGELOG.md", "RELEASES.md", "AGENTS.md")
+    readable = sorted(list(docs.rglob("*.md")) + [root / name for name in root_docs if (root / name).is_file()])
     required = {"prds": ["Status", "Problem", "Goals", "Non-goals", "Design", "Failure modes", "Acceptance criteria", "Open questions / future work"], "adrs": ["Status", "Context", "Decision", "Consequences"]}
     for group, headings in required.items():
         seen: set[int] = set()
@@ -297,7 +302,7 @@ def command_docs_check(root: Path, cfg: dict, _args: argparse.Namespace) -> int:
         missing_phases = sorted(set(range(1, max(phases) + 1)) - set(phases))
         if missing_phases:
             failures.append(f"{(docs / 'plans').relative_to(root)}: series {series_name} has gaps: missing phase {', '.join(f'{n:02d}' for n in missing_phases)}")
-    for path in docs.rglob("*.md"):
+    for path in readable:
         # A link pattern inside a fence or inline code span is quoted syntax,
         # not a navigable link.
         text = path.read_text(encoding="utf-8")
@@ -307,8 +312,10 @@ def command_docs_check(root: Path, cfg: dict, _args: argparse.Namespace) -> int:
             if not link_is_valid(path, target):
                 failures.append(f"{path.relative_to(root)}: broken local link {target}")
     # Every doc is written to be scanned, not studied: flag wall-of-text
-    # paragraphs (prose blocks, not code/lists/tables) that should be split.
-    for path in sorted(docs.rglob("*.md")):
+    # paragraphs (prose blocks, not code/lists/tables) that should be split,
+    # and em dashes in prose (the general rule forbids them; use a regular
+    # dash, comma, colon, parentheses, or a new sentence).
+    for path in readable:
         in_fence = False
         block: list[str] = []
         block_start = 0
@@ -316,6 +323,8 @@ def command_docs_check(root: Path, cfg: dict, _args: argparse.Namespace) -> int:
             if line.lstrip().startswith("```"):
                 in_fence = not in_fence
                 continue
+            if not in_fence and "\u2014" in re.sub(r"`[^`\n]+`", "", line):
+                failures.append(f"{path.relative_to(root)}:{line_number}: em dash in prose; use a regular dash, comma, colon, parentheses, or a new sentence")
             prose = line.strip() and not in_fence and not re.match(r"^\s*(#|[-*+]\s|\d+\.\s|\||>)", line)
             if prose:
                 if not block:

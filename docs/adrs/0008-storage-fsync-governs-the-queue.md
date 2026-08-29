@@ -8,7 +8,7 @@ Accepted - 2026-08-29.
 
 The append hot path issued three fsync barriers per acknowledged write:
 `queue.append`, `store.append`, and `queue.clear`, with the queue's two
-barriers unconditional — `storage.fsync` (local config, `every` | `batched`
+barriers unconditional - `storage.fsync` (local config, `every` | `batched`
 | `never`) was threaded into the store only, so a user choosing `.never`
 (or `.batched`) still paid two queue fsyncs per append. The knob did not
 mean what it said for a third of the write path.
@@ -24,7 +24,7 @@ verified by reading:
   queue) only after the slot is stored (`journal.zig` applyReplicated), so
   an entry present in the queue is either unslotted (it must survive a
   crash to be re-slotted) or already-slotted (a crash that loses the trim
-  redelivers it, and the fold's dedup accepts it as a no-op —
+  redelivers it, and the fold's dedup accepts it as a no-op -
   `journal.zig` re-slot path);
 - `setLength` is atomic and a torn tail truncates at open, so a crash
   during a drain leaves either the full queue (idempotent replay) or a
@@ -35,16 +35,16 @@ verified by reading:
 Option A of [RFC 0003](../rfcs/0003-append-durability-fsync-policy.md):
 
 1. The queue honors `storage.fsync`: `append` syncs under `.every` and
-   `.batched` (per append, until a flush point exists — the RFC's
+   `.batched` (per append, until a flush point exists - the RFC's
    conservative default), never under `.never`.
-2. The drain barriers — `remove` (the per-entry trim on the cluster append
-   path) and `clear` (the whole-queue drain) — never sync: the trimmed
+2. The drain barriers - `remove` (the per-entry trim on the cluster append
+   path) and `clear` (the whole-queue drain) - never sync: the trimmed
    entry's slot is already stored, and a lost trim replays an idempotent
    no-op. (The RFC's mechanism description named only `clear`; the
-   append-path drain is `remove` — the same argument covers both.)
+   append-path drain is `remove` - the same argument covers both.)
 
 Under `.every` (the default, and PRD 0001 G3's durability contract), an
-acknowledged write keeps the store barrier — durability is unchanged. The
+acknowledged write keeps the store barrier - durability is unchanged. The
 knob now means the same thing on every component it governs.
 
 ## Consequences

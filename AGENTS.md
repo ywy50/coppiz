@@ -28,19 +28,23 @@ one ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md),
   transitively, so a helper imported only by another module has its tests
   run; but an unreferenced module's tests silently never run, and neither do
   those of a module imported only by a never-analyzed declaration (an unused
-  container-level `const`). Register each new module from the `comptime`
+  container-level `const`).
+  - Register each new module from the `comptime`
   block in `src/root.zig` (or from `src/main.zig` for CLI-only code); the
-  lint gate fails when no chain of real `@import`s reaches it. A `.zig`
+  lint gate fails when no chain of real `@import`s reaches it.
+  - A `.zig`
   file outside `src/` (gate coverage forces any such file into
   `checked_paths`) can never be registered that way - Zig refuses an
   `@import` out of a module's root - so either a wrapped import in
   build.zig reaches it (build.zig is already a test root), or it gets
   its own test root with a `test_roots` entry; until one of those
-  holds, the registration gate names it on every run. Zig also
+  holds, the registration gate names it on every run.
+  - Zig also
   analyzes a declaration only once something references it, so each
   registered module gets a line in the root's "all public declarations
   analyze" test - an unreferenced `pub` declaration is otherwise compiled
-  into nothing and checked by nothing. The lint gate enforces that pairing
+  into nothing and checked by nothing.
+  - The lint gate enforces that pairing
   too: a test-root import no `refAllDecls` call wraps fails the build, so
   registration without declaration analysis can no longer hide behind a
   green run.
@@ -107,6 +111,7 @@ branch → PR rule without automatic merging, the permissive direct-push and
 CI-failure allowances, and a repository-specific overlay for local
 exceptions. Each rule's scope is the bullet list inside it, which ships empty;
 fill it in per project.
+
 Use [docs/agent-rules/repository-rule-template.md](docs/agent-rules/repository-rule-template.md)
 when creating another repository rule.
 
@@ -213,9 +218,12 @@ Use a report in `docs/reports/` for an observed failure: an investigation while
 tracing a symptom, a bug report for a confirmed defect, and a postmortem for
 an incident with real impact - started during the incident to capture the
 timeline, handling, and communications live, and completed after it.
+
 Postmortems are blameless: what, how, and when - never who; individuals
 appear as roles or teams, and names, emails, and audit-log principals stay in
-the linked internal investigation. Create
+the linked internal investigation.
+
+Create
 them with `.local/scripts/project-kit.py new-doc <kind> <title>` (kinds `bug`,
 `investigation`, `postmortem`), which names them `YYYY-MM-DD-<short-topic>.md`
 in the matching subdirectory, and keep the inventory in
@@ -313,6 +321,7 @@ instead of guessing a PRD/ADR number or a dated filename. Kinds: `prd`, `adr`,
 `plan`, `review`, `handover`, `bug`, `investigation`, `postmortem` - the last
 three land under `docs/reports/`; search that directory before diagnosing a
 failure and add each new record to the inventory in `docs/reports/README.md`.
+
 Run
 `.local/scripts/project-kit.py docs-check` before closing documentation-heavy work.
 It validates required PRD/ADR sections, local Markdown links, numbering, the
