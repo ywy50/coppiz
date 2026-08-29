@@ -56,7 +56,7 @@ fixed before merge).
 | # | Site | Why deferred | Next step |
 |---|---|---|---|
 | 13 | append pays 3 fsyncs; queue ignores `storage.fsync`; `clear` barrier redundant | durability trade-off | Implemented 2026-08-29 - [ADR 0008](../../adrs/0008-storage-fsync-governs-the-queue.md) (RFC 0003 Option A): the queue honors the knob, `remove`/`clear` never sync; barriers 3/2/2 → 2/1/0 (strace-verified) |
-| 14 | `Queue.remove` rewrites the whole file per trim (O(k²) I/O on a burst) | on-disk format change (tombstone/watermark/batched drain) | separate RFC, linked from RFC 0003's out-of-scope |
+| 14 | `Queue.remove` rewrites the whole file per trim (O(k²) I/O on a burst) | on-disk format change (tombstone/watermark/batched drain) | [RFC 0004](../../rfcs/0004-queue-drain-shape.md), evidence in [the burst-I/O investigation](2026-08-29-queue-drain-burst-io.md) (measured 1/15/168 ms for 10/100/500 queued); recommends the batched drain (no format change) |
 | 15 | per-frame decode dupes every variable-length part | the owning-decoder contract is a documented invariant (`message.zig:6-8`) with tests | RFC; benchmark the win before proposing the borrow change |
 | 16 | leader re-encodes for broadcast what it wrote to store | touches every broadcast call site; the follower-side win (#7) landed first | reviewer pass, or fold into the message-layer work in #15 |
 | 17 | leader verifies its own just-written entry + slot (2 Ed25519 verifies/append) | changes where validation happens | reviewer decision; the redundant `entryHash`/`slotHash` recompute is trivially safe on its own |

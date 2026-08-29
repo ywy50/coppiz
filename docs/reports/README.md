@@ -90,6 +90,7 @@ motive; mark unverified as unverified, or omit it.
 
 ### Investigations
 
+- [2026-08-29 - the unslotted queue's drain I/O on a confirmation burst](investigations/2026-08-29-queue-drain-burst-io.md)
 - [2026-08-29 - verification of the test-build speedup reports and their remaining open topics](investigations/2026-08-29-test-build-sweep-verification.md)
 - [2026-08-29 - runtime speedup sweep: findings and disposition](investigations/2026-08-29-runtime-sweep-findings.md)
 - [2026-08-29 - simulator leader evaluation and TCP page writes](investigations/2026-08-29-runtime-sweep-sim-micro.md)
