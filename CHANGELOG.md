@@ -35,6 +35,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The wire decoders no longer abort on a peer-supplied length near its type's
+  maximum. Thirteen length checks across ten message kinds added a `u16` or
+  `u32` field to the message's fixed size and computed the sum in the field's
+  own type, which overflows. `hello` was reachable before admission, so an
+  84-byte write to an open listen port aborted a node in a safe build; in
+  `ReleaseFast` the sum wrapped and the malformed body passed the check. The
+  sums are computed in `usize` now, and an over-long declared length is
+  refused as `invalid_length`.
+
 - `coppiz init` refuses a data directory that has already been bootstrapped,
   with `already_initialized`, instead of replacing its `member.key` and
   appending a second control chain. Replacing the key changed the member's
