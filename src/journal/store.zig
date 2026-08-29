@@ -629,7 +629,11 @@ pub const Store = struct {
             .read = true,
             .permissions = data_file_perm,
         });
-        errdefer file.close(self.io);
+        // The fresh head file is adopted into jd.segments below; an errdefer
+        // must not close it after adoption (Store.deinit closes it again —
+        // bug 2026-08-28-sweep3-truncate-errdefer-double-close).
+        var adopted = false;
+        errdefer if (!adopted) file.close(self.io);
         var header_buf: [segment.header_len]u8 = undefined;
         segment.encodeHeader(header, &header_buf);
         try file.writePositionalAll(self.io, &header_buf, 0);
@@ -647,6 +651,7 @@ pub const Store = struct {
         jd.segments.deinit(self.allocator);
         jd.segments = segments;
         jd.head_records_len = @intCast(kept.items.len);
+        adopted = true;
         try self.rebuildIndex(jd);
     }
 
