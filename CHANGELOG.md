@@ -129,6 +129,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   review-stack merges (a `Hub.deinit` arity drift at three test sites, and
   the CLI test root requiring libc for `std.c.getpid()`); the shipped binary
   still links no libc.
+- The in-memory hub no longer leaks the edge key when the same directed
+  edge is dropped twice: `Hub.drop` probes before it allocates, and the
+  owned key now comes from the allocator that `heal` and `deinit` free it
+  with.
+- The wire client refuses a `read_page` whose `next` cursor does not
+  advance (`protocol_error`) instead of asserting on it: the cursor is the
+  peer's, so a bad one was a panic in a safe build and an unbounded request
+  loop in a release build.
 
 ### Changed
 
