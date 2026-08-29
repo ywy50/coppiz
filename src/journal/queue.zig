@@ -41,6 +41,13 @@ pub const Queue = struct {
     /// Bytes currently queued (records only, excluding the header).
     queued_bytes: u64,
     max_bytes: u64,
+    /// The append durability policy (RFC 0003, Option A): the queue honors
+    /// `storage.fsync` like the store does, so the knob means the same thing
+    /// on every component. `clear` never syncs (a lost truncate replays an
+    /// idempotent no-op), so the barrier count per append is 2 under
+    /// `.every` (queue + store), 1 under `.batched` (queue only, until a
+    /// flush point exists), 0 under `.never`.
+    fsync: store.Fsync,
 
     /// Opens (or creates) the queue file and recovers a torn tail.
     pub fn open(
@@ -48,6 +55,7 @@ pub const Queue = struct {
         io: std.Io,
         dir: std.Io.Dir,
         max_bytes: u64,
+        fsync: store.Fsync,
     ) anyerror!Queue {
         // truncate=false: an existing queue must survive an open. The
         // created file is opened read-write (createFile's `read` flag is
@@ -114,6 +122,7 @@ pub const Queue = struct {
             .file = file,
             .queued_bytes = good,
             .max_bytes = max_bytes,
+            .fsync = fsync,
         };
     }
 
@@ -132,7 +141,10 @@ pub const Queue = struct {
         const offset = header_len + self.queued_bytes;
         try self.file.writePositionalAll(self.io, buf, offset);
         self.queued_bytes += size;
-        try self.file.sync(self.io);
+        // The append barrier honors the knob (RFC 0003, Option A): `.never`
+        // risks the tail the way the store's un-fsynced records do, `.every`
+        // and `.batched` (until a flush point exists) sync per append.
+        if (self.fsync != .never) try self.file.sync(self.io);
     }
 
     /// Iterates the queued entries (for replay at open and after a crash).
@@ -193,14 +205,20 @@ pub const Queue = struct {
         try self.file.writePositionalAll(self.io, kept.items, header_len);
         try self.file.setLength(self.io, header_len + kept.items.len);
         self.queued_bytes = @intCast(kept.items.len);
-        try self.file.sync(self.io);
+        // No sync (RFC 0003, Option A): a trimmed entry's slot is already
+        // stored, so a crash that loses the trim leaves the record in the
+        // file and the replay redelivers an idempotent no-op — the barrier
+        // was redundant under every setting (same argument as `clear`).
     }
 
     /// Empties the queue (all queued entries have been slotted).
     pub fn clear(self: *Queue) !void {
+        // No sync (RFC 0003, Option A): the entry is removed from the queue
+        // only after the slot is stored, and a crash that loses the truncate
+        // just replays an idempotent no-op — the barrier was redundant under
+        // every setting.
         try self.file.setLength(self.io, header_len);
         self.queued_bytes = 0;
-        try self.file.sync(self.io);
     }
 };
 
@@ -289,7 +307,7 @@ test "queue appends, scans, clears and survives reopen" {
     defer env.deinit();
 
     {
-        var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20);
+        var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .every);
         defer queue.deinit();
         const one = testEntry("one");
         try queue.append(&one);
@@ -310,7 +328,7 @@ test "queue appends, scans, clears and survives reopen" {
     }
 
     // Reopen: the cleared queue stays empty.
-    var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20);
+    var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .every);
     defer queue.deinit();
     var seen: usize = 0;
     try queue.scan(&seen, struct {
@@ -325,7 +343,7 @@ test "the queue bound refuses with queue_full and a test trips it (G6)" {
     var env = TestEnv.init();
     defer env.deinit();
     // One 70-byte-payload record is 242 bytes; 250 fits exactly one.
-    var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 250);
+    var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 250, .every);
     defer queue.deinit();
 
     var big_payload = [_]u8{0x41} ** 70;
@@ -341,7 +359,7 @@ test "a torn tail in the queue is truncated at open" {
     var env = TestEnv.init();
     defer env.deinit();
     {
-        var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20);
+        var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .every);
         const one = testEntry("one");
         try queue.append(&one);
         const two = testEntry("two");
@@ -355,7 +373,7 @@ test "a torn tail in the queue is truncated at open" {
     const len = try file.length(tio);
     try file.setLength(tio, len - 10);
 
-    var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20);
+    var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .every);
     defer queue.deinit();
     var seen: usize = 0;
     try queue.scan(&seen, struct {
@@ -370,7 +388,7 @@ test "mid-file corruption is refused at open, not truncated away" {
     var env = TestEnv.init();
     defer env.deinit();
     {
-        var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20);
+        var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .every);
         const one = testEntry("one");
         try queue.append(&one);
         const two = testEntry("two");
@@ -393,7 +411,7 @@ test "mid-file corruption is refused at open, not truncated away" {
 
     try std.testing.expectError(
         error.Corrupt,
-        Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20),
+        Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .every),
     );
 }
 
@@ -401,7 +419,7 @@ test "an unknown queue version is refused" {
     var env = TestEnv.init();
     defer env.deinit();
     {
-        var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20);
+        var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .every);
         queue.deinit();
     }
     const file = try env.tmp.dir.openFile(tio, "unslotted.queue", .{ .mode = .read_write });
@@ -412,14 +430,14 @@ test "an unknown queue version is refused" {
 
     try std.testing.expectError(
         error.UnsupportedVersion,
-        Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20),
+        Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .every),
     );
 }
 
 test "remove trims exactly one queued entry by journal and id" {
     var env = TestEnv.init();
     defer env.deinit();
-    var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20);
+    var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .every);
     defer queue.deinit();
 
     const jid = "0123456789abcdef".*;
@@ -463,4 +481,44 @@ test "remove trims exactly one queued entry by journal and id" {
         }
     }.cb);
     try std.testing.expectEqual(@as(usize, 2), count);
+}
+
+test "queue honors the fsync knob: append and clear work under .never" {
+    // RFC 0003 Option A: the queue's append barrier follows `storage.fsync`
+    // (nothing under `.never`) and `clear` never syncs. The observable
+    // behavior is unchanged — the file is written either way, and the
+    // fsync count per knob is strace-verified in the RFC's report.
+    var env = TestEnv.init();
+    defer env.deinit();
+
+    {
+        var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .never);
+        defer queue.deinit();
+        try std.testing.expectEqual(store.Fsync.never, queue.fsync);
+        const one = testEntry("one");
+        try queue.append(&one);
+        var seen: usize = 0;
+        try queue.scan(&seen, struct {
+            fn cb(c: *usize, en: *const entry.Entry) anyerror!void {
+                try std.testing.expectEqualStrings("one", en.payload);
+                c.* += 1;
+            }
+        }.cb);
+        try std.testing.expectEqual(@as(usize, 1), seen);
+        try queue.clear();
+        try std.testing.expectEqual(@as(usize, 0), queue.queued_bytes);
+    }
+    // The file survives reopen under the knob too.
+    {
+        var queue = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .batched);
+        defer queue.deinit();
+        try std.testing.expectEqual(store.Fsync.batched, queue.fsync);
+        var count: usize = 0;
+        try queue.scan(&count, struct {
+            fn cb(c: *usize, _: *const entry.Entry) anyerror!void {
+                c.* += 1;
+            }
+        }.cb);
+        try std.testing.expectEqual(@as(usize, 0), count);
+    }
 }

@@ -29,3 +29,4 @@ forward to its replacement.
 | [0005](0005-join-order-is-slot-position.md) | Accepted | Join order is slot position: a `join` is a chain entry written by the admitter, and seniority is its slot, so it cannot be forged |
 | [0006](0006-the-library-is-apache-2-0-licensed.md) | Accepted | The library is Apache-2.0 licensed |
 | [0007](0007-the-library-is-the-primary-surface.md) | Accepted | The library is the primary surface; the node binary is its wrapper |
+| [0008](0008-storage-fsync-governs-the-queue.md) | Accepted | `storage.fsync` governs the queue; the redundant drain barriers (`remove`/`clear`) are dropped |
