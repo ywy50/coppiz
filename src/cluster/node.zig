@@ -2012,7 +2012,24 @@ pub const ClusterNode = struct {
         self.node.store.scanFrom(journal_id, r.from, &ctx, struct {
             fn cb(c: *Ctx, sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
                 if (slot.Position.order(sl.position(), c.from) == .lt) return;
-                const e = en orelse return; // compacted records are not served (OQ 43)
+                const e = en orelse {
+                    // A retain=none compacted slot: serve the slot-only
+                    // record so the requester's fold can advance over it —
+                    // skipping it without advancing the cursor stalled the
+                    // backfill forever (bug
+                    // 2026-08-28-sweep3-backfill-compacted-chain-loop).
+                    const size = segment.slotOnlyRecordSize();
+                    if (c.bytes > 0 and c.bytes + size > @as(usize, c.max_bytes)) {
+                        return error.StopServing;
+                    }
+                    const buf = try c.self.allocator.alloc(u8, size);
+                    defer c.self.allocator.free(buf);
+                    segment.encodeSlotOnlyRecord(sl, buf);
+                    try c.records.appendSlice(c.self.allocator, buf);
+                    c.bytes += size;
+                    c.next = sl.position().next();
+                    return;
+                };
                 try c.self.encodeRecordIntoPage(c.records, sl, e, &c.bytes, c.max_bytes);
                 c.next = sl.position().next();
             }
@@ -2042,9 +2059,33 @@ pub const ClusterNode = struct {
                 return;
             };
             const e = rec.entry orelse {
-                // A compacted record cannot be folded (OQ 43); refuse it.
-                self.closeConn(conn_id);
-                return;
+                // A retain=none compacted slot has no entry; the fold must
+                // advance its head over it or the next full record's
+                // prev_slot_hash fails. A record at or behind my head was
+                // already advanced past (bug
+                // 2026-08-28-sweep3-backfill-compacted-chain-loop).
+                if (slot.Position.order(rec.slot.position(), self.headFor(p.journal_id)) != .gt) {
+                    off += rec.next_offset;
+                    continue;
+                }
+                if (!std.mem.eql(
+                    u8,
+                    &rec.slot.prev_slot_hash,
+                    &self.headHashFor(p.journal_id),
+                )) {
+                    try self.onDivergence(conn_id, rec.slot.leader, rec.slot.epoch);
+                    return;
+                }
+                const fold = self.foldFor(p.journal_id) orelse {
+                    self.closeConn(conn_id);
+                    return;
+                };
+                fold.advanceHead(&rec.slot) catch {
+                    self.closeConn(conn_id);
+                    return;
+                };
+                off += rec.next_offset;
+                continue;
             };
             // A gap-sync response can race broadcasts: records already
             // applied are skipped, never re-checked (the fold's dedup
@@ -2432,7 +2473,14 @@ pub const ClusterNode = struct {
         while (off < buf.items.len) {
             const rec = segment.decodeRecord(buf.items[off..]) catch
                 return error.CorruptMergeBranch;
-            const e = rec.entry orelse return error.CorruptMergeBranch;
+            const e = rec.entry orelse {
+                // A retain=none compacted record: the entry was removed on
+                // the losing side, so it is not re-slotted — the re-slot
+                // chain stays dense without it (bug
+                // 2026-08-28-sweep3-backfill-compacted-chain-loop).
+                off += rec.next_offset;
+                continue;
+            };
             const sl = try self.reslot(&e, prev_hash, seq, fold.last_slot_ts_ms);
             try self.node.applyReplicated(jid, &sl, &e, false, null);
             self.broadcastToMembers(.{ .slot = .{
