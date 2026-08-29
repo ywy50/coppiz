@@ -539,7 +539,9 @@ pub fn decodeReadPage(allocator: std.mem.Allocator, bytes: []const u8) DecodeErr
     const rec_len = std.mem.readInt(u32, bytes[16..20], .little);
     const off = 20 + rec_len;
     if (off + 2 > bytes.len) return error.InvalidLength;
-    const refusal_len = std.mem.readInt(u16, bytes[off .. off + 2], .little);
+    var len_buf: [2]u8 = undefined;
+    @memcpy(&len_buf, bytes[off .. off + 2]);
+    const refusal_len = std.mem.readInt(u16, &len_buf, .little);
     if (off + 2 + refusal_len != bytes.len) return error.InvalidLength;
     return .{
         .next = readPosition(bytes[0..16]),
