@@ -830,8 +830,9 @@ pub const Store = struct {
                 .records_len = 0,
                 .sealed = false,
             });
+            // The errdefer above owns the close; closing here too would
+            // close the same descriptor twice on the way out.
             if (!std.mem.eql(u8, &header.journal_id, &journal_id)) {
-                file.close(self.io);
                 return error.JournalIdMismatch;
             }
 
@@ -1477,6 +1478,37 @@ test "open drops a segment file left shorter than its header by a crashed create
             env.tmp.dir.openFile(tio, path, .{ .mode = .read_only }),
         );
     }
+}
+
+test "a segment header naming another journal refuses the open once" {
+    // The mismatch branch closed the segment file by hand while the
+    // errdefer that owns it was still live, so the descriptor was closed
+    // twice on the way out - an EBADF the Io layer reports as a
+    // non-recoverable OS bug (a panic in debug builds), instead of the
+    // JournalIdMismatch the caller should see.
+    var env = TestEnv.init();
+    defer env.deinit();
+    const journal_id = "0123456789abcdef".*;
+    {
+        const data_dir = try env.dataDir();
+        const store = try Store.open(test_alloc, tio, data_dir, .{ .seal_threshold = 200 });
+        defer store.deinit();
+        try store.createJournal(journal_id, [_]u8{0} ** 32);
+        try appendN(store, journal_id, 2);
+    }
+
+    // Rewrite the header's journal id (bytes 6..22) to a different one, as
+    // a directory renamed by hand or a segment copied from another journal
+    // would look.
+    const path = try std.fmt.allocPrint(test_alloc, "data/{x}/seg-00000001", .{journal_id});
+    defer test_alloc.free(path);
+    {
+        const file = try env.tmp.dir.openFile(tio, path, .{ .mode = .read_write });
+        defer file.close(tio);
+        try file.writePositionalAll(tio, "fedcba9876543210", 6);
+    }
+
+    try std.testing.expectError(error.JournalIdMismatch, env.openStore());
 }
 
 test "open keeps the older generation when the newer one is still being written" {
