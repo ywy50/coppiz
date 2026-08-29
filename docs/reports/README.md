@@ -140,3 +140,4 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-30 - a scalar `coppiz.toml` value with unbalanced quotes is stored verbatim, quote included](bugs/2026-08-30-toml-scalar-unbalanced-quote.md)
 - [2026-08-30 - an allowlist-only `[[peers]]` entry is dialed forever at the empty address](bugs/2026-08-30-allowlist-only-peer-dialed-forever.md)
 - [2026-08-30 - a refused `Store.open` leaks the journal state it had already built](bugs/2026-08-30-store-open-refusal-leaks-journal-state.md)
+- [2026-08-30 - an already-removed entry re-enters every later removal set, so an idle journal emits a checkpoint per interval](bugs/2026-08-30-removed-entries-re-enter-the-removal-set.md) - **open**
