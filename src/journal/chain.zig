@@ -993,6 +993,9 @@ pub fn encodeCreateJournalPayload(
     payload: CreateJournalPayload,
     buf: []u8,
 ) error{SettingsTooLarge}!void {
+    // The name-length field is u16; a longer name cannot round-trip (bug
+    // 2026-08-29-create-journal-name-codec-overflow).
+    if (payload.name.len > std.math.maxInt(u16)) return error.SettingsTooLarge;
     buf[0..16].* = payload.journal_id;
     std.mem.writeInt(u16, buf[16..18], @intCast(payload.name.len), .little);
     @memcpy(buf[18 .. 18 + payload.name.len], payload.name);
@@ -1929,6 +1932,26 @@ test "control payload codecs round-trip" {
     const cp = try decodeCheckpointPayload(&cp_buf);
     try std.testing.expectEqual(@as(u64, 2), cp.expire_through.epoch);
     try std.testing.expectEqual(@as(u64, 3), cp.expire_through.seq);
+}
+
+test "a create-journal name past the u16 codec cap is refused at encode" {
+    // Bug 2026-08-29-create-journal-name-codec-overflow: the name-length
+    // field is u16, so a name of 65,536 bytes used to panic in debug via
+    // an unchecked @intCast (and wrap in release).
+    const big = try test_alloc.alloc(u8, 65_536);
+    defer test_alloc.free(big);
+    @memset(big, 'a');
+    const payload = CreateJournalPayload{
+        .journal_id = [_]u8{9} ** 16,
+        .name = big,
+        .changes = &.{},
+    };
+    const buf = try test_alloc.alloc(u8, createJournalPayloadLen(payload));
+    defer test_alloc.free(buf);
+    try std.testing.expectError(
+        error.SettingsTooLarge,
+        encodeCreateJournalPayload(payload, buf),
+    );
 }
 
 test "a re-slotted control entry is inferred from its author and epoch (OQ 33 replay)" {

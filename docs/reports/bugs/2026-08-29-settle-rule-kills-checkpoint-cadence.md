@@ -4,11 +4,14 @@
 
 - **What failed:** The sweep-1 fix made the settle rule live (`applyCheckpoint` now reads `cluster.last_merge`). The leader's checkpoint cadence is its only automatic caller, and it treats the refusal as fatal: `checkpointForBroadcast` → `driveCheckpoints` → `onTick` → `catch self.fatal()` - the serving loop stops.
 - **Impact:** Right after a healed merge, the leader crash-loops (or exits) whenever a checkpoint is due with a non-empty removal set within `merge.settle_ms` - the worst possible moment.
-- **Resolution:** Still open. Statically validated (fix regression).
+- **Resolution:** Fixed. `driveCheckpoints` continues on `MergeSettling` and
+  keeps the journal due so the next tick retries.
 
 ## Status
 
-Open. The rule itself is correct ([PRD 0002](../../prds/0002-ttl-and-staleness.md), OQ 60); its only automatic caller treats its refusal as fatal.
+Resolved - `driveCheckpoints` continues on `error.MergeSettling` and keeps
+the journal due so the next tick retries; a regression test in `node.zig`
+drives a leader through a settle window without the loop dying.
 
 ## Symptom and impact
 
@@ -31,11 +34,16 @@ The cadence and the settle rule were designed against each other but never conne
 
 ## Resolution
 
-Not yet fixed. Suggested direction: in `driveCheckpoints`, treat `error.MergeSettling` as "skip this journal this tick" (the settle window will pass), rather than propagating to `fatal`. A regression test should merge, enable enforcement, and tick the leader past a checkpoint-due state within `settle_ms` without the loop dying.
+Fixed. `driveCheckpoints` catches `error.MergeSettling` from
+`checkpointForBroadcast`, puts `next_checkpoint_ms` to now so the journal
+stays due (the pending-bytes path has already recorded `last_scan_head`),
+and continues to the next journal. Other errors still propagate to
+`onTick` → `fatal()`. The settle rule itself is unchanged.
 
 ## Verification
 
 - Static: the full error path verified hop by hop (`journal.zig:391` → `node.zig:1055` → `:895` → `:608`); the empty-set guard confirms the trigger is a real removal set.
+- Dynamic: `driveCheckpoints skips MergeSettling instead of stopping the loop` in `src/cluster/node.zig` folds a real merge, enables TTL, makes a checkpoint due inside `settle_ms` (time-due and pending-bytes), asserts the call returns and no checkpoint lands, then advances past `settle_ms` and asserts the checkpoint emits.
 
 ## Follow-up
 
@@ -44,4 +52,5 @@ Related merge-path defects reported separately (data re-slot refusals, unclamped
 ## References
 
 - Code: `src/journal/journal.zig:353-396` (`checkpointForBroadcast`), `src/journal/chain.zig:703-706` (settle rule), `src/cluster/node.zig:1013+` (`driveCheckpoints`), `:895` (`onTick`), `:608` (fatal)
-- Fix: none
+- Fix: `src/cluster/node.zig` (`driveCheckpoints`). Regression test in the
+  same file.

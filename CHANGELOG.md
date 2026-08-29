@@ -24,6 +24,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The leader's checkpoint cadence treats `MergeSettling` as a skip, not a
+  fatal error: after a healed merge the serving loop keeps running until
+  `merge.settle_ms` passes, then the checkpoint can land.
+- `encodeCreateJournalPayload` refuses a name longer than 65,535 bytes with
+  `settings_too_large` instead of panicking (debug) or wrapping the u16
+  length (release).
 - Documentation sweep (2026-08-29): the root README's Status section no
   longer carries a superseded second "Shipped" paragraph; the full status
   narrative moved into a combined "Status and where things are" section at

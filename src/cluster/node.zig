@@ -1058,13 +1058,23 @@ pub const ClusterNode = struct {
             }
             if (!emit) continue;
 
-            if (try self.node.checkpointForBroadcast(jid)) |ckpt| {
-                defer self.allocator.free(ckpt.en.payload);
+            const ckpt = self.node.checkpointForBroadcast(jid) catch |err| {
+                // Skip this journal this tick; keep it due so a pending-bytes
+                // trigger still retries after settle_ms (bug
+                // 2026-08-29-settle-rule-kills-checkpoint-cadence).
+                if (err == error.MergeSettling) {
+                    try self.next_checkpoint_ms.put(self.allocator, jid, now);
+                    continue;
+                }
+                return err;
+            };
+            if (ckpt) |c| {
+                defer self.allocator.free(c.en.payload);
                 self.broadcastToMembers(.{ .slot = .{
                     .reslotted = false,
                     .record = &.{},
-                    .sl = ckpt.sl,
-                    .en = ckpt.en,
+                    .sl = c.sl,
+                    .en = c.en,
                 } });
             }
             try self.next_checkpoint_ms.put(self.allocator, jid, now +| every);
@@ -3265,6 +3275,95 @@ fn skewedNow(comptime offset_ms: i64) *const fn (std.Io) i64 {
             return journal.wallClock(io) + offset_ms;
         }
     }.now;
+}
+
+var test_ckpt_now: i64 = 1_000;
+
+fn ckptFakeClock(_: std.Io) i64 {
+    return test_ckpt_now;
+}
+
+test "driveCheckpoints skips MergeSettling instead of stopping the loop" {
+    // Bug 2026-08-29-settle-rule-kills-checkpoint-cadence: the settle rule
+    // is correct, but its only automatic caller treated the refusal as
+    // fatal. A leader whose checkpoint is due inside merge.settle_ms of a
+    // real merge must keep serving, then emit once the window has passed.
+    test_ckpt_now = 1_000;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(tio, "data", .default_dir) catch {};
+    {
+        const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, tio, data_dir, &.{}, "main", &ckptFakeClock);
+    }
+    const data_dir = try tmp.dir.openDir(tio, "data", .{ .iterate = true });
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(tio);
+    const listener = try hub.listen(test_alloc, "node-a");
+    const dialer = try hub.dialer(test_alloc, "node-a");
+
+    var node = try journal.Node.open(test_alloc, tio, data_dir, .{
+        .now = &ckptFakeClock,
+        .replay_forward = true,
+    });
+    defer node.deinit();
+    var cn = try ClusterNode.init(test_alloc, tio, node, .{
+        .transport = dialer,
+        .listener = listener,
+        .address = "node-a",
+        .allowlist = &.{},
+    });
+    defer {
+        cn.deinit();
+        listener.close(tio);
+        dialer.deinit();
+    }
+    try std.testing.expect(cn.isLeader());
+
+    const jid = node.journalIdByName("main").?;
+    const enforce = schema.keyIndex("ttl.enforce").?;
+    const ttl_default = schema.keyIndex("ttl.default_ms").?;
+    const ttl_action = schema.keyIndex("ttl.action").?;
+    const pending = schema.keyIndex("checkpoint.pending_bytes").?;
+    test_ckpt_now = 2_000;
+    const changes = [_]validate.Change{
+        .{ .key = enforce, .value = .{
+            .enum_value = schema.enumValue(enforce, "all").?,
+        } },
+        .{ .key = ttl_default, .value = .{ .u64 = 1000 } },
+        .{ .key = ttl_action, .value = .{
+            .enum_value = schema.enumValue(ttl_action, "delete").?,
+        } },
+        .{ .key = pending, .value = .{ .u64 = 1 } },
+    };
+    try node.changeSettings(jid, &changes);
+    const expiring = try node.append(jid, "expiring", 0);
+
+    test_ckpt_now = 4_000;
+    var merge_buf: [16]u8 = undefined;
+    epoch.encodeMergePayload(.{ .branch_epoch = 1, .branch_seq = 1 }, &merge_buf);
+    try node.appendControl(.merge, &merge_buf, &node.control);
+    try std.testing.expect(node.control.last_merge != null);
+
+    const fold = &node.journals.get(jid).?.fold;
+    try cn.driveCheckpoints();
+    try std.testing.expectEqual(@as(usize, 0), fold.checkpoints.items.len);
+    try std.testing.expect(cn.isLeader());
+    try std.testing.expectEqual(@as(?u64, 4_000), cn.next_checkpoint_ms.get(jid));
+
+    // Pending-bytes path: due time is still in the future, but the head
+    // moved and pending >= cap. Must stay due after the skip.
+    try cn.next_checkpoint_ms.put(cn.allocator, jid, 4_000 + 60_000);
+    _ = cn.last_scan_head.remove(jid);
+    try cn.driveCheckpoints();
+    try std.testing.expectEqual(@as(usize, 0), fold.checkpoints.items.len);
+    try std.testing.expectEqual(@as(?u64, 4_000), cn.next_checkpoint_ms.get(jid));
+
+    test_ckpt_now = 4_000 + 30_000 + 1;
+    try cn.driveCheckpoints();
+    try std.testing.expect(fold.checkpoints.items.len >= 1);
+    try std.testing.expect(fold.entries.get(expiring).?.removed);
 }
 
 // ---------------------------------------------------------------------------
