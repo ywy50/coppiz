@@ -134,7 +134,10 @@ problem".
 
 ## Next steps / action items
 
-- [ ] Add the shape table to PRD 0005 and pick the second example host.
+- [x] Add the shape table to PRD 0005 and pick the second example host -
+      done 2026-08-30: PRD 0005 carries the table and
+      `examples/short-process/` is the second host. Naming the design
+      *targets* (the decision this RFC asks for) is still open.
 - [ ] Write the ADR once decided; update OQ 46's status.
 
 ## References

@@ -101,7 +101,10 @@ the phases.
 1. **First host integration (clanker)** - PRD 0005 phase 5: a clanker branch
    with `ck_state` over coppiz, one stream replicated between two instances,
    measured against its spike note's three journeys. A second, unrelated
-   host example follows to keep the API general ([OQ 46](rfcs/0021-host-shapes.md)).
+   host example landed 2026-08-30 - `examples/short-process/`, the
+   command-line shape that opens, appends, reads and closes once per
+   invocation ([RFC 0021](rfcs/0021-host-shapes.md) option B; the RFC's
+   target-shape decision itself is still open).
 2. **First public release** - reopened claims ([OQ 40](research/0001-evidence-carried-from-the-state-store-survey.md)),
    resolved 2026-08-27), CI (OQ 45), rolling-upgrade procedure (OQ 26),
    backup runbook (OQ 39). The licence is Apache-2.0

@@ -67,7 +67,7 @@ In a cluster, a host writes through the loop of its own member -
 until the slot folds back - and reads the same way
 (`cluster.ClusterNode.localReadRange` runs the read through the loop), or
 over the wire as a client to the local member, while the loop runs. The
-three host shapes are `examples/`, built and tested by `zig build examples`.
+four host shapes are `examples/`, built and tested by `zig build examples`.
 
 `zig build docs` regenerates `docs/configuration.md` from the settings schema.
 Read the design, in order, with `cat docs/README.md`. Everything below is
@@ -215,8 +215,8 @@ payloads dropping at the same chain position.
 
 A host embeds the library and
 writes through its member's loop (`cluster.ClusterNode.localAppend`), and
-`examples/` - `embed-single`, `embed-cluster`, `sidecar` - builds and tests
-each host shape ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)).
+`examples/` - `embed-single`, `embed-cluster`, `sidecar`, `short-process` -
+builds and tests each host shape ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)).
 
 `coppiz append`/`read`/`head` talk to a serving node over the wire when the
 data directory is locked ([OQ 47](docs/rfcs/0006-multi-process-one-data-directory.md)); `coppiz status`,
@@ -239,7 +239,7 @@ the records, not here.
 | [CHANGELOG.md](CHANGELOG.md), [RELEASES.md](RELEASES.md) | consumer-visible changes; version and release policy |
 | `src/journal/`, `src/settings/`, `src/config/` | the single-member core: codecs, chain, segments, store, schema, local config |
 | `src/cluster/`, `src/sim/` | membership, election, epochs, merge and the node loop (pure core + `node.zig`); the deterministic simulator |
-| `examples/` | one embedded host per shape (embed-single, embed-cluster, sidecar) - built by `zig build examples`, each a test |
+| `examples/` | one host per shape (embed-single, embed-cluster, sidecar, short-process) - built by `zig build examples`, each a test |
 | `src/root.zig`, `src/main.zig` | the library; the node binary |
 
 ## Origin

@@ -66,7 +66,7 @@ pub fn build(b: *std.Build) void {
     // the example executables no test runs (investigation 2026-08-28).
     const examples_step = b.step(
         "examples",
-        "Build, install and run the example hosts (embed-single, embed-cluster, sidecar)",
+        "Build, install and run the example hosts (see example_names)",
     );
     // The sidecar is wired outside the loop because the test step installs
     // it beside coppiz; the loop's skip keeps one definition of the artifact.
@@ -292,7 +292,12 @@ const checked_paths = [_][]const u8{ "src", "build.zig", "build.zig.zon", "examp
 /// The example hosts (PRD 0005): one per host shape. Each is built by `zig
 /// build examples` and each is a test run by `zig build test` — a change
 /// that breaks an example breaks the build.
-const example_names = [_][]const u8{ "embed-single", "embed-cluster", "sidecar" };
+const example_names = [_][]const u8{
+    "embed-single",
+    "embed-cluster",
+    "sidecar",
+    "short-process",
+};
 
 /// Every file a checking step covers, derived from its gate paths: a listed
 /// directory contributes its .zig descendants; any other entry is taken
@@ -1027,6 +1032,7 @@ const test_roots = [_][]const u8{
     "examples/embed-single/main.zig",
     "examples/embed-cluster/main.zig",
     "examples/sidecar/main.zig",
+    "examples/short-process/main.zig",
 };
 
 /// Fails the build when no chain of real @imports reaches a gated Zig
