@@ -185,9 +185,11 @@ pub const Node = struct {
         return if (self.control.epoch) |ep| ep.leader else null;
     }
 
-    /// The cluster's current epoch number.
-    pub fn epoch(self: *const Node) u64 {
-        return self.control.epoch.?.number;
+    /// The cluster's current epoch number; null before any epoch entry has
+    /// folded, exactly as `leader` is (bug
+    /// 2026-08-29-chainless-member-null-epoch-panic).
+    pub fn epoch(self: *const Node) ?u64 {
+        return if (self.control.epoch) |ep| ep.number else null;
     }
 
     /// The cluster-scoped settings.
@@ -478,7 +480,10 @@ pub const Node = struct {
     /// cluster node's leader path slots forwarded entries with this.
     pub fn slotFor(self: *Node, fold: *chain.FoldState, en: *const entry.Entry) !slot.Slot {
         const now_ms = @as(u64, @intCast(@max(@as(i64, 0), self.now(self.io))));
-        const current_epoch = self.epoch();
+        // A member with a key and a queue but no folded epoch cannot slot
+        // anything: there is no term to slot into, and unwrapping the epoch
+        // here was a panic on the whole write path.
+        const current_epoch = self.epoch() orelse return error.NoEpoch;
         // A new epoch's first slot starts a fresh seq: the chain's dense
         // rule (chain.zig checkChainContinuity) demands seq == 1 when the
         // epoch changes, so a post-failover write to a journal that holds
@@ -1835,4 +1840,43 @@ test "a failure after the store opens leaves the data directory usable" {
     var node = try openNode(&env);
     defer node.deinit();
     try std.testing.expect(node.leader() != null);
+}
+
+test "a chainless node reports no epoch and refuses to slot instead of panicking" {
+    // Bug 2026-08-29-chainless-member-null-epoch-panic: `Node.epoch()`
+    // unwrapped `control.epoch` while `Node.leader()` guarded it, so every
+    // write path aborted on a directory holding only member.key.
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+
+    // A joiner's directory: a member key, no chain.
+    {
+        const data_dir = try env.dataDir();
+        defer data_dir.close(tio);
+        var io_state = std.Io.Threaded.init(test_alloc, .{});
+        defer io_state.deinit();
+        const kp = crypto.sign.Ed25519.KeyPair.generate(io_state.io());
+        try writeMemberKey(test_alloc, tio, data_dir, kp);
+    }
+
+    var node = try openNode(&env);
+    defer node.deinit();
+    try std.testing.expectEqual(@as(?u64, null), node.epoch());
+    try std.testing.expectEqual(@as(?[16]u8, null), node.leader());
+
+    const en = entry.Entry{
+        .kind = .data,
+        .journal = [_]u8{0} ** 16,
+        .author = node.member_id,
+        .author_seq = 1,
+        .author_ts_ms = 0,
+        .ttl_ms = 0,
+        .payload_hash = entry.payloadHash("x"),
+        .payload_len = 1,
+        .payload_omitted = false,
+        .signature = [_]u8{0} ** 64,
+        .payload = "x",
+    };
+    try std.testing.expectError(error.NoEpoch, node.slotFor(&node.control, &en));
 }

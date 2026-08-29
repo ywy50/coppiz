@@ -98,6 +98,9 @@ pub const Refusal = error{
     BadCheckpoint,
     /// A control entry (stale, checkpoint, settings) with a malformed payload.
     BadControlPayload,
+    /// A control entry other than the genesis offered to a fold that has no
+    /// epoch yet: there is no leader to validate its slot against.
+    NoEpoch,
 };
 
 pub const ApplyError = error{OutOfMemory} || Refusal;
@@ -136,6 +139,7 @@ pub fn refusalName(err: anyerror) ?[]const u8 {
         error.BadGenesis => "bad_genesis",
         error.BadCheckpoint => "bad_checkpoint",
         error.BadControlPayload => "bad_control_payload",
+        error.NoEpoch => "no_epoch",
         else => null,
     };
 }
@@ -321,7 +325,13 @@ pub const FoldState = struct {
             return;
         }
         if (!std.mem.eql(u8, &en.journal, &self.journal_id)) return error.WrongJournal;
-        const leader = self.epoch.?.leader;
+        // A chainless member's control fold has the zero journal id and no
+        // epoch, and the check above passes for a record whose journal id is
+        // also all zeros. Unwrapping the epoch there is a panic on bytes a
+        // peer chose (bug 2026-08-29-chainless-member-null-epoch-panic): only
+        // a genesis, handled above, may fold into an epoch-less control chain.
+        const ep = self.epoch orelse return error.NoEpoch;
+        const leader = ep.leader;
 
         // After a merge, the surviving leader re-slots the losing branch's
         // control entries (PRD 0003 *Partition and merge*; OQ 33). Their
@@ -333,7 +343,7 @@ pub const FoldState = struct {
         // construction: an entry the live rule accepts — leader-authored, or
         // a genuinely new epoch — never matches it, so a merged chain replays
         // identically after a restart without any side channel.
-        const reslotted_epoch = en.kind == .epoch and sl.epoch == self.epoch.?.number;
+        const reslotted_epoch = en.kind == .epoch and sl.epoch == ep.number;
         const reslotted_entry = en.kind != .epoch and !std.mem.eql(u8, &en.author, &leader);
         if (reslotted_epoch or reslotted_entry) {
             try self.applyControlReslotted(sl, en);
@@ -390,7 +400,9 @@ pub const FoldState = struct {
     ) ApplyError!void {
         try self.checkChainContinuity(sl);
         if (!std.mem.eql(u8, &en.journal, &self.journal_id)) return error.WrongJournal;
-        const leader = self.epoch.?.leader;
+        // Same guard as `applyControl`: a re-slot reaches a chainless fold by
+        // the same route (bug 2026-08-29-chainless-member-null-epoch-panic).
+        const leader = (self.epoch orelse return error.NoEpoch).leader;
         if (!std.mem.eql(u8, &sl.leader, &leader)) return error.NotLeader;
         const leader_member = self.memberById(leader) orelse return error.NotLeader;
         try verifySlotSignature(leader_member, sl);
@@ -2479,4 +2491,24 @@ test "a create_journal name_len near max u16 is refused, not an overflowing sum"
         error.InvalidLength,
         decodeCreateJournalPayload(test_alloc, &bytes),
     );
+}
+
+test "a control record offered to a fold with no epoch is refused, not a null unwrap" {
+    // Bug 2026-08-29-chainless-member-null-epoch-panic: a chainless member's
+    // control fold has the zero journal id and no epoch, and the journal-id
+    // check passes for a record whose journal id is also zeros - so the next
+    // line unwrapped a null epoch on bytes a peer chose.
+    var fix = Fix.init();
+    const zero_id = [_]u8{0} ** 16;
+    var fold = try FoldState.init(test_alloc, true, zero_id);
+    defer fold.deinit();
+
+    var payload: [16]u8 = undefined;
+    encodeCheckpointPayload(.{ .expire_through = .{ .epoch = 1, .seq = 1 } }, &payload);
+    const en = try fix.entryFor(.settings, zero_id, 1, 0, &payload);
+    const sl = try fix.slotFor(1, 1, entry.entryHash(&en), slot.genesis_prev, 1000);
+
+    try std.testing.expectError(error.NoEpoch, fold.applyControl(&sl, &en));
+    try std.testing.expectError(error.NoEpoch, fold.applyControlReslotted(&sl, &en));
+    try std.testing.expectEqualStrings("no_epoch", refusalName(error.NoEpoch).?);
 }
