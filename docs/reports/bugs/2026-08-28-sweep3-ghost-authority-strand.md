@@ -13,7 +13,7 @@ the `AuthoritiesMatchNoMember` rule: a non-empty authority list naming no
 member is refused exactly when the empty-list rule fires (n > 1,
 `fallback = stall`), so the n = 1 pre-provisioning carve-out is unchanged.
 The rule runs at the settings-apply hook (`applySettings`), the join hook
-(`applyJoin`, mirroring the empty-list fix), and — new — the live `leave`
+(`applyJoin`, mirroring the empty-list fix), and - new - the live `leave`
 hook (`applyLeaveChecked`), which the empty rule could never violate since a
 leave only shrinks the count. The merge re-slot leave path skips the check:
 a refusal there would abort the heal with the merge entry already on the
@@ -36,14 +36,17 @@ The validation checks list *emptiness*, not list *resolvability*: an authority e
 Fixed: `validateState` (validate.zig) takes the member table
 (`validate.MemberView`, built by `chain.FoldState.memberViews`) and returns
 `error.AuthoritiesMatchNoMember` when a non-empty authority list resolves to
-no member and the state would strand (`!empty_ok` — the same n = 1 and
+no member and the state would strand (`!empty_ok` - the same n = 1 and
 seniority-fallback exceptions the empty-list rule uses, so pre-provisioning
-a future member at genesis still works). The rule is enforced at the
-settings-apply hook (`applySettings`, both scopes — journal scope is inert,
-it carries no leadership keys), the join hook (`applyJoin`, the empty-list
-fix's own hook), and the live leave hook (`applyLeaveChecked` — a leave can
-remove the last resolvable authority, which the empty rule can never do).
-The merge re-slot leave path skips the check so a heal cannot abort on it.
+a future member at genesis still works).
+
+The rule is enforced at the settings-apply hook (`applySettings`, both
+scopes - journal scope is inert, it carries no leadership keys), the join
+hook (`applyJoin`, the empty-list fix's own hook), and the live leave hook
+(`applyLeaveChecked` - a leave can remove the last resolvable authority,
+which the empty rule can never do). The merge re-slot leave path skips the
+check so a heal cannot abort on it.
+
 Regression tests: validate.zig's ghost-list test, membership.zig's
 ghost-join refusal and last-authority-leave refusal.
 

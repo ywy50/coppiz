@@ -15,7 +15,7 @@ empty-`jd.segments` append panic), then deletes the stale old files;
 ordinal. `loadJournal` detects the both-generations crash state: every
 generation's first file opens with the chain start (`prev = genesis_prev`),
 so the last file whose first record starts the chain names the newest
-generation — it is kept and the stale files before it are deleted at open.
+generation - it is kept and the stale files before it are deleted at open.
 A crash in any compaction/truncate window leaves either the old or the new
 state, never an unfoldable mix.
 
@@ -47,13 +47,13 @@ deleting first opens a neither-state), so the fix takes the other half of
 the suggestion plus an open-time recovery:
 
 - `compact` reorders to write + fsync the new generation, swap it in memory
-  (the swap has no failure points — `jd.segments` can never be left empty,
+  (the swap has no failure points - `jd.segments` can never be left empty,
   closing the append panic), then delete the stale files.
 - `truncate` reorders the same way, writing the fresh head at the next
   monotone ordinal (no more ordinal reset to 2).
 - `loadJournal` recovers the crashed state: compact writes the new
   generation at ordinals contiguous with the old (monotone `next_ordinal`),
-  so the two generations are indistinguishable by name — but every
+  so the two generations are indistinguishable by name - but every
   generation's first file opens with the chain start (`prev = genesis_prev`),
   which a single generation never repeats mid-chain. The last such file is
   the newer generation; it is kept and the stale files before it are

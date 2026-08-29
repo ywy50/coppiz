@@ -14,7 +14,7 @@ Resolved - `applyDataReslotted` (chain.zig, threaded through
 (the survivor's value wins; cleanup already served) while `data` folds
 normally, and a re-slotted checkpoint no longer triggers a compaction.
 `doMergeControl` now defers the control `leave` entries and
-`reSlotDeferredLeaves` re-slots them after every data branch has folded —
+`reSlotDeferredLeaves` re-slots them after every data branch has folded -
 the "data before the leaves that remove its authors" ordering the report
 asked for, with join-vs-join seniority and join-before-data preserved.
 
@@ -55,19 +55,20 @@ Fixed. The first manifestation needed a re-slotted *data* path, so
 public `applyDataReslotted`: it runs the same checks (chain continuity,
 slot signature, entry signature, author seq, size) but routes
 journal-scoped `settings`/`checkpoint`/`stale` as no-ops instead of through
-`applyJournalSettings`/`applyCheckpoint`/`applyStale` — whose
+`applyJournalSettings`/`applyCheckpoint`/`applyStale` - whose
 `checkAuthorIsLeader` cannot hold (the author is the losing branch's
 leader) and whose `stale.enforce` gate may differ. `applyReplicated`
 threads the merge's `reslotted` flag to the data fold and skips the
-checkpoint-triggered compaction for re-slots. The second manifestation is
-fixed by ordering: `doMergeControl` defers the control `leave` entries into
-`merge_pending_leaves` and `reSlotDeferredLeaves` re-slots them after every
-data branch has folded — the report's "data re-slots before the leaves that
-remove their authors", while join-vs-join seniority and join-before-data
-order are preserved.
+checkpoint-triggered compaction for re-slots.
+
+The second manifestation is fixed by ordering: `doMergeControl` defers the
+control `leave` entries into `merge_pending_leaves` and
+`reSlotDeferredLeaves` re-slots them after every data branch has folded -
+the report's "data re-slots before the leaves that remove their authors",
+while join-vs-join seniority and join-before-data order are preserved.
 
 Regression test: "a re-slotted data entry folds journal
-settings/checkpoint/stale as no-ops" (chain.zig) — a non-leader-authored
+settings/checkpoint/stale as no-ops" (chain.zig) - a non-leader-authored
 settings entry that the live rule refuses `NotLeader` folds as a no-op
 through the re-slot, a stale mark and an out-of-range checkpoint fold as
 no-ops, and a `data` entry re-slots normally. The merge e2e still writes
