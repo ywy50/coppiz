@@ -511,6 +511,14 @@ pub const World = struct {
     /// diverged, merges per the pure rule — every node re-folds the merged
     /// chain from the last common slot.
     pub fn heal(self: *World) !void {
+        // Fold pending inbox broadcasts into their chains first: a message
+        // in flight at heal time would otherwise be dropped when every
+        // inbox is cleared below — silently losing a losing-side write
+        // (bug 2026-08-29-sim-heal-drops-inbox).
+        for (0..self.nodes.items.len) |i| {
+            if (!self.nodes.items[i].alive) continue;
+            try self.processInbox(i);
+        }
         const head = self.partition_head orelse return error.NotPartitioned;
         const n = self.nodes.items.len;
         const common_len = blk: {
@@ -873,6 +881,38 @@ test "partition under seniority heals into one chain with every entry (G7 core)"
     }
     // A merge happened and was folded identically on both sides.
     try std.testing.expect(world.nodes.items[a].fold.last_merge != null);
+}
+
+test "heal folds a losing side's pending inbox broadcasts into the branch" {
+    // Bug 2026-08-29-sim-heal-drops-inbox: heal built the losing branch
+    // from the side's folded chain and then cleared every inbox, dropping a
+    // broadcast still in flight (no tick between the append and heal).
+    var world = try World.init(test_alloc, 0xFACE, test_control_id, &.{});
+    defer world.deinit();
+    const a: usize = 0;
+    const b = try world.addMember(memberKey(1), "node-b", a);
+    const c = try world.addMember(memberKey(2), "node-c", a);
+    try world.tick(); // B folds C's join broadcast
+    try world.assertConverged();
+
+    // Partition the founder off; the {B, C} side elects B (seniority). The
+    // side set's first node — the branch source — is C, so B's broadcast
+    // sits in C's inbox, not in the chain heal snapshots.
+    try world.partition(&.{ &[_]usize{a}, &[_]usize{ c, b } });
+    try world.tick();
+    try world.tick();
+    try std.testing.expectEqualSlices(u8, &world.nodeId(b), &(try world.leaderOf(b)).?);
+
+    var buf: [128]u8 = undefined;
+    try world.append(b, .settings, settingsEntryPayload(&buf, max_journals, .{ .u32 = 42 }));
+    try world.heal();
+    for (0..4) |_| try world.tick();
+
+    try world.assertConverged();
+    const b_id = world.nodeId(b);
+    // B's epoch entry is author_seq 1; the settings entry is 2.
+    try std.testing.expect(world.entryResolves(a, .{ .author = b_id, .author_seq = 2 }));
+    try std.testing.expect(world.entryResolves(c, .{ .author = b_id, .author_seq = 2 }));
 }
 
 test "partitioned joins merge with deterministic seniority (RFC 0002)" {
