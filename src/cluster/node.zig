@@ -1941,9 +1941,25 @@ pub const ClusterNode = struct {
             // diverges from every member that did not OOM (bug
             // 2026-08-28-sweep3-decode-oom-mapped-to-refusal).
             error.OutOfMemory => return error.OutOfMemory,
-            else => {
+            // A record for a journal this fold does not know yet: nothing
+            // was folded (applyReplicated looks the journal up first), and
+            // the `create_journal` that names it arrives on the control
+            // chain.
+            error.UnknownJournal => {},
+            else => |e| {
                 // NotLeader (a stale leader's broadcast), DuplicateConflict,
-                // etc. — the chain's own rules decide; nothing to do.
+                // etc. — the chain's own rules decide; the fold refused the
+                // entry and is untouched, so there is nothing to do.
+                if (chain.refusalName(e) != null) return;
+                // Anything else came from the store write, which runs after
+                // the fold has already advanced (`Node.applyReplicated`
+                // folds, then appends). The fold is now one record ahead of
+                // the segment file: this member can neither serve that
+                // record nor reopen the chain, so it stops rather than
+                // carrying the divergence (bug
+                // 2026-08-29-onslot-swallows-store-write-failure).
+                self.fatal();
+                return e;
             },
         };
         // Branch facts only move for a *live* epoch (a new term); a
@@ -4752,4 +4768,87 @@ test "beginMerge commits nothing when the branch request never goes out" {
     try cn.beginMerge(9, 2);
     try std.testing.expectEqual(@as(?u64, 9), cn.merging_from);
     try std.testing.expect(cn.sync_in_flight);
+}
+
+test "a replicated slot whose store write is refused stops the member" {
+    // `onSlot`'s `else` branch swallowed every non-`BadPrevHash`,
+    // non-`OutOfMemory` error from `applyReplicated`. That set includes the
+    // store's own failures, and `Node.applyReplicated` folds *before* it
+    // writes - so a refused write left the fold one record ahead of the
+    // segment file and the member carried on serving from it.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    var jit = node.control.journals.keyIterator();
+    const data_id = (jit.next() orelse return error.NoDataJournal).*;
+    {
+        const en = try cn.signedEntry(.data, data_id, "one", 0);
+        try cn.noteBuilt(data_id, en.author_seq);
+        _ = try cn.slotAndBroadcast(&en, false);
+    }
+    const head = cn.headFor(data_id);
+
+    // A well-formed slot whose record bytes carry three bytes too many. The
+    // fold accepts the slot; `Store.appendRecord` refuses the length
+    // mismatch with `error.BadRecord`.
+    const en2 = try cn.signedEntry(.data, data_id, "two", 0);
+    var sl2 = slot.Slot{
+        .epoch = head.epoch,
+        .seq = head.seq + 1,
+        .slot_ts_ms = cn.nowMs(),
+        .entry_hash = entry.entryHash(&en2),
+        .prev_slot_hash = cn.headHashFor(data_id),
+        .leader = node.member_id,
+        .signature = undefined,
+    };
+    sl2.signature = (try slot.sign(node.keypair, &sl2)).toBytes();
+    const size = segment.recordSize(&sl2, &en2);
+    const raw = try test_alloc.alloc(u8, size + 3);
+    defer test_alloc.free(raw);
+    segment.encodeRecord(&sl2, &en2, raw[0..size]);
+    @memset(raw[size..], 0);
+
+    // The failure surfaces instead of being swallowed, and the member stops:
+    // a fold ahead of its segment file can neither be served nor reopened.
+    try std.testing.expectError(error.BadRecord, cn.onSlot(3, .{
+        .reslotted = false,
+        .record = raw,
+        .sl = sl2,
+        .en = en2,
+    }));
+    try std.testing.expect(cn.stopped.load(.acquire));
+
+    // A plain chain refusal is still the fold's own decision and is still
+    // ignored: the same entry replayed is a duplicate, not a store failure.
+    cn.stopped.store(false, .release);
+    const dup = try cn.signedEntry(.data, data_id, "one-again", 0);
+    var dup_sl = sl2;
+    dup_sl.leader = [_]u8{0} ** 16; // not the leader: `NotLeader`
+    dup_sl.entry_hash = entry.entryHash(&dup);
+    try cn.onSlot(3, .{ .reslotted = false, .record = &.{}, .sl = dup_sl, .en = dup });
+    try std.testing.expect(!cn.stopped.load(.acquire));
 }

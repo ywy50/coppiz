@@ -139,7 +139,8 @@ Two related weaknesses are recorded rather than fixed here:
 - `onSlot`'s `else => {}` branch swallows every `applyReplicated` error that
   is not `BadPrevHash` or `OutOfMemory`, including `BadRecord`. A fold that
   advanced past a refused store write is not something the member can
-  continue from. That is in `src/cluster/node.zig`.
+  continue from. That is in `src/cluster/node.zig`. **Fixed** by
+  [2026-08-29-onslot-swallows-store-write-failure](2026-08-29-onslot-swallows-store-write-failure.md).
 - `applyReplicated` folds before it writes on the replicated path too, so
   any `appendRecord` failure - not only this one - leaves the same
   divergence. `2026-08-29-fold-before-store-order.md` covers the local

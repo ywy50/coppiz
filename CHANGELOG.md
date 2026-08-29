@@ -7,6 +7,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A member no longer carries on after a replicated record was folded but its
+  store write was refused. The handler ignored every error the chain's own
+  rules had not produced, so the fold could end one record ahead of the
+  segment file: reads answered from a record no segment held, and the chain
+  did not reopen. Chain refusals are still ignored; anything else stops the
+  member.
+
 - The survivor of a healed partition no longer records a merge whose request
   for the loser's branch was never sent. `requestSync` sends nothing while
   another sync is in flight, and the merge was committed regardless, which
