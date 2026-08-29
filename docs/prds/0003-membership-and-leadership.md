@@ -33,6 +33,19 @@ locked, and the e2e matrix of *Acceptance criteria* below (process-level (a)
 (d) (e); (b) and (c) in-process over the hub transport with real stores and
 real loops).
 
+The `leadership.*` half of *Live reconfiguration* below shipped
+2026-08-30: after the leader appends a cluster-scoped `settings` entry that
+touches a `leadership.*` key, it re-runs `leader(...)` over the new settings
+and, when the answer is a different member, appends an `epoch` with
+`reason = mode_change` naming it (`node.zig handOverAfterSettings`,
+`appendEpochFor`). Folding that entry is what makes `isLeader` false on the
+old leader, so the handover is one slot wide. Until then nothing appended a
+`mode_change` epoch at all: the term changed hands only when the newly
+elected member's own next tick noticed, under `reason = leader_lost`, and
+the old leader kept slotting under the new mode until it did. Nothing is
+appended when the mode re-elects the same member, or when the new settings
+elect nobody - `fallback = stall` is meant to stall.
+
 The fold infers a re-slot from its author and epoch
 (`chain.zig applyControl`), so a merged chain replays identically after a
 restart without a side channel. The embedded-host write API shipped with
@@ -272,7 +285,9 @@ setting they change by a `settings` entry the leader appends. The gate is
 - `true` - the `settings` entry is accepted; the current leader appends it,
   then appends an `epoch` with `reason = mode_change` and the leader the new
   mode selects (which may be itself). The handover is one slot wide: the old
-  leader stops slotting after the `epoch` entry and forwards to the new one.
+  leader stops slotting after the `epoch` entry and forwards to the new one. Shipped 2026-08-30; `epoch.applyEpoch` already accepted the handover
+  shape (the current leader signs a slot whose payload names someone else),
+  and the loop now produces it.
 - `false` - every member refuses a `settings` entry that touches
   `leadership.*`, `invalid_settings: leadership frozen`. The only way to
   change the mode is the offline procedure in [open question

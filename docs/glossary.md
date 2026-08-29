@@ -34,6 +34,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **leader** | the member that assigns slots in the current epoch | PRD 0003 |
 | **epoch** | a leadership term; opened by an `epoch` control entry; `seq` restarts at 1 | PRD 0003 |
 | **election** | the pure function `leader(mode, settings, members, liveness)`; there is no vote | PRD 0003 |
+| **handover** | an epoch the *current* leader appends naming a different member as the next leader, rather than the new leader announcing itself; `reason = mode_change` is the live-reconfiguration case | PRD 0003 |
 | **seniority** | a member's join position: the slot of its `join` (or `genesis`) entry; earlier = more senior | PRD 0003, RFC 0002 |
 | **authorities** | the operator's ordered list of leader candidates under `configured`/`combined` | PRD 0003 |
 | **tiebreak** | how `combined` orders eligible authorities: `seniority` or `freshest` | PRD 0003 |
