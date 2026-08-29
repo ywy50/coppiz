@@ -279,18 +279,15 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     ([research 0003](research/0003-fsync-default-measurement.md)). What the
     knob governs is [ADR 0008](adrs/0008-storage-fsync-governs-the-queue.md).
 <a id="oq-17"></a>
-17. **Snapshot format.** [OPEN] A verified fold at a slot, so restart and join do
-    not replay from genesis. Is it a serialized fold state (versioned
-    struct) or a compacted copy of the chain? When may a member serve a
-    snapshot to a joiner instead of slots? *Blocks:* none - phase 3 shipped
-    without snapshots (deferred in PRD 0001's status); reopen when restart or
-    join cost is measured.
+17. **Snapshot format.** [OPEN]
+    The decision is explored in
+    [RFC 22](rfcs/0022-snapshot-format.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* none - phase 3 shipped without snapshots; the join-cost trigger is in OQ 54.
 <a id="oq-26"></a>
-26. **Format versioning and rolling upgrade.** [OPEN] Entry, slot, segment, snapshot
-    and wire each carry a version. Can a cluster run two binary versions
-    during an upgrade? Drafted: a reader refuses a newer version, so the
-    leader must be upgraded *last* (it writes). Needs a written procedure
-    and a test. *Blocks:* first release.
+26. **Format versioning and rolling upgrade.** [OPEN]
+    The decision is explored in
+    [RFC 23](rfcs/0023-rolling-upgrade.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* first release.
 <a id="oq-36"></a>
 36. **Maximum entry size and large payloads.** [PARTIAL] `journal.max_entry_bytes`
     default is unset. clanker's streams are 1–2 KB lines; sessions are up to
@@ -305,11 +302,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     - the key is a live-changeable journal setting - and the provisional
     16 MiB default stands until measurement replaces it.
 <a id="oq-39"></a>
-39. **Backup and restore.** [OPEN] A data directory copied while the node runs may
-    hold a torn tail (recovered at open) - is `cp -r` a supported backup, or
-    does `coppiz export` exist? Restoring a member from backup must not
-    resurrect a `leave` or fork the chain; the chain makes this detectable,
-    but the procedure needs a runbook. *Blocks:* first release.
+39. **Backup and restore.** [OPEN]
+    The decision is explored in
+    [RFC 24](rfcs/0024-backup-restore.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* first release.
 <a id="oq-55"></a>
 55. **Size bounds: defaults shipped, overflow behaviour settled.** [RESOLVED] PRD 0001
     G6 requires the journal cap (`cluster.max_journals`) and the
@@ -597,23 +593,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     *Blocks:* the first external contribution; the repository's own commits
     are gated locally by `zig build test` today.
 <a id="oq-59"></a>
-59. **Does the fetchable package carry the design docs?** [OPEN] The `.paths` list
-    in `build.zig.zon` - the declaration of what the package contains -
-    names only `CHANGELOG.md`, `README.md`, `RELEASES.md`, `build.zig`,
-    `build.zig.zon` and `src/`. Every design record lives under `docs/`,
-    and PRD 0001 says a document "is the spec" until code replaces it, so a
-    host that adds coppiz as a dependency gets a library whose spec is not in
-    the package (SQLite and dqlite ship theirs). Excluding
-    [the brief](brief.md) (the operator's private founding notes) is clearly right; excluding `docs/` was
-    never stated as a decision.
-
-    Decide either way before the first host
-    fetches coppiz ([PRD 0005](prds/0005-embedding-the-library-as-the-product.md)
-    phase 5) or the first public release. *Blocks:* PRD 0005 phase 5.
-    *Answer from:* the operator.
-
-## I. Scaling past one group (PRD 0006)
-
+59. **Does the fetchable package carry the design docs?** [OPEN]
+    The decision is explored in
+    [RFC 25](rfcs/0025-docs-in-package.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* the first host fetch (PRD 0005 phase 5) and the first public release.
 <a id="oq-48"></a>
 48. **Grouping unit and range key.** [OPEN] Ownership by whole journal is the
     drafted unit; the drafted split key is the author-id prefix so each
