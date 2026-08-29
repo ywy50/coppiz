@@ -7,6 +7,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The four transport closers that free themselves no longer carry a
+  `closed: bool`. `TcpConn`, `TcpListener`, `PipeConn` and `HubListener`
+  each read that flag at the top of `closeFn` and destroyed the allocation
+  it lives in at the bottom, so a second close read it back out of freed
+  memory: a recycled block reads `false` and the close runs again, freeing
+  a block its new owner holds (reproduced). `Conn.close` and
+  `Listener.close` now say the contract - sole destructor, exactly once -
+  and a structural test keeps the guard from coming back. Nothing in the
+  tree closes any of them twice; the flags promised a protection they could
+  not provide (bug 2026-08-29-close-guard-in-freed-allocation).
 - A member no longer discards a committed suffix of its chain because it once
   saw an ordinary failover. Every new epoch set the "my branch" facts and
   nothing cleared them, so the loser of any later divergence truncated back
