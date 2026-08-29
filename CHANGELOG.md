@@ -152,6 +152,19 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- A live `leadership.*` change now hands the term over on the record, which
+  is what PRD 0003 *Live reconfiguration* specifies and nothing implemented:
+  the leader appends the `settings` entry and then an `epoch` with
+  `reason = mode_change` naming the member the new mode elects. Folding that
+  entry is what makes the old leader stop slotting, so the handover is one
+  slot wide and the chain says what happened. Before, no `mode_change` epoch
+  was ever written: the term moved only when the newly elected member's own
+  next tick noticed, recorded as `leader_lost` - which is untrue, nothing
+  was lost - and until that tick the old leader went on slotting under the
+  new mode. No epoch is appended when the new mode re-elects the same
+  member, when the change touches no `leadership.*` key, or when the new
+  settings elect nobody (`fallback = stall` is meant to stall).
+
 - A fourth example host, `examples/short-process/`: the command-line shape
   that opens a data directory, appends, reads and closes once per
   invocation, instead of holding the node open for the life of the process.
