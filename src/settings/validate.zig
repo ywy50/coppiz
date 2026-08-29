@@ -14,6 +14,7 @@
 
 const std = @import("std");
 const schema = @import("schema.zig");
+const framing = @import("../net/framing.zig");
 
 /// One `(key, value)` change inside a settings entry or genesis. Owns its
 /// value per the Value contract.
@@ -61,6 +62,10 @@ pub const CrossKeyError = error{
     /// An authority entry longer than the bound is not a name coppiz can
     /// ever resolve.
     AuthorityEntryTooLong,
+    /// `journal.max_entry_bytes` must leave room for the record and the
+    /// message in one frame, or an accepted entry can never be replicated
+    /// (bug 2026-08-28-sweep3-oversized-entry-unreplicable).
+    MaxEntryBytesExceedsFrameCap,
 };
 
 /// The whole-state rules (PRD 0004 goal 4): a settings state must be valid
@@ -93,6 +98,14 @@ pub fn validateState(
     for (list) |entry| {
         if (entry.len == 0) return error.EmptyAuthorityEntry;
         if (entry.len > authority_entry_max) return error.AuthorityEntryTooLong;
+    }
+
+    // The frame must be able to carry any accepted entry (the record and
+    // the message envelope ride in one frame), or it can never replicate
+    // (bug 2026-08-28-sweep3-oversized-entry-unreplicable).
+    const max_entry_bytes = schema.keyIndex("journal.max_entry_bytes").?;
+    if (state.getU64(max_entry_bytes) > @as(u64, framing.max_body_bytes) - 4096) {
+        return error.MaxEntryBytesExceedsFrameCap;
     }
 }
 
@@ -172,6 +185,19 @@ test "ttl.enforce=all needs a non-zero default" {
     try std.testing.expectError(error.TtlEnforceAllNeedsDefault, validateState(&state, 1));
 
     try state.set(test_ttl_default, .{ .u64 = 5000 });
+    try validateState(&state, 1);
+}
+
+test "max_entry_bytes must leave room for the record in a frame" {
+    // Bug 2026-08-28-sweep3-oversized-entry-unreplicable: a max_entry_bytes
+    // beyond the frame cap accepts entries no frame can carry.
+    var state = try schema.SettingsState.initDefaults(std.testing.allocator);
+    defer state.deinit();
+    const key = schema.keyIndex("journal.max_entry_bytes").?;
+    try state.set(key, .{ .u64 = framing.max_body_bytes });
+    try std.testing.expectError(error.MaxEntryBytesExceedsFrameCap, validateState(&state, 1));
+    // The default (16 MiB) stays valid under the raised frame cap.
+    try state.set(key, .{ .u64 = schema.provisional_max_entry_bytes });
     try validateState(&state, 1);
 }
 
