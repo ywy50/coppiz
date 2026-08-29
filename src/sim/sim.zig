@@ -497,12 +497,21 @@ pub const World = struct {
     /// a leader from the other side (the stall case — it never elected
     /// anyone) is leaderless and therefore wrote nothing.
     fn sideLeader(self: *World, side: usize) ?usize {
-        const nodes = self.partition_sides[side].items;
-        if (nodes.len == 0) return null;
-        const leader_id = self.nodes.items[nodes[0]].fold.epoch.?.leader;
+        const first = self.firstAliveOf(side) orelse return null;
+        const leader_id = self.nodes.items[first].fold.epoch.?.leader;
         const leader_idx = self.nodeIndex(leader_id) orelse return null;
-        for (nodes) |i| {
+        for (self.partition_sides[side].items) |i| {
             if (i == leader_idx) return leader_idx;
+        }
+        return null;
+    }
+
+    /// The first live node of a side — the branch source. A crashed
+    /// member's frozen chain must not name the survivor or build the
+    /// merged branch (bug 2026-08-28-sweep3-sim-heal-crashed-leader).
+    fn firstAliveOf(self: *World, side: usize) ?usize {
+        for (self.partition_sides[side].items) |i| {
+            if (self.nodes.items[i].alive) return i;
         }
         return null;
     }
@@ -613,10 +622,10 @@ pub const World = struct {
         try self.reopenLinks();
     }
 
-    /// A side's chain tail after the common prefix (any node on the side
-    /// shares the same chain).
+    /// A side's chain tail after the common prefix (a live node on the
+    /// side shares the same chain; a crashed one's chain is frozen).
     fn tailOf(self: *World, side: usize) []const *const Message {
-        const node_idx = self.partition_sides[side].items[0];
+        const node_idx = self.firstAliveOf(side) orelse return &.{};
         return self.nodes.items[node_idx].chain.items[self.commonPrefixLen()..];
     }
 
@@ -913,6 +922,42 @@ test "heal folds a losing side's pending inbox broadcasts into the branch" {
     // B's epoch entry is author_seq 1; the settings entry is 2.
     try std.testing.expect(world.entryResolves(a, .{ .author = b_id, .author_seq = 2 }));
     try std.testing.expect(world.entryResolves(c, .{ .author = b_id, .author_seq = 2 }));
+}
+
+test "heal uses a live side node's chain, not a crashed leader's frozen one" {
+    // Bug 2026-08-28-sweep3-sim-heal-crashed-leader: the branch came from
+    // the side set's first node without an alive check, so a crashed
+    // leader's frozen chain silently dropped the side's post-crash writes
+    // and its new epoch.
+    var world = try World.init(test_alloc, 0x0C0C, test_control_id, &.{});
+    defer world.deinit();
+    const a: usize = 0;
+    const b = try world.addMember(memberKey(1), "node-b", a);
+    const c = try world.addMember(memberKey(2), "node-c", a);
+    try world.tick(); // B folds C's join broadcast
+    try world.assertConverged();
+
+    // The side set's first node is the leader B; it crashes, then C
+    // re-elects and writes — all after the partition.
+    try world.partition(&.{ &[_]usize{a}, &[_]usize{ b, c } });
+    try world.tick();
+    try world.tick();
+    try std.testing.expectEqualSlices(u8, &world.nodeId(b), &(try world.leaderOf(b)).?);
+
+    world.crash(b);
+    try world.tick(); // C notices, elects itself
+    try world.tick();
+    try std.testing.expectEqualSlices(u8, &world.nodeId(c), &(try world.leaderOf(c)).?);
+
+    var buf: [128]u8 = undefined;
+    try world.append(c, .settings, settingsEntryPayload(&buf, max_journals, .{ .u32 = 7 }));
+    try world.heal();
+    for (0..4) |_| try world.tick();
+
+    try world.assertConverged();
+    const c_id = world.nodeId(c);
+    // C's epoch entry is author_seq 1; the settings entry is 2.
+    try std.testing.expect(world.entryResolves(a, .{ .author = c_id, .author_seq = 2 }));
 }
 
 test "partitioned joins merge with deterministic seniority (RFC 0002)" {
