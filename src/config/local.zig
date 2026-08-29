@@ -65,6 +65,10 @@ pub const ParseError = error{
     JournalKeyInLocalConfig,
     InvalidValue,
     InvalidType,
+    /// A key repeated in the same table (TOML forbids duplicates; the
+    /// peers path re-assigns, the four top-level scalars refuse — bug
+    /// 2026-08-28-sweep3-duplicate-toml-key-leak).
+    DuplicateKey,
     Syntax,
     OutOfMemory,
     FileNotFound,
@@ -178,18 +182,22 @@ fn parseTopLevel(
     config: *Config,
 ) ParseError!void {
     if (std.mem.eql(u8, key, "data_dir")) {
+        if (config.data_dir != null) return error.DuplicateKey;
         config.data_dir = try allocator.dupe(u8, unquote(value));
         return;
     }
     if (std.mem.eql(u8, key, "member.key_file")) {
+        if (config.member_key_file != null) return error.DuplicateKey;
         config.member_key_file = try allocator.dupe(u8, unquote(value));
         return;
     }
     if (std.mem.eql(u8, key, "listen")) {
+        if (config.listen != null) return error.DuplicateKey;
         config.listen = try allocator.dupe(u8, unquote(value));
         return;
     }
     if (std.mem.eql(u8, key, "log.level")) {
+        if (config.log_level != null) return error.DuplicateKey;
         config.log_level = try allocator.dupe(u8, unquote(value));
         return;
     }
@@ -443,6 +451,18 @@ test "bad values are refused" {
     try std.testing.expectError(error.InvalidValue, parse(test_alloc, bad_int, &config));
     const bad_list = "[genesis]\nleadership.authorities = \"not-an-array\"\n";
     try std.testing.expectError(error.InvalidValue, parse(test_alloc, bad_list, &config));
+}
+
+test "duplicate top-level keys are refused, not leaked" {
+    // Bug 2026-08-28-sweep3-duplicate-toml-key-leak: a repeated top-level
+    // key dupe'd over the previous value without freeing it (TOML forbids
+    // duplicates); the parser now refuses with a named error.
+    var config = Config{ .allocator = test_alloc };
+    defer config.deinit();
+    const dup_data_dir = "data_dir = \"/a\"\ndata_dir = \"/b\"\n";
+    try std.testing.expectError(error.DuplicateKey, parse(test_alloc, dup_data_dir, &config));
+    const dup_listen = "listen = \"127.0.0.1:1\"\nlisten = \"127.0.0.1:2\"\n";
+    try std.testing.expectError(error.DuplicateKey, parse(test_alloc, dup_listen, &config));
 }
 
 test "a malformed peer public_key is refused at parse time" {
