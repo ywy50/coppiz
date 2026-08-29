@@ -639,10 +639,61 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void
             try doc.warn("journal {s}: empty", .{kv.value_ptr.name});
         }
     }
+    try checkGenesisDrift(&doc, &cfg, node);
     if (cfg.listen) |l| {
         try doc.warn("listen {s} configured but no node is serving", .{l});
     }
     if (doc.failed) return error.DoctorFailed;
+}
+
+/// The `[genesis]` half of `doctor` (PRD 0004 *Bootstrap*): the founder's
+/// local `[genesis]` table is read once, by `coppiz init`, and ignored from
+/// then on. An operator who edits it afterwards gets no error and no effect,
+/// so this compares each key it names against the folded chain and warns per
+/// drifted key. It is a warning, not a failure: the chain is authoritative
+/// and correct: the local file is merely stale.
+fn checkGenesisDrift(doc: *Doctor, cfg: *const config.Config, node: *const journal.Node) !void {
+    if (cfg.genesis.items.len == 0) return;
+    // A directory with a key but no chain has not been through `init`, so
+    // the table is still pending rather than stale.
+    if (std.mem.eql(u8, &node.control.journal_id, &([_]u8{0} ** 16))) {
+        try doc.warn(
+            "genesis: [genesis] names {d} key(s) but no chain exists yet",
+            .{cfg.genesis.items.len},
+        );
+        return;
+    }
+    const folded = node.settings();
+    var drifted: usize = 0;
+    for (cfg.genesis.items) |change| {
+        const in_chain = folded.get(change.key);
+        if (change.value.eql(in_chain)) continue;
+        drifted += 1;
+        var local_buf: [512]u8 = undefined;
+        var chain_buf: [512]u8 = undefined;
+        var local_w = std.Io.Writer.fixed(&local_buf);
+        var chain_w = std.Io.Writer.fixed(&chain_buf);
+        // A value too long for the buffer is still worth naming, so the key
+        // and the drift are reported either way.
+        const local_text = if (coppiz.render.writeValue(&local_w, change.key, change.value))
+            local_w.buffered()
+        else |_|
+            "(too long to show)";
+        const chain_text = if (coppiz.render.writeValue(&chain_w, change.key, in_chain))
+            chain_w.buffered()
+        else |_|
+            "(too long to show)";
+        try doc.warn(
+            "genesis: coppiz.toml says {s} = {s}, the chain has {s} (the chain wins)",
+            .{ schema.keys[change.key].name, local_text, chain_text },
+        );
+    }
+    if (drifted == 0) {
+        try doc.ok(
+            "genesis: [genesis] matches the chain on all {d} key(s)",
+            .{cfg.genesis.items.len},
+        );
+    }
 }
 
 fn fileExists(io: std.Io, dir: std.Io.Dir, name: []const u8) !bool {
@@ -1067,6 +1118,59 @@ test "members and doctor work locally on a single-member directory" {
     ) != null);
     try std.testing.expect(std.mem.indexOf(u8, doctor_out, "journal main: head") != null);
     try std.testing.expect(std.mem.indexOf(u8, doctor_out, "FAIL") == null);
+}
+
+test "doctor warns when the local [genesis] table drifts from the chain" {
+    // PRD 0004 *Bootstrap*: `init` reads `[genesis]` once and the chain is
+    // authoritative from then on, so an operator editing the file afterwards
+    // gets no error and no effect. Doctor is where that becomes visible.
+    var bt = try BinTest.init();
+    defer bt.deinit();
+
+    try writeGenesisToml(&bt, "prompt");
+    const init_out = try bt.run(&.{ "init", "--dir", bt.dir, "--journal", "main" });
+    defer test_alloc.free(init_out);
+
+    // In agreement: one ok line, no genesis warning.
+    const agreed = try bt.run(&.{ "doctor", "--dir", bt.dir });
+    defer test_alloc.free(agreed);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        agreed,
+        "ok   genesis: [genesis] matches the chain on all 1 key(s)",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, agreed, "warn genesis:") == null);
+
+    // Edited after init: the chain still says `prompt`, and doctor names
+    // both sides rather than letting the edit look effective.
+    try writeGenesisToml(&bt, "open");
+    const drifted = try bt.run(&.{ "doctor", "--dir", bt.dir });
+    defer test_alloc.free(drifted);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        drifted,
+        "warn genesis: coppiz.toml says cluster.admission = open, " ++
+            "the chain has prompt (the chain wins)",
+    ) != null);
+    // A drift is a warning, not a failure: the node is healthy.
+    try std.testing.expect(std.mem.indexOf(u8, drifted, "FAIL") == null);
+}
+
+/// A `coppiz.toml` carrying only `[genesis] cluster.admission`, for the
+/// drift test: no `listen`, so doctor's wire checks stay out of the way.
+fn writeGenesisToml(bt: *BinTest, admission: []const u8) !void {
+    var buf: [128]u8 = undefined;
+    const text = try std.fmt.bufPrint(
+        &buf,
+        "[genesis]\ncluster.admission = \"{s}\"\n",
+        .{admission},
+    );
+    const file = try bt.tmp.dir.createFile(tio, "data/coppiz.toml", .{
+        .read = true,
+        .truncate = true,
+    });
+    defer file.close(tio);
+    try file.writePositionalAll(tio, text, 0);
 }
 
 test "doctor fails, naming the missing member key, on an empty directory" {
