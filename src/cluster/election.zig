@@ -30,24 +30,168 @@ pub const State = enum(u8) {
 
 /// One member's inputs to the election: everything `leader` needs to rank
 /// it. The caller builds these from the fold's member table and its own
-/// liveness view.
-pub const View = struct {
-    id: [16]u8,
-    seniority: slot.Position,
-    /// The advertised address (borrowed); an `authorities` entry may name
-    /// it, so a DNS rename is a settings change, not an identity change
-    /// (PRD 0003).
-    address: []const u8,
-    state: State,
-    /// The highest `(epoch, seq)` this member has acknowledged — its
-    /// verified head. Used only by `tiebreak = freshest`, and frozen at
-    /// election (OQ 12).
-    last_ack: slot.Position,
-};
+/// liveness view. `Member.View` is the cluster's instantiation; see
+/// `Election` for why the id type is a parameter.
+pub const View = Member.View;
+
+/// The cluster's election: a member id is 16 bytes (PRD 0003).
+pub const Member = Election([16]u8);
+
+pub const leader = Member.leader;
+pub const compareRank = Member.compareRank;
+pub const authorityIndex = Member.authorityIndex;
+
+/// The election over an abstract member id.
+///
+/// PRD 0006 *What the core must get right now* requires that "election is a
+/// pure function over an abstract member set", so that a federation elects
+/// over *groups* by calling the same function with groups as its members
+/// (PRD 0006 G3). Nothing here reads a member id except to return it and to
+/// match it against an `authorities` entry, so the id's width is the only
+/// thing that has to vary: `Id` is any fixed-size byte array, and a
+/// federation instantiates `Election([32]u8)` for a group id derived from a
+/// genesis hash.
+///
+/// This is a parameter today rather than later because the alternative is a
+/// federation that either copies the ranking or widens the cluster's id -
+/// the first drifts, the second is a format break.
+pub fn Election(comptime Id: type) type {
+    return struct {
+        const Self = @This();
+
+        /// The hex length an `authorities` entry needs to name this id.
+        pub const hex_len = @typeInfo(Id).array.len * 2;
+
+        /// One member's inputs to the election: everything `leader` needs to
+        /// rank it. The caller builds these from the fold's member table and
+        /// its own liveness view.
+        pub const View = struct {
+            id: Id,
+            seniority: slot.Position,
+            /// The advertised address (borrowed); an `authorities` entry may
+            /// name it, so a DNS rename is a settings change, not an identity
+            /// change (PRD 0003).
+            address: []const u8,
+            state: State,
+            /// The highest `(epoch, seq)` this member has acknowledged - its
+            /// verified head. Used only by `tiebreak = freshest`, and frozen
+            /// at election (OQ 12).
+            last_ack: slot.Position,
+        };
+
+        /// The leader under `seniority`: the live, fully-synced member with
+        /// the earliest join slot. `null` when none is in the `member` state.
+        fn seniorityLeader(members: []const Self.View) ?Id {
+            var best: ?Self.View = null;
+            for (members) |m| {
+                if (m.state != .member) continue;
+                if (best) |b| {
+                    if (slot.Position.order(m.seniority, b.seniority) == .lt) best = m;
+                } else {
+                    best = m;
+                }
+            }
+            return if (best) |b| b.id else null;
+        }
+
+        /// The index of `member` in the authority list, matched by advertised
+        /// address or by the hex of its id; null when the member is not an
+        /// authority. An authority that matches nobody is skipped by
+        /// construction.
+        pub fn authorityIndex(authorities: []const []const u8, member: Self.View) ?usize {
+            for (authorities, 0..) |authority, i| {
+                if (std.mem.eql(u8, authority, member.address)) return i;
+                if (isHexId(authority, &member.id)) return i;
+            }
+            return null;
+        }
+
+        /// Orders two members the way the mode ranks them: `.lt` means `a` is
+        /// preferred. `seniority` ranks by join slot; `configured` by
+        /// authority list order; `combined` filters by the authority list and
+        /// orders within it by `tiebreak`. When neither member is an authority
+        /// (or the tiebreak ties), the ordering degrades to seniority -
+        /// compareRank ranks and never refuses: the `fallback` setting gates
+        /// `leader`'s election, not this ranking, so the merge rule
+        /// (epoch.survivor) reaches the degradation whenever a branch's leader
+        /// is not on the list.
+        pub fn compareRank(inputs: Inputs, a: Self.View, b: Self.View) std.math.Order {
+            // seniority ignores the authority list, exactly as `leader` does -
+            // the merge survivor must use the same ranking election uses.
+            if (std.mem.eql(u8, inputs.mode, "seniority"))
+                return slot.Position.order(a.seniority, b.seniority);
+            const a_idx = Self.authorityIndex(inputs.authorities, a);
+            const b_idx = Self.authorityIndex(inputs.authorities, b);
+            const configured = std.mem.eql(u8, inputs.mode, "configured");
+            if (configured) {
+                if (a_idx != null and b_idx != null) {
+                    if (a_idx.? < b_idx.?) return .lt;
+                    if (a_idx.? > b_idx.?) return .gt;
+                }
+                if (a_idx != null and b_idx == null) return .lt;
+                if (b_idx != null and a_idx == null) return .gt;
+                return slot.Position.order(a.seniority, b.seniority);
+            }
+            // combined: the list filters, the tiebreak orders.
+            if (a_idx == null and b_idx == null) {
+                return slot.Position.order(a.seniority, b.seniority);
+            }
+            if (a_idx != null and b_idx == null) return .lt;
+            if (b_idx != null and a_idx == null) return .gt;
+            return tiebreakOrder(inputs.tiebreak, a, b);
+        }
+
+        /// The `combined` tiebreak: `seniority` (default) or `freshest`.
+        /// `freshest` prefers the eligible member with the higher acknowledged
+        /// head; ties fall to seniority. `.lt` means `a` is preferred.
+        fn tiebreakOrder(tiebreak: []const u8, a: Self.View, b: Self.View) std.math.Order {
+            if (std.mem.eql(u8, tiebreak, "freshest")) {
+                const o = slot.Position.order(a.last_ack, b.last_ack);
+                if (o == .gt) return .lt;
+                if (o == .lt) return .gt;
+            }
+            return slot.Position.order(a.seniority, b.seniority);
+        }
+
+        /// The leader under the mode, or `null` when the mode forbids one.
+        /// `null` under `configured`/`combined` with `fallback = stall` means
+        /// writes are refused (`no_leader`); under the seniority fallback the
+        /// senior member leads instead.
+        pub fn leader(inputs: Inputs, members: []const Self.View) ?Id {
+            // n = 1: a single member is its own leader - "list self, or empty
+            // list = self" (PRD 0003 table), the case that makes a one-member
+            // cluster a complete cluster under every mode.
+            if (members.len == 1 and members[0].state == .member) return members[0].id;
+
+            if (std.mem.eql(u8, inputs.mode, "seniority")) return seniorityLeader(members);
+
+            // configured and combined: only live, fully-synced authorities
+            // lead.
+            var best: ?Self.View = null;
+            for (members) |m| {
+                if (m.state != .member) continue;
+                if (Self.authorityIndex(inputs.authorities, m) == null) continue;
+                if (best) |b| {
+                    if (Self.compareRank(inputs, m, b) == .lt) best = m;
+                } else {
+                    best = m;
+                }
+            }
+            if (best == null) {
+                if (std.mem.eql(u8, inputs.fallback, "seniority")) {
+                    return seniorityLeader(members);
+                }
+                return null; // stall: no leader, `append` returns no_leader
+            }
+            return best.?.id;
+        }
+    };
+}
 
 /// The election's settings inputs, resolved from the fold (PRD 0003
 /// settings table). Passed as strings so election stays schema-free; the
-/// caller maps the settings state to these.
+/// caller maps the settings state to these. Shared by every instantiation:
+/// the settings are the same whether the members are nodes or groups.
 pub const Inputs = struct {
     /// "seniority" | "configured" | "combined".
     mode: []const u8,
@@ -60,32 +204,6 @@ pub const Inputs = struct {
     fallback: []const u8,
 };
 
-/// The leader under `seniority`: the live, fully-synced member with the
-/// earliest join slot. `null` when none is in the `member` state.
-fn seniorityLeader(members: []const View) ?[16]u8 {
-    var best: ?View = null;
-    for (members) |m| {
-        if (m.state != .member) continue;
-        if (best) |b| {
-            if (slot.Position.order(m.seniority, b.seniority) == .lt) best = m;
-        } else {
-            best = m;
-        }
-    }
-    return if (best) |b| b.id else null;
-}
-
-/// The index of `member` in the authority list, matched by advertised
-/// address or by 32-hex-char member id; null when the member is not an
-/// authority. An authority that matches nobody is skipped by construction.
-pub fn authorityIndex(authorities: []const []const u8, member: View) ?usize {
-    for (authorities, 0..) |authority, i| {
-        if (std.mem.eql(u8, authority, member.address)) return i;
-        if (authority.len == 32 and isHexId(authority, member.id)) return i;
-    }
-    return null;
-}
-
 fn hexNibble(c: u8) ?u8 {
     return switch (c) {
         '0'...'9' => c - '0',
@@ -95,90 +213,16 @@ fn hexNibble(c: u8) ?u8 {
     };
 }
 
-/// Whether `text` is the hex of `id` (either letter case).
-pub fn isHexId(text: []const u8, id: [16]u8) bool {
-    if (text.len != 32) return false;
-    var i: usize = 0;
-    while (i < 16) : (i += 1) {
+/// Whether `text` is the hex of `id` (either letter case). Takes the id as a
+/// slice so one implementation serves every id width.
+pub fn isHexId(text: []const u8, id: []const u8) bool {
+    if (text.len != id.len * 2) return false;
+    for (id, 0..) |byte, i| {
         const hi = hexNibble(text[i * 2]) orelse return false;
         const lo = hexNibble(text[i * 2 + 1]) orelse return false;
-        if ((hi << 4) | lo != id[i]) return false;
+        if ((hi << 4) | lo != byte) return false;
     }
     return true;
-}
-
-/// Orders two members the way the mode ranks them: `.lt` means `a` is
-/// preferred. `seniority` ranks by join slot; `configured` by authority list
-/// order; `combined` filters by the authority list and orders within it by
-/// `tiebreak`. When neither member is an authority (or the tiebreak ties),
-/// the ordering degrades to seniority — compareRank ranks and never
-/// refuses: the `fallback` setting gates `leader`'s election, not this
-/// ranking, so the merge rule (epoch.survivor) reaches the degradation
-/// whenever a branch's leader is not on the list.
-pub fn compareRank(inputs: Inputs, a: View, b: View) std.math.Order {
-    // seniority ignores the authority list, exactly as `leader` does — the
-    // merge survivor must use the same ranking election uses.
-    if (std.mem.eql(u8, inputs.mode, "seniority"))
-        return slot.Position.order(a.seniority, b.seniority);
-    const a_idx = authorityIndex(inputs.authorities, a);
-    const b_idx = authorityIndex(inputs.authorities, b);
-    const configured = std.mem.eql(u8, inputs.mode, "configured");
-    if (configured) {
-        if (a_idx != null and b_idx != null) {
-            if (a_idx.? < b_idx.?) return .lt;
-            if (a_idx.? > b_idx.?) return .gt;
-        }
-        if (a_idx != null and b_idx == null) return .lt;
-        if (b_idx != null and a_idx == null) return .gt;
-        return slot.Position.order(a.seniority, b.seniority);
-    }
-    // combined: the list filters, the tiebreak orders.
-    if (a_idx == null and b_idx == null) return slot.Position.order(a.seniority, b.seniority);
-    if (a_idx != null and b_idx == null) return .lt;
-    if (b_idx != null and a_idx == null) return .gt;
-    return tiebreakOrder(inputs.tiebreak, a, b);
-}
-
-/// The `combined` tiebreak: `seniority` (default) or `freshest`. `freshest`
-/// prefers the eligible member with the higher acknowledged head; ties fall
-/// to seniority. `.lt` means `a` is preferred.
-fn tiebreakOrder(tiebreak: []const u8, a: View, b: View) std.math.Order {
-    if (std.mem.eql(u8, tiebreak, "freshest")) {
-        const o = slot.Position.order(a.last_ack, b.last_ack);
-        if (o == .gt) return .lt;
-        if (o == .lt) return .gt;
-    }
-    return slot.Position.order(a.seniority, b.seniority);
-}
-
-/// The leader under the mode, or `null` when the mode forbids one. `null`
-/// under `configured`/`combined` with `fallback = stall` means writes are
-/// refused (`no_leader`); under the seniority fallback the senior member
-/// leads instead.
-pub fn leader(inputs: Inputs, members: []const View) ?[16]u8 {
-    // n = 1: a single member is its own leader — "list self, or empty list
-    // = self" (PRD 0003 table), the case that makes a one-member cluster a
-    // complete cluster under every mode.
-    if (members.len == 1 and members[0].state == .member) return members[0].id;
-
-    if (std.mem.eql(u8, inputs.mode, "seniority")) return seniorityLeader(members);
-
-    // configured and combined: only live, fully-synced authorities lead.
-    var best: ?View = null;
-    for (members) |m| {
-        if (m.state != .member) continue;
-        if (authorityIndex(inputs.authorities, m) == null) continue;
-        if (best) |b| {
-            if (compareRank(inputs, m, b) == .lt) best = m;
-        } else {
-            best = m;
-        }
-    }
-    if (best == null) {
-        if (std.mem.eql(u8, inputs.fallback, "seniority")) return seniorityLeader(members);
-        return null; // stall: no leader, `append` returns no_leader
-    }
-    return best.?.id;
 }
 
 // ---------------------------------------------------------------------------
@@ -412,4 +456,83 @@ fn idHex(id: [16]u8) [32]u8 {
         buf[i * 2 + 1] = hex[byte & 0xf];
     }
     return buf;
+}
+
+test "(PRD 0006 G3) the same election functions rank groups as they rank members" {
+    // PRD 0006's "what the core must get right now" table requires election
+    // to be a pure function over an abstract member set, so a federation can
+    // elect over groups by calling it with groups as members. G3 states the
+    // check: import both and assert they are the same functions over
+    // different member types.
+    //
+    // A group id is a genesis hash, so 32 bytes where a member id is 16.
+    const Group = Election([32]u8);
+
+    // Same functions, not lookalikes: the cluster's exported `leader` and
+    // `compareRank` *are* the 16-byte instantiation's.
+    try std.testing.expect(leader == Member.leader);
+    try std.testing.expect(compareRank == Member.compareRank);
+    try std.testing.expect(authorityIndex == Member.authorityIndex);
+    try std.testing.expect(Member.hex_len == 32);
+    try std.testing.expect(Group.hex_len == 64);
+    // Distinct instantiations, so the ids really are different types.
+    try std.testing.expect(Member.View != Group.View);
+
+    const g1 = [_]u8{0x11} ** 32;
+    const g2 = [_]u8{0x22} ** 32;
+    const groups = [_]Group.View{
+        .{
+            .id = g2,
+            .seniority = .{ .epoch = 1, .seq = 2 },
+            .address = "group-two",
+            .state = .member,
+            .last_ack = .{ .epoch = 1, .seq = 9 },
+        },
+        .{
+            .id = g1,
+            .seniority = .{ .epoch = 1, .seq = 1 },
+            .address = "group-one",
+            .state = .member,
+            .last_ack = .{ .epoch = 1, .seq = 3 },
+        },
+    };
+
+    // seniority: the earliest join slot leads, groups exactly as members.
+    try std.testing.expectEqual(g1, Group.leader(seniority_inputs, &groups).?);
+
+    // The authority list names a group by its hex id, 64 chars wide, and
+    // the same code path that matches a member's 32-char hex matches it.
+    var hex: [64]u8 = undefined;
+    _ = try std.fmt.bufPrint(&hex, "{x}", .{g2});
+    const authorities = [_][]const u8{&hex};
+    const configured = Inputs{
+        .mode = "configured",
+        .authorities = &authorities,
+        .tiebreak = "seniority",
+        .fallback = "stall",
+    };
+    try std.testing.expectEqual(@as(?usize, 0), Group.authorityIndex(&authorities, groups[0]));
+    try std.testing.expect(Group.authorityIndex(&authorities, groups[1]) == null);
+    try std.testing.expectEqual(g2, Group.leader(configured, &groups).?);
+
+    // A syncing group is never eligible, the same rule members get.
+    var syncing = groups;
+    syncing[0].state = .syncing;
+    try std.testing.expect(Group.leader(configured, &syncing) == null);
+
+    // And the ranking the merge rule uses is the same function too: under
+    // `combined` + `freshest`, the group with the higher acknowledged head
+    // ranks first, which is what `epoch.survivor` asks of members.
+    const both = [_][]const u8{ "group-one", "group-two" };
+    const combined = Inputs{
+        .mode = "combined",
+        .authorities = &both,
+        .tiebreak = "freshest",
+        .fallback = "stall",
+    };
+    try std.testing.expectEqual(
+        std.math.Order.lt,
+        Group.compareRank(combined, groups[0], groups[1]),
+    );
+    try std.testing.expectEqual(g2, Group.leader(combined, &groups).?);
 }

@@ -7,6 +7,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- Election is now a function over an abstract member id, which is what PRD
+  0006's "what the core must get right now" table asks the core to settle
+  before a federation exists. `election.zig` exposes `Election(Id)` for any
+  fixed-size id; the cluster is `Election([16]u8)`, exported as
+  `election.Member`, and `election.leader`, `compareRank` and
+  `authorityIndex` still name exactly those functions, so no caller changed.
+  A federation elects over groups by instantiating it with a 32-byte group
+  id, and gets the same ranking the merge rule uses rather than a copy of
+  it. `election.isHexId` takes the id as a slice so one implementation
+  serves every width.
+
 - The library's thread behaviour is pinned by a test, not just documented
   (PRD 0005 G5): opening a node, appending and reading at size 1 spawns no
   thread, `ClusterNode.init` spawns none, and `start()` is the only call

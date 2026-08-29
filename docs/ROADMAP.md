@@ -116,6 +116,10 @@ the phases.
   a group at `max_members` or a journal too hot for one group; storage cost
   measured as binding. The core carries PRD 0006's "what must be right now"
   table from step 1.
+  - Of that table, "election is a pure function over an abstract member set"
+    landed 2026-08-29: `election.Election(Id)`, with the cluster as
+    `Election([16]u8)`. A federation instantiates it with a group id instead
+    of copying the ranking (PRD 0006 G3, election half).
 - `quorum` leadership mode (Raft-style) as a fourth `leadership.mode` value,
   for clusters at n ≥ 3 that want a strict single sequencer without stalling;
   also the only case in which a federation would need an uneven group count
