@@ -7,6 +7,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The survivor of a healed partition no longer records a merge whose request
+  for the loser's branch was never sent. `requestSync` sends nothing while
+  another sync is in flight, and the merge was committed regardless, which
+  stopped the member folding replicated records until that connection died.
+  It now commits only once the request is on the wire.
+
 - The four transport closers that free themselves no longer carry a
   `closed: bool`. `TcpConn`, `TcpListener`, `PipeConn` and `HubListener`
   each read that flag at the top of `closeFn` and destroyed the allocation
