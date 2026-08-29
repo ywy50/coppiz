@@ -62,3 +62,6 @@ explores whether and how to build one (OQ 41).
 | [0034](0034-leader-lease.md) | Discussion | Leader lease: none, AP posture; the timings are measurement (OQ 37) |
 | [0035](0035-record-store-tooling.md) | Discussion | Record-store tooling: hand-maintained plus the kit's checkers (OQ 41) |
 | [0036](0036-ci-toolchain-pin.md) | Discussion | CI and toolchain pin: Zig 0.16.0 with a musl/glibc matrix (OQ 45) |
+| [0037](0037-write-ack-layer.md) | Discussion | `write.ack`: the `local` variant and its layer (OQ 3) |
+| [0038](0038-sync-knobs-layer.md) | Discussion | The `sync.*` knobs: layer and values (OQ 56) |
+| [0039](0039-observability-metrics-logs.md) | Discussion | Observability: metrics format and log destination (OQ 29) |
