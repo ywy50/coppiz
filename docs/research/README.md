@@ -22,4 +22,4 @@ project's research says so and keeps that project's read date.
 | # | Status | Question |
 |---|---|---|
 | [0001](0001-evidence-carried-from-the-state-store-survey.md) | Draft | What clanker's state-store survey established that coppiz inherits |
-| [0002](0002-comparison-benchmarks.md) | Draft | Which stores to benchmark coppiz against, which workloads and metrics make it fair, and the current state of each candidate |
+| [0002](0002-comparison-benchmarks.md) | Draft (re-read 2026-08-29) | Which stores to benchmark coppiz against, which workloads and metrics make it fair, and the current state of each candidate |
