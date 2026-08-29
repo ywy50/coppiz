@@ -7,6 +7,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A `coppiz.toml` scalar value whose quotes do not balance is now refused at
+  startup instead of being stored with the stray quote in it. `data_dir =
+  "/var/lib/coppiz` with the closing quote forgotten used to name a
+  directory beginning with a quote character; the same held for `listen`,
+  `member.key_file`, `log.level`, `storage.fsync` and a peer `address`. The
+  quote check the array items already had now covers the scalars too.
+
 - A journal whose TTL enforcement is turned off again now still removes the
   entries that were stamped for deletion while it was on. The fast path
   that skips computing a checkpoint's removal set read the current
