@@ -31,7 +31,7 @@ The "at head" decision treats an empty cursor map as "nothing left to sync", but
 
 ## Resolution
 
-Fixed: `driveBackfill` no longer clears `syncing` for a chainless joiner whose first tick beats its handshake — the hello_ack still seeds the backfill cursor.
+Fixed: `driveBackfill` no longer clears `syncing` for a chainless joiner whose first tick beats its handshake - the hello_ack still seeds the backfill cursor.
 
 ## Verification
 

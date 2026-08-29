@@ -24,7 +24,7 @@ The pre-failover replay rule (past-term data folds) was implemented for `.data` 
 
 ## Resolution
 
-Fixed: `applyData` routes past-term journal `settings`/`checkpoint` records with a pre_failover flag — the author is checked against the record's own slot leader and the settle rule is skipped for the historical checkpoint — so a follower with pre-failover data reopens; regression test added.
+Fixed: `applyData` routes past-term journal `settings`/`checkpoint` records with a pre_failover flag - the author is checked against the record's own slot leader and the settle rule is skipped for the historical checkpoint - so a follower with pre-failover data reopens; regression test added.
 
 ## Verification
 
