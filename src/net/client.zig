@@ -284,7 +284,7 @@ fn ignoreRecord(_: *usize, _: *const slot.Slot, _: ?*const entry.Entry) anyerror
 test "a read page whose cursor does not advance is refused, not looped" {
     var hub = transport.Hub.init(test_alloc);
     defer hub.deinit(tio);
-    var listener = try hub.listen(test_alloc, "server");
+    var listener = try hub.listen(tio, test_alloc, "server");
     defer listener.close(tio);
     var dialer = try hub.dialer(test_alloc, "client");
     defer dialer.deinit();
