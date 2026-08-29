@@ -159,6 +159,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- Journals can be frozen. `journal.allow_append = false` stops a journal
+  taking new entries - an append is refused `journal_frozen` - while its
+  `settings`, `stale` and `checkpoint` entries still fold, so the entries
+  already in it expire away on the normal retention and the freeze can be
+  lifted by another settings change. The rule lives in the fold, so every
+  member refuses the same entry, and the setting is in the chain, so it
+  survives a reopen. This is a journal's end state: coppiz has no drop
+  (RFC 0019 option A).
+
 - A fourth example host, `examples/short-process/`: the command-line shape
   that opens a data directory, appends, reads and closes once per
   invocation, instead of holding the node open for the life of the process.

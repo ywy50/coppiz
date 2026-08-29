@@ -23,6 +23,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **chain** | the sequence of slots linked by `prev_slot_hash`; one per journal as drafted (OQ 7) | PRD 0001 |
 | **fold** | the deterministic computation of state (members, settings, leader, stale/expired sets) from the chain alone | PRD 0001 |
 | **control entry** | an entry whose kind is not `data`: `genesis`, `create_journal`, `join`, `leave`, `epoch`, `merge`, `settings`, `stale`, `checkpoint` | PRD 0001 |
+| **frozen journal** | a journal with `journal.allow_append = false`: it takes no new `data` entries and is refused `journal_frozen`, while its `settings`, `stale` and `checkpoint` entries still fold, so it can wind down and be unfrozen. A journal's end state, since coppiz has no drop | PRD 0001, RFC 0019 |
 | **validation** | the pure rule every member applies to a `(slot, entry)` before accepting it; a refusal names its reason | PRD 0001 |
 | **unslotted queue** | a member's durable list of entries it authored or received that have no slot yet | PRD 0001 |
 | **backfill** | a member fetching slots it lacks from any member, verified against the chain | PRD 0001 |
