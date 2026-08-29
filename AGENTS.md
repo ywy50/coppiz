@@ -88,7 +88,7 @@ evidence with read dates. Neither RFC nor research requires the other.
   record it belongs to before the turn ends; tighten a stale sentence rather
   than stacking a new one beside it.
 
-# BEGIN agents-setup local-session-workflow
+<!-- BEGIN project-kit session workflow - managed by project-kit/install.sh; do not edit by hand -->
 
 ## Collaboration conventions
 
@@ -356,4 +356,4 @@ pull request for review after the agent finishes - it never merges. Do not
 pass `--publish` ad hoc when the repository has configured a default;
 `--no-publish` remains available to keep one specific pass local.
 
-# END agents-setup local-session-workflow
+<!-- END project-kit session workflow -->

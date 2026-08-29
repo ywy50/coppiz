@@ -7,7 +7,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
-- The agents-setup session workflow (project-kit install, never-overwrite
+- The project-kit session workflow (install with the never-overwrite
   fix in the kit itself): `workflows/` (continue, fix, plan, review,
   handoff, deliver), the plans/handovers/reviews/postmortems/prompts/
   agent-rules directories with their templates, `docs/WORKFLOW.md`,
