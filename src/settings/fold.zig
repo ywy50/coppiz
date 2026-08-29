@@ -153,11 +153,14 @@ pub fn decodePayload(
 /// Applies a settings entry to `state` (PRD 0004 validation order):
 /// live-changeability of every key in the state before the entry, then the
 /// whole-state rules on the resulting state, then commit. A refusal leaves
-/// `state` untouched and names the failing check.
+/// `state` untouched and names the failing check. `members` is the member
+/// table the authority-resolvability rule needs (validate.zig); the journal
+/// scope has no leadership keys, so an empty slice is fine there.
 pub fn applySettings(
     state: *schema.SettingsState,
     payload: SettingsPayload,
     member_count: u32,
+    members: []const validate.MemberView,
 ) !void {
     for (payload.changes) |change| {
         if (!validate.isLiveChangeable(change.key, state)) return error.NotLiveChangeable;
@@ -167,7 +170,7 @@ pub fn applySettings(
     for (payload.changes) |change| {
         try candidate.set(change.key, change.value);
     }
-    try validate.validateState(&candidate, member_count);
+    try validate.validateState(&candidate, member_count, members);
     // Commit by swapping the validated candidate in. Re-applying the changes
     // to `state` would clone again, and a failure part-way through would
     // leave the entry half-applied *and* refused - a replicated fold that
@@ -190,7 +193,9 @@ pub fn applyGenesis(
     for (changes) |change| {
         try candidate.set(change.key, change.value);
     }
-    try validate.validateState(&candidate, 1);
+    // Genesis runs at n = 1, where the empty-authority exception exempts the
+    // ghost rule too; no member table exists before the founder is appended.
+    try validate.validateState(&candidate, 1, &.{});
     // Atomic commit, as in `applySettings`.
     std.mem.swap(schema.SettingsState, state, &candidate);
 }
@@ -300,7 +305,10 @@ test "applySettings clones-before-commit: a refusal leaves the state intact" {
         .journal_id = [_]u8{0} ** 16,
         .changes = &changes,
     };
-    try std.testing.expectError(error.TtlEnforceAllNeedsDefault, applySettings(&state, payload, 1));
+    try std.testing.expectError(
+        error.TtlEnforceAllNeedsDefault,
+        applySettings(&state, payload, 1, &.{}),
+    );
     try std.testing.expectEqualSlices(u8, &before, &(try state.hash(test_alloc)));
 
     // The same change is accepted once the default is non-zero.
@@ -309,7 +317,7 @@ test "applySettings clones-before-commit: a refusal leaves the state intact" {
         .{ .key = ttl_enforce, .value = .{ .enum_value = schema.enumValue(ttl_enforce, "all").? } },
     };
     payload.changes = &good;
-    try applySettings(&state, payload, 1);
+    try applySettings(&state, payload, 1, &.{});
     try std.testing.expectEqualStrings("all", state.getEnum(ttl_enforce));
     try std.testing.expectEqual(@as(u64, 5000), state.getU64(ttl_default));
 }
@@ -329,7 +337,7 @@ test "applySettings refuses leadership changes while reconfigurable=false" {
         .journal_id = [_]u8{0} ** 16,
         .changes = &changes,
     };
-    try std.testing.expectError(error.NotLiveChangeable, applySettings(&state, payload, 1));
+    try std.testing.expectError(error.NotLiveChangeable, applySettings(&state, payload, 1, &.{}));
 }
 
 test "applyGenesis may start the cluster frozen" {
@@ -406,7 +414,7 @@ test "applySettings commit is atomic: an OOM on the second change leaves the sta
         var failing = std.testing.FailingAllocator.init(test_alloc, .{ .fail_index = i });
         var candidate = schema.SettingsState.initDefaults(failing.allocator()) catch continue;
         defer candidate.deinit();
-        if (applySettings(&candidate, payload, 1)) |_| {
+        if (applySettings(&candidate, payload, 1, &.{})) |_| {
             try std.testing.expectEqual(@as(u64, 5000), candidate.getU64(ttl_default));
             const got = candidate.getList(authorities);
             try std.testing.expectEqual(items.len, got.len);
