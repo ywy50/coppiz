@@ -33,22 +33,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
    AP-with-merge posture at n = 2 is accepted, with `configured` + `stall`
    available per cluster as the CP alternative.
 <a id="oq-3"></a>
-3. **Default `write.ack`: `local` or `slotted`?** [OPEN] `local` keeps a partitioned
-   member writing (AP); `slotted` waits for a position (CP-ish, and even then
-   a position can move once at merge unless the mode forbids two leaders).
-   The shipped write path acknowledges at the slot everywhere - `node.append`,
-   the wire append and `cluster.ClusterNode.localAppend` all block until the
-   slot folds back (`localAppend`'s docstring names a `write.ack = local`
-   variant as this open question) - so what is open is a `local` ack option
-   and its *layer*: PRDs 0001 and 0006 call `write.ack` a setting
-   (`local | slotted`, honoured by the owning group), PRD 0003 assumes a
-   writer can ask for `slotted` without saying where the choice lives.
-
-   Disagreement cannot fork the journal, which
-   suggests local config or a call parameter with a configured default.
-   *Blocks:* none (the slot-ack write path shipped); the `local` variant and
-   its layer stay open. *Answer from:* the operator; also
-   clanker's RFC 0019 open question 1 ("stall or keep working").
+3. **Default `write.ack`: `local` or `slotted`?** [OPEN]
+    The decision is explored in
+    [RFC 37](rfcs/0037-write-ack-layer.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* none (the slot-ack write path shipped); the `local` variant and its layer stay open. *Answer from:* the operator; also clanker's RFC 0019 open question 1 ("stall or keep working").
 <a id="oq-38"></a>
 38. **Service API auth.** [OPEN]
     What authenticates a service-API caller off loopback? The decision is
@@ -329,27 +317,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     local-config key - and the provisional defaults stand until measurement.
     The `genesis`-at-cap refusal question stays open.
 <a id="oq-56"></a>
-56. **The `sync.*` knobs have no layer and no values.** [OPEN] Three settings are
-    named in the PRDs but appear in no settings table: `sync.page_bytes`
-    (backfill page bound, PRD 0001 *Backfill*), `sync.lag_slots` (when a
-    `syncing` member counts as at head, and so leader-eligible, PRD 0003
-    *Member states*), and `sync.gap_timeout_ms` (when a held gap is refused
-    `unknown_target`, PRD 0002 failure modes). `sync.page_bytes` got a
-    provisional local value (64 KiB, `provisional_page_bytes` in node.zig)
-    and `sync.unslotted_max_bytes` a local-config key (OQ 55); the other two
-    still have no layer and no value.
-
-    For each: is it local config
-    or a chain setting - disagreeing on `lag_slots` could elect different
-    leaders, which suggests chain; a page size only risks its own tail,
-    which suggests local - and what is the default? Sibling of OQ 55.
-    *Blocks:* none - backfill and member states shipped with the provisional
-    values.
-    (Operator, 2026-08-29: `sync.page_bytes` must be operator-configurable,
-    not a hardcoded constant - a local-config key replaces
-    `provisional_page_bytes`; that is a code change. `lag_slots` and
-    `gap_timeout_ms` stay open.)
-
+56. **The `sync.*` knobs have no layer and no values.** [OPEN]
+    The decision is explored in
+    [RFC 38](rfcs/0038-sync-knobs-layer.md) (Discussion); this entry is the
+    stable pointer. Sibling of OQ 55.
 <a id="oq-61"></a>
 61. **What bounds per-process memory?** [OPEN] [PRD 0001](prds/0001-journal-core.md)
     goal 6 requires entry size, journal count *and per-process memory* to be
@@ -546,11 +517,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     Recorded in PRD 0003's status.
     *Blocks:* PRD 0003 phase 1 (it changes how the node loop is written).
 <a id="oq-29"></a>
-29. **Observability.** [OPEN] `coppiz status` / `node.status()`: leader, epoch, head,
-    members and states, lag per follower, pending checkpoint bytes, last
-    merge. Metrics format (Prometheus text?) and where logs go. *Blocks:*
-    none - `coppiz status`/`members`/`doctor` shipped; the metrics format
-    and log destination stay open.
+29. **Observability.** [OPEN]
+    The decision is explored in
+    [RFC 39](rfcs/0039-observability-metrics-logs.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* none - `coppiz status`/`members`/`doctor` shipped; the metrics format and log destination stay open.
 <a id="oq-32"></a>
 32. **Clock assumptions.** [RESOLVED] `slot_ts_ms` is the leader's wall clock; TTL
     depends on it; nothing depends on monotonic time except failure
