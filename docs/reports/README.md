@@ -56,6 +56,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - merge data re-slots refuse `settings`/`checkpoint`/`stale` records: the heal never completes (and a `leave` before data can lose the branch)](bugs/2026-08-29-merge-data-reslot-refusals.md)
 - [2026-08-29 - `zig build test` randomly hangs: the e2e cluster tests fsync every record onto the host filesystem, and a stalled fsync blocks the suite forever](bugs/2026-08-29-e2e-fsync-stall-hang.md)
 - [2026-08-29 - a chainless member panics on a peer's control record: the fold unwraps a null epoch](bugs/2026-08-29-chainless-member-null-epoch-panic.md)
+- [2026-08-29 - `zig build test` is red on main: a crashed-compaction test builds its path out of an undefined buffer tail](bugs/2026-08-29-store-recovery-test-undefined-path.md)
 - [2026-08-29 - the now-live merge settle rule kills the leader's checkpoint cadence: `MergeSettling` is fatal to the loop after every heal](bugs/2026-08-29-settle-rule-kills-checkpoint-cadence.md)
 - [2026-08-29 - the re-slotted `create_journal` variant is reachable live: any member can create journals via the forward path](bugs/2026-08-29-live-create-journal-bypass.md)
 - [2026-08-29 - `parsePeerKey` frees the old `public_key` before validating the new one: a malformed second key is a double-free](bugs/2026-08-29-parse-peer-key-double-free.md)

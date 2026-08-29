@@ -137,6 +137,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   signature is checked. `Node.epoch()` returns `?u64` instead of unwrapping,
   exactly as `Node.leader()` does, and `slotFor` turns the absent case into
   `error.NoEpoch` rather than a panic on the whole write path.
+- `zig build test` is green again. The crashed-compaction recovery test
+  formatted its snapshot paths into a `[64]u8` buffer and then passed the
+  whole array to `createFile` instead of the 50-byte slice `bufPrint`
+  returned, so 14 undefined bytes were part of the file name and macOS
+  refused it with `BadPathName`. The test now keeps the returned slice.
 
 ### Changed
 
