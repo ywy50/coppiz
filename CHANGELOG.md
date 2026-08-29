@@ -24,6 +24,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- `coppiz init` refuses a data directory that has already been bootstrapped,
+  with `already_initialized`, instead of replacing its `member.key` and
+  appending a second control chain. Replacing the key changed the member's
+  derived id, so it was no longer the member its own control fold records:
+  `admit` returned `not_leader` forever and the old secret was gone. The
+  check runs before anything is written, and a directory that has journals
+  but no key is refused too.
+- `journal.init` now owns the data directory handle on every path and
+  documents it; `cmdInit` no longer closes it as well. The store's plain
+  `defer st.deinit()` closes the handle on the error path too, so any
+  failure after `Store.open` succeeded closed the same descriptor twice.
 - `zig build test` no longer hangs. Every three-node test ran on an
   `std.Io.Threaded` with the default `async_limit` (`cpu_count - 1`), and
   three `ClusterNode`s need 15 async slots, so on a machine with 16 or fewer

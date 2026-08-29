@@ -176,6 +176,12 @@ pub const Store = struct {
         return self.journals.contains(journal_id);
     }
 
+    /// How many journals the directory already holds. `init` uses it to tell
+    /// a fresh data directory from one that has already been bootstrapped.
+    pub fn journalCount(self: *const Store) usize {
+        return self.journals.count();
+    }
+
     /// Every journal id the store holds, for the node's open fold.
     pub fn journalIds(self: *const Store, allocator: std.mem.Allocator) ![][16]u8 {
         const ids = try allocator.alloc([16]u8, self.journals.count());

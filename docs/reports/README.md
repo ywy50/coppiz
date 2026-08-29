@@ -69,6 +69,8 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - the simulator's `heal` discards losing-side messages still in inboxes](bugs/2026-08-29-sim-heal-drops-inbox.md)
 - [2026-08-29 - `zig build test` never finishes: three-node tests deadlock the `Io` thread pool](bugs/2026-08-29-embed-cluster-async-limit-deadlock.md)
 - [2026-08-29 - length-prefix arithmetic computes in the prefix's own narrow type: a peer-chosen `payload_len` panics the decoder](bugs/2026-08-29-entry-decode-payload-len-overflow.md)
+- [2026-08-29 - `coppiz init` on an already-initialized directory replaces `member.key` and writes a second control chain](bugs/2026-08-29-init-overwrites-member-key.md)
+- [2026-08-29 - `cmdInit`'s `errdefer data_dir.close(io)` closes a descriptor the store already closed](bugs/2026-08-29-init-data-dir-double-close.md)
 - [2026-08-28 - sweep3: a chainless joiner whose first tick fires before admission never backfills](bugs/2026-08-28-sweep3-joiner-syncing-race.md)
 - [2026-08-28 - sweep3: an accepted append between ~8 MB and 16 MB can never be replicated](bugs/2026-08-28-sweep3-oversized-entry-unreplicable.md)
 - [2026-08-28 - sweep3: `decodeRecord` length-prefix arithmetic overflows u32 - remote crash](bugs/2026-08-28-sweep3-record-length-overflow.md)

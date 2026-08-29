@@ -971,6 +971,17 @@ fn loadMemberKey(
 /// umask, which would leave the secret group- and world-readable.
 const member_key_perm: std.Io.File.Permissions = .fromMode(0o600);
 
+/// Whether the data directory already carries a member key - the marker
+/// that it has an identity `init` must not replace.
+fn memberKeyExists(io: std.Io, data_dir: std.Io.Dir) !bool {
+    const file = data_dir.openFile(io, "member.key", .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    file.close(io);
+    return true;
+}
+
 /// Writes a fresh member key to `member.key`. Used by `init`.
 pub fn writeMemberKey(
     _: std.mem.Allocator,
@@ -996,8 +1007,13 @@ pub fn writeMemberKey(
 /// Bootstraps a cluster: writes the member key and the genesis entry
 /// (control journal, epoch 1, founder = this member), then optionally a
 /// first data journal. Refuses invalid initial settings before writing
-/// anything (PRD 0004 G6). The store must be freshly opened on an empty
-/// directory.
+/// anything (PRD 0004 G6), and refuses a directory that has already been
+/// bootstrapped with `already_initialized` (bug
+/// 2026-08-29-init-overwrites-member-key).
+///
+/// Takes ownership of `data_dir` on every path: once the store is open it
+/// closes the handle, and the refusals before that close it themselves. A
+/// caller must not close it (bug 2026-08-29-init-data-dir-double-close).
 pub fn init(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -1006,18 +1022,34 @@ pub fn init(
     first_journal: ?[]const u8,
     now: *const fn (std.Io) i64,
 ) !void {
+    // Until `Store.open` succeeds the handle is this function's; after it,
+    // `st.deinit()` closes it on every path, so the flag disarms the errdefer
+    // rather than closing the same descriptor twice.
+    var dir_owned = true;
+    errdefer if (dir_owned) data_dir.close(io);
+
     // Validate the whole-state first: nothing is written until the genesis
     // would fold to a valid state (G6 writes no chain on refusal).
     var probe = try schema.SettingsState.initDefaults(allocator);
     defer probe.deinit();
     try settings_fold.applyGenesis(&probe, initial);
 
+    // A directory that already has a member key has an identity: overwriting
+    // it changes this member's derived id, so it is no longer the member its
+    // own control fold records, and nothing can restore the old key.
+    if (try memberKeyExists(io, data_dir)) return error.AlreadyInitialized;
+
+    const st = try store.Store.open(allocator, io, data_dir, .{});
+    dir_owned = false;
+    defer st.deinit();
+    // A key-less directory can still hold journals (a key removed by hand, a
+    // partially rolled-back init): a second genesis would put two control
+    // chains in one store, and `foldAll` picks whichever it finds first.
+    if (st.journalCount() != 0) return error.AlreadyInitialized;
+
     var keypair = crypto.sign.Ed25519.KeyPair.generate(io);
     try writeMemberKey(allocator, io, data_dir, keypair);
     const member_id = chain.deriveMemberId(keypair.public_key.toBytes());
-
-    const st = try store.Store.open(allocator, io, data_dir, .{});
-    defer st.deinit();
 
     var control_id: [16]u8 = undefined;
     io.random(&control_id);
@@ -1737,4 +1769,62 @@ test "replay_forward leaves queued entries for the leader instead of local re-sl
         }.cb);
         try std.testing.expectEqual(@as(usize, 0), queued);
     }
+}
+
+fn memberKeyBytes(env: *TestEnv, out: *[64]u8) !void {
+    const file = try env.tmp.dir.openFile(tio, "data/member.key", .{});
+    defer file.close(tio);
+    const n = try file.readPositionalAll(tio, out, 0);
+    try std.testing.expectEqual(@as(usize, 64), n);
+}
+
+test "init refuses an already-initialized directory instead of replacing its key" {
+    // Bug 2026-08-29-init-overwrites-member-key: the second init overwrote
+    // member.key, so the member's derived id no longer matched the one its
+    // own control fold records, and appended a second control chain.
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+    try init(test_alloc, tio, try env.dataDir(), &.{}, "main", &fakeClock);
+
+    var before: [64]u8 = undefined;
+    try memberKeyBytes(&env, &before);
+
+    try std.testing.expectError(
+        error.AlreadyInitialized,
+        init(test_alloc, tio, try env.dataDir(), &.{}, "main", &fakeClock),
+    );
+
+    var after: [64]u8 = undefined;
+    try memberKeyBytes(&env, &after);
+    try std.testing.expectEqualSlices(u8, &before, &after);
+
+    // One control chain, one journal - not two of each.
+    var node = try openNode(&env);
+    defer node.deinit();
+    try std.testing.expectEqual(@as(u32, 1), node.control.journals.count());
+}
+
+test "a failure after the store opens leaves the data directory usable" {
+    // Bug 2026-08-29-init-data-dir-double-close: `init` hands the handle to
+    // the store, whose plain `defer st.deinit()` closes it on the error path
+    // too, so the caller's errdefer closed the same descriptor a second time.
+    // An over-long --journal name is the reachable post-Store.open failure.
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+    const long_name = try test_alloc.alloc(u8, 70_000);
+    defer test_alloc.free(long_name);
+    @memset(long_name, 'a');
+
+    try std.testing.expectError(
+        error.SettingsTooLarge,
+        init(test_alloc, tio, try env.dataDir(), &.{}, long_name, &fakeClock),
+    );
+
+    // The genesis landed before the refusal and the directory still opens:
+    // the handle was closed exactly once, by the store.
+    var node = try openNode(&env);
+    defer node.deinit();
+    try std.testing.expect(node.leader() != null);
 }
