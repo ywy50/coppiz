@@ -114,6 +114,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-30 - a segment header naming another journal closes the file twice](bugs/2026-08-30-journal-id-mismatch-double-close.md)
 - [2026-08-30 - a member's redial backoff ratchets to 8 s and never comes back down](bugs/2026-08-30-redial-backoff-never-resets.md)
 - [2026-08-30 - a `members_page` address at the u16 maximum aborts the node before admission](bugs/2026-08-30-members-page-addr-len-narrow-int.md)
+- [2026-08-30 - a member can occupy another member's id-named authority slot by advertising its id as an address](bugs/2026-08-30-authority-address-id-collision.md)
 
 ### Investigations
 
