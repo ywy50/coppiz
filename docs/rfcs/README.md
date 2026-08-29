@@ -31,3 +31,6 @@ reference for what one would do ([OQ 41](../open-questions.md#oq-41)).
 | [0003](0003-append-durability-fsync-policy.md) | Decided | What does `storage.fsync` govern? (ADR 0008) |
 | [0004](0004-queue-drain-shape.md) | Discussion | What shape should the queue drain take? (tombstone / watermark / batched) |
 | [0005](0005-decode-ownership.md) | Discussion | Should a decoded message own its parts, or borrow from the frame? |
+| [0006](0006-multi-process-one-data-directory.md) | Discussion | Several processes on one data directory: native multi-process opens or the wire fallback? (OQ 47) |
+| [0007](0007-service-api-auth.md) | Discussion | What authenticates service-API callers off loopback? (OQ 38) |
+| [0008](0008-wire-encryption.md) | Discussion | Wire encryption: plaintext v1, and what protects a non-private deployment (OQ 23) |
