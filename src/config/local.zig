@@ -237,24 +237,29 @@ fn parsePeerKey(
 ) ParseError!void {
     const peer = &config.peers.items[config.peers.items.len - 1];
     if (std.mem.eql(u8, key, "address")) {
+        const fresh = try allocator.dupe(u8, unquote(value));
         allocator.free(peer.address);
-        peer.address = try allocator.dupe(u8, unquote(value));
+        peer.address = fresh;
         return;
     }
     if (std.mem.eql(u8, key, "public_key")) {
-        if (peer.public_key) |old| allocator.free(old);
         const hex = unquote(value);
         // A public_key names the peer's identity for the join allowlist; a
         // key that is not exactly 64 hex chars could never verify. Refuse
         // it here — the config layer is deliberately strict — instead of
         // silently dropping it from the allowlist at serve time, where the
         // operator sees only a refused join (bug
-        // 2026-08-28-cmdserve-silent-allowlist-drop).
+        // 2026-08-28-cmdserve-silent-allowlist-drop). The old value is
+        // freed only after the new one validated and dupe'd, so a refusal
+        // cannot leave a dangling pointer for deinit (bug
+        // 2026-08-29-parse-peer-key-double-free).
         if (hex.len != 64) return error.InvalidValue;
         for (hex) |c| {
             if (!std.ascii.isHex(c)) return error.InvalidValue;
         }
-        peer.public_key = try allocator.dupe(u8, hex);
+        const fresh = try allocator.dupe(u8, hex);
+        if (peer.public_key) |old| allocator.free(old);
+        peer.public_key = fresh;
         return;
     }
     return error.UnknownKey;
@@ -461,6 +466,15 @@ test "a malformed peer public_key is refused at parse time" {
     const non_hex = "[[peers]]\naddress = \"10.0.0.2:6400\"\npublic_key = \"" ++
         "gg" ** 32 ++ "\"\n";
     try std.testing.expectError(error.InvalidValue, parse(test_alloc, non_hex, &config3));
+
+    // Bug 2026-08-29-parse-peer-key-double-free: a valid key followed by a
+    // malformed duplicate — the refusal must not leave the freed first
+    // value dangling for deinit (the GPA aborts on the double free).
+    var config4 = Config{ .allocator = test_alloc };
+    defer config4.deinit();
+    const dup = "[[peers]]\naddress = \"10.0.0.2:6400\"\npublic_key = \"" ++
+        "ab" ** 32 ++ "\"\npublic_key = \"bad\"\n";
+    try std.testing.expectError(error.InvalidValue, parse(test_alloc, dup, &config4));
 }
 
 test "genesis initial settings fold back to the parsed state (PRD 0004 G6 half)" {
