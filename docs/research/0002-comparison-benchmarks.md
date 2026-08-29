@@ -59,13 +59,13 @@ and adds the external comparison rows.
   `libsql-server` release 2025-02-14) and LiteFS has had no release since
   2025-04-22 plus a documented "no support" notice - both still benchmarkable,
   both flagged. CR-SQLite has no append/history semantics until its v2 -
-  [Options found](#crsqlite).
+  [Options found](#cr-sqlite---the-ap-sqlite-extension).
 - **The AP/CRDT family (Loro, Automerge, Yjs, Marmot) is a semantics
   comparison, not a throughput one:** published numbers are text-edit
   workloads (dmonad/crdt-benchmarks, Loro's perf page), none measure an
   append-log shape, and none show merge determinism. A partition/heal
   scenario row is the honest comparison; a throughput row is not -
-  [Options found](#automerge-yjs-loro).
+  [Options found](#automerge-yjs-loro---crdt-libraries).
 
 ## Scope and method
 
@@ -136,7 +136,7 @@ first-consumer shape and stay out of v1 of the suite.
   plus fsync policy. Run in both durability classes (see below).
 - **W2 - multi-writer append (3 nodes).** 2–3 writers, one journal. For
   coppiz: writers land on different members, forward to the leader
-  ([docs/README.md](../README.md#architecture)); for raft systems: clients
+  ([docs/README.md](../README.md)); for raft systems: clients
   hit the leader. Measures ordering contention and the leader write path.
 - **W3 - read-your-writes / tail read.** Immediately after an append, read
   the latest k entries (k = 1, 64). Local reads for coppiz/SQLite/libSQL
@@ -709,7 +709,7 @@ cannot settle).
 
 ## References
 
-- **coppiz records:** [docs/README.md](../README.md#architecture),
+- **coppiz records:** [docs/README.md](../README.md),
   [OQ 3, 19, 36, 47, 54](../open-questions.md),
   [PRD 0001](../prds/0001-journal-core.md), [PRD 0003](../prds/0003-membership-and-leadership.md),
   [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md),
