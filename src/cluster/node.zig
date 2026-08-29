@@ -2376,7 +2376,12 @@ pub const ClusterNode = struct {
     /// truncate every journal to the common prefix, re-fold, and backfill
     /// the survivor's chain (which carries the merge and the re-slots).
     fn becomeLoser(self: *ClusterNode, conn_id: u64, peer_branch_epoch: u64) !void {
-        const my_leader = self.node.control.epoch.?.leader;
+        // No chain, nothing to lose: the same guard `survivorVs` carries, so
+        // neither entry point unwraps a null epoch.
+        // No chain, nothing to lose: the same guard `survivorVs` carries, so
+        // neither entry point unwraps a null epoch.
+        const my_epoch = self.node.control.epoch orelse return;
+        const my_leader = my_epoch.leader;
         const branch_head = self.node.control.head orelse return;
         // A branch of my own, opened no earlier than the peer's. Every new
         // epoch sets the branch facts and nothing used to clear them, so a
@@ -2484,10 +2489,20 @@ pub const ClusterNode = struct {
     }
 
     /// Which branch survives, mine (`.a`) or the peer's (`.b`); null when
-    /// the peer's branch leader is not a member (forged).
+    /// this member has no chain of its own to compare, or when the peer's
+    /// branch leader is not a member (forged). Both answers make the caller
+    /// drop the connection, which is the right response to a `merge_offer`
+    /// aimed at a member that has nothing to merge.
+    ///
+    /// The chain check is here rather than at each caller because
+    /// `onDivergence` guarded it and `onMergeOffer` did not, and the unwrap
+    /// below turned one `merge_offer` frame from any admitted peer into an
+    /// abort of a still-backfilling member (bug
+    /// 2026-08-30-chainless-merge-offer-panic).
     fn survivorVs(self: *ClusterNode, peer_leader: [16]u8) ?epoch.Winner {
         const inputs = self.electionInputs();
-        const my_leader = self.node.control.epoch.?.leader;
+        const my_epoch = self.node.control.epoch orelse return null;
+        const my_leader = my_epoch.leader;
         const my_view = self.viewOf(my_leader) orelse return null;
         const peer_view = self.viewOf(peer_leader) orelse return null;
         return epoch.survivor(
@@ -5206,4 +5221,80 @@ test "a member's redial backoff resets when its connection comes back" {
     try std.testing.expectEqual(initial_redial_backoff_ms, after.backoff_ms);
     try std.testing.expectEqual(@as(u64, 0), after.dial_at_ms);
     try std.testing.expect(after.backoff_ms < 5000);
+}
+
+test "a chainless member drops a peer's merge_offer instead of aborting" {
+    // `survivorVs` unwrapped `control.epoch.?`. `onDivergence` guards that
+    // unwrap; `onMergeOffer` did not, and `frameAllowed` admits
+    // `.merge_offer` from any connection whose hello completed. So one
+    // 32-byte frame from any admitted peer aborted a member that had not
+    // finished backfilling its first chain - the state every joiner is in
+    // between admission and its first sync page (bug
+    // 2026-08-30-chainless-merge-offer-panic).
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    // A joiner's directory: a member key and no chain at all. `journal.init`
+    // is deliberately not called.
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        defer dd.close(oio);
+        const kp = crypto.sign.Ed25519.KeyPair.generate(oio);
+        try journal.writeMemberKey(test_alloc, oio, dd, kp);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+    try std.testing.expectEqual(@as(?u64, null), node.epoch());
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "joiner");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "joiner",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+    try std.testing.expect(cn.node.control.epoch == null);
+
+    const Sink = struct {
+        fn send(_: *anyopaque, _: std.Io, _: []const u8) net.transport.SendError!void {}
+        fn recv(
+            _: *anyopaque,
+            _: std.Io,
+            _: std.mem.Allocator,
+        ) net.transport.RecvError![]u8 {
+            return error.EndOfStream;
+        }
+        fn nop(_: *anyopaque, _: std.Io) void {}
+    };
+    var sink_ctx: u8 = 0;
+    try cn.conns.put(test_alloc, 9, .{ .conn = .{
+        .ctx = &sink_ctx,
+        .recv_frame = Sink.recv,
+        .send_frame = Sink.send,
+        .shutdown_fn = Sink.nop,
+        .close_fn = Sink.nop,
+    } });
+
+    // The offer names a branch leader this member has never heard of, which
+    // is all a chainless member can ever see.
+    try cn.onMergeOffer(9, .{
+        .branch_leader = [_]u8{9} ** 16,
+        .branch_head = .{ .epoch = 2, .seq = 7 },
+    });
+
+    // Dropped, not acted on: no merge state, still no chain, loop alive.
+    try std.testing.expect(cn.survivorVs([_]u8{9} ** 16) == null);
+    try std.testing.expectEqual(@as(?u64, null), cn.merging_from);
+    try std.testing.expectEqual(@as(?u64, null), cn.merging_to);
+    try std.testing.expect(cn.node.control.epoch == null);
+    try std.testing.expect(cn.conns.getPtr(9).?.closing);
 }

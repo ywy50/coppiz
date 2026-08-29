@@ -106,6 +106,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   exactly the id's hex width, all hex digits, is now read as an id only;
   every other entry is read as an address only.
 
+- A member that has not finished its first backfill no longer aborts on a
+  peer's `merge_offer`. `survivorVs` unwrapped the member's current epoch,
+  which is null until a chain has been folded, and only one of its two
+  callers guarded that. `merge_offer` is admitted on any connection whose
+  hello completed, so a joiner was one frame away from a panic before it had
+  folded a single record. The guard now lives in `survivorVs`, whose callers
+  already close the connection on `null`.
+
 ### Added
 
 - A fourth example host, `examples/short-process/`: the command-line shape
