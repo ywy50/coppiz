@@ -98,6 +98,10 @@ pub const Refusal = error{
     BadCheckpoint,
     /// A control entry (stale, checkpoint, settings) with a malformed payload.
     BadControlPayload,
+    /// The slot's pinned entry_hash does not match the entry's header — a
+    /// forged or payload-stripped record (bug
+    /// 2026-08-28-sweep3-header-only-entry-accepted).
+    BadEntryHash,
 };
 
 pub const ApplyError = error{OutOfMemory} || Refusal;
@@ -136,6 +140,7 @@ pub fn refusalName(err: anyerror) ?[]const u8 {
         error.BadGenesis => "bad_genesis",
         error.BadCheckpoint => "bad_checkpoint",
         error.BadControlPayload => "bad_control_payload",
+        error.BadEntryHash => "bad_entry_hash",
         else => null,
     };
 }
@@ -291,6 +296,7 @@ pub const FoldState = struct {
         en: *const entry.Entry,
     ) ApplyError!void {
         try self.checkChainContinuity(sl);
+        try checkSlotEntryMatch(sl, en);
         if (en.kind == .genesis) {
             try self.applyGenesis(sl, en);
             return;
@@ -364,6 +370,7 @@ pub const FoldState = struct {
         en: *const entry.Entry,
     ) ApplyError!void {
         try self.checkChainContinuity(sl);
+        try checkSlotEntryMatch(sl, en);
         if (!std.mem.eql(u8, &en.journal, &self.journal_id)) return error.WrongJournal;
         const leader = self.epoch.?.leader;
         if (!std.mem.eql(u8, &sl.leader, &leader)) return error.NotLeader;
@@ -392,6 +399,7 @@ pub const FoldState = struct {
         en: *const entry.Entry,
     ) ApplyError!void {
         try self.checkChainContinuity(sl);
+        try checkSlotEntryMatch(sl, en);
         // A journal's first record is written in the term that created it.
         // A future term's record (the losing branch of a partition) is
         // refused here and skipped by the refold; a *past* term's record is
@@ -453,6 +461,19 @@ pub const FoldState = struct {
         const pk = crypto.sign.Ed25519.PublicKey.fromBytes(member.public_key) catch
             return error.BadSignature;
         slot.verify(pk, sl) catch return error.BadSignature;
+    }
+
+    /// The slot's pinned entry_hash must match the entry's header hash. The
+    /// slot is leader-signed, so this rejects any record whose entry bytes
+    /// were forged or payload-stripped after the slot pinned them — the
+    /// header of a genuinely compacted entry is preserved byte-identically,
+    /// so it still matches (bug
+    /// 2026-08-28-sweep3-header-only-entry-accepted).
+    pub fn checkSlotEntryMatch(
+        sl: *const slot.Slot,
+        en: *const entry.Entry,
+    ) Refusal!void {
+        if (!std.mem.eql(u8, &sl.entry_hash, &entry.entryHash(en))) return error.BadEntryHash;
     }
 
     /// The entry's author must be a member of the cluster, its signature
@@ -1605,6 +1626,42 @@ test "an oversized payload is refused with too_large before anything is folded" 
     try std.testing.expectEqual(head_before, cluster.data.head);
     try std.testing.expectEqualSlices(u8, &head_hash_before, &cluster.data.head_slot_hash);
     try std.testing.expectEqual(entry_count_before, cluster.data.entries.count());
+}
+
+test "a payload-stripped record whose header does not match its slot is refused" {
+    // Bug 2026-08-28-sweep3-header-only-entry-accepted: nothing verified
+    // that a header-only (payload_omitted) record was a genuine compaction —
+    // the slot's pinned entry_hash is now cross-checked against the entry's
+    // header, rejecting a forged/stripped record whose slot pins different
+    // content.
+    var fix = Fix.init();
+    var cluster = try clusterWithDataJournal(&fix);
+    defer {
+        cluster.control.deinit();
+        cluster.data.deinit();
+    }
+    try appendData(&fix, &cluster.control, &cluster.data, 0, "real", 1002);
+
+    // A genuine entry's header, decoded alone: the compacted shape.
+    const original = try fix.entryFor(.data, fix.data_id, 2, 0, "original");
+    var header_buf: [entry.header_len]u8 = undefined;
+    entry.encodeHeader(&original, &header_buf);
+    var stripped = try entry.decode(&header_buf);
+    stripped.payload = &.{};
+    try std.testing.expect(stripped.payload_omitted);
+
+    // Slot it with a hash that does not match the header (a forged slot).
+    const sl = try fix.slotFor(
+        1,
+        2,
+        [_]u8{0xAA} ** 32,
+        cluster.data.head_slot_hash,
+        1003,
+    );
+    try std.testing.expectError(
+        error.BadEntryHash,
+        cluster.data.applyData(&cluster.control, &sl, &stripped),
+    );
 }
 
 test "chain continuity: bad prev, gapped seq, and backwards clocks are refused" {
