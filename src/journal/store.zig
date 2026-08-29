@@ -1323,6 +1323,10 @@ test "open recovers a crashed compaction: the newer generation wins, stale files
     const journal_id = "0123456789abcdef".*;
 
     var snap_names: [8][64]u8 = undefined;
+    // The formatted path, not the whole 64-byte buffer: `bufPrint` writes a
+    // 50-character path and leaves the tail undefined, and passing the array
+    // by pointer handed `createFile` those bytes as part of the name.
+    var snap_paths: [8][]const u8 = undefined;
     var snap_bytes: [8][]u8 = undefined;
     var snap_count: usize = 0;
     defer for (snap_bytes[0..snap_count]) |b| test_alloc.free(b);
@@ -1340,8 +1344,7 @@ test "open recovers a crashed compaction: the newer generation wins, stale files
             const n = try seg.file.readPositionalAll(tio, buf, 0);
             try std.testing.expectEqual(@as(usize, @intCast(len)), n);
             snap_bytes[i] = buf;
-            snap_names[i] = undefined;
-            _ = try std.fmt.bufPrint(
+            snap_paths[i] = try std.fmt.bufPrint(
                 &snap_names[i],
                 "data/{x}/seg-{d:0>8}",
                 .{ journal_id, i + 1 },
@@ -1356,7 +1359,7 @@ test "open recovers a crashed compaction: the newer generation wins, stale files
     }
 
     for (snap_bytes[0..snap_count], 0..) |bytes, i| {
-        const file = try env.tmp.dir.createFile(tio, &snap_names[i], .{
+        const file = try env.tmp.dir.createFile(tio, snap_paths[i], .{
             .read = true,
             .truncate = true,
             .permissions = data_file_perm,

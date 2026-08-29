@@ -137,6 +137,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   advance (`protocol_error`) instead of asserting on it: the cursor is the
   peer's, so a bad one was a panic in a safe build and an unbounded request
   loop in a release build.
+- `zig build test` is green again. The crashed-compaction recovery test
+  formatted its snapshot paths into a `[64]u8` buffer and then passed the
+  whole array to `createFile` instead of the 50-byte slice `bufPrint`
+  returned, so 14 undefined bytes were part of the file name and macOS
+  refused it with `BadPathName`. The test now keeps the returned slice.
 
 ### Changed
 
