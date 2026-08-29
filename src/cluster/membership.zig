@@ -90,8 +90,8 @@ pub fn applyJoin(
     sl: *const slot.Slot,
     en: *const entry.Entry,
 ) ApplyError!void {
-    const payload = decodeJoinPayload(fold.allocator, en.payload) catch
-        return error.BadControlPayload;
+    const payload = decodeJoinPayload(fold.allocator, en.payload) catch |err|
+        return chain.decodeCatch(err, error.BadControlPayload);
     defer payload.deinit(fold.allocator);
     const derived = chain.deriveMemberId(payload.public_key);
     if (!std.mem.eql(u8, &payload.member_id, &derived)) return error.BadJoin;
