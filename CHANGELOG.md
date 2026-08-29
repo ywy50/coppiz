@@ -7,6 +7,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The survivor of a healed partition no longer records a merge whose request
+  for the loser's branch was never sent. `requestSync` sends nothing while
+  another sync is in flight, and the merge was committed regardless, which
+  stopped the member folding replicated records until that connection died.
+  It now commits only once the request is on the wire.
+
 - A member no longer discards a committed suffix of its chain because it once
   saw an ordinary failover. Every new epoch set the "my branch" facts and
   nothing cleared them, so the loser of any later divergence truncated back
