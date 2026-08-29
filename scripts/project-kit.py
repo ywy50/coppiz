@@ -268,8 +268,9 @@ def link_is_valid(source: Path, target: str) -> bool:
         return True
     text = destination.read_text(encoding="utf-8")
     anchors = {anchor(line.lstrip("#").strip()) for line in text.splitlines() if line.startswith("#")}
-    # HTML anchors (<a id="...">) are valid targets too; the open-questions
-    # register uses them so 'OQ n' links can jump to a specific entry.
+    # HTML anchors (<a id="...">) are valid targets too; a record can use
+    # them so a link jumps to a specific entry (as the former open-questions
+    # register did for its 'OQ n' entries).
     anchors |= set(re.findall(r'<a\s+id="([^"]+)"', text))
     return fragment in anchors
 
