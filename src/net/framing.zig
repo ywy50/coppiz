@@ -22,7 +22,12 @@ pub const len_bytes = 4;
 
 /// Upper bound on a frame body. Provisional, like the queue bound and the
 /// other OQ 55/36 sizes; a larger frame is refused, never buffered.
-pub const max_body_bytes: u32 = 8 * 1024 * 1024;
+///
+/// Must exceed `journal.max_entry_bytes` (16 MiB default) by the record
+/// and message overhead: an accepted entry has to fit in one frame, or it
+/// can never be replicated (bug
+/// 2026-08-28-sweep3-oversized-entry-unreplicable).
+pub const max_body_bytes: u32 = 16 * 1024 * 1024 + 1024 * 1024;
 
 pub const ReadError = error{ EndOfStream, OversizedFrame, OutOfMemory } || std.Io.Reader.Error;
 
