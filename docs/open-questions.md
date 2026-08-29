@@ -111,10 +111,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     **Resolved 2026-08-29** (operator): `freshest` stays a selectable
     `tiebreak` value with the shipped election-time semantics.
 <a id="oq-31"></a>
-31. **Read consistency.** [OPEN] Reads are local. Is "read your own writes" enough,
-    or do consumers need a linearizable read (ask the leader for its head
-    and wait for it)? clanker's board fold is tolerant; a claim/lease
-    consumer would not be. *Blocks:* nothing in v1; shapes the read API.
+31. **Read consistency.** [OPEN]
+    The decision is explored in
+    [RFC 18](rfcs/0018-read-consistency.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* nothing in v1; shapes the read API.
 <a id="oq-33"></a>
 33. **Conflicting `settings` on two branches.** [RESOLVED] After a merge the surviving
     branch's value wins and the losing branch's `settings` entries are
@@ -479,19 +479,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     0005 phase 5. *Answer from:* the operator, jointly with clanker's RFC
     0019 next steps.
 <a id="oq-34"></a>
-34. **Journal lifecycle.** [PARTIAL] Who may create a journal (any member? leader only?
-    a setting?), and can one be *dropped* - which would be the only
-    non-chain deletion - or only frozen (no further appends) and expired
-    away? *Blocks:* PRD 0001 phase 4 (`node.journal(name)` semantics).
-
-    **Resolved in part 2026-08-27** (implementation decision, PRD 0001's
-    status): leader-only `create_journal` in v1; the "dropped" half stays
-    open. The enforcement has an open bypass - any member can forward a
-    signed `create_journal` and every fold accepts it
-    ([bug 2026-08-29 - live create-journal bypass](reports/bugs/2026-08-29-live-create-journal-bypass.md)) -
-    so "leader-only" is the intended rule, not yet the enforced one.
-    *Blocks:* none - phase 4 shipped; the bypass is a code fix.
-    (Operator, 2026-08-29: track the fix - the bug stays the enforcement gap.)
+34. **Journal lifecycle.** [PARTIAL]
+    The decision is explored in
+    [RFC 19](rfcs/0019-journal-lifecycle.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* none - phase 4 shipped with leader-only creation; the drop half is this RFC's answer.
 <a id="oq-35"></a>
 35. **TOML parser for `coppiz.toml`.** [RESOLVED] Vendor clanker's (same toolchain,
     already patched for 0.16) or hand-roll the subset the local config
@@ -502,22 +493,15 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     2026-08-29 TOML fixes; no `vendor/` directory exists, so ADR 0001's
     vendor allowance went unused.
 <a id="oq-42"></a>
-42. **Cursor and id encoding for consumers.** [OPEN] `epoch:seq` text cursors and
-    `author:author_seq` ids are drafted; is a single opaque token better for
-    an HTTP API, and should ids be exposed to consumers at all or only
-    cursors? *Blocks:* none - the API shipped with `(epoch, seq)` cursors
-    and `(author, author_seq)` ids; the opaque-token question stays open
-    with the service API.
+42. **Cursor and id encoding for consumers.** [OPEN]
+    The decision is explored in
+    [RFC 20](rfcs/0020-cursor-id-encoding.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* none - the API shipped; the HTTP encoding is decided at wrapper time.
 <a id="oq-46"></a>
-46. **Which non-clanker hosts are the design targets?** [OPEN] coppiz is
-    general-purpose by brief (clarified 2026-08-21), but every concrete
-    constraint so far comes from one host. Naming two or three other host
-    shapes - a CLI tool that runs in short processes, a long-lived service on
-    a few machines, an embedded/edge fleet with flaky links - would show
-    which API shapes are general and which are clanker's. A second example
-    host in `examples/` is the roadmap's way of keeping this honest. *Blocks:*
-    nothing; shapes PRD 0005's API before it freezes. *Answer from:* the
-    operator.
+46. **Which non-clanker hosts are the design targets?** [OPEN]
+    The decision is explored in
+    [RFC 21](rfcs/0021-host-shapes.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* nothing; shapes PRD 0005's API before it freezes.
 <a id="oq-47"></a>
 47. **Several processes on one data directory, SQLite-style.** [OPEN]
     Is the SQLite habit - several processes opening one data directory
