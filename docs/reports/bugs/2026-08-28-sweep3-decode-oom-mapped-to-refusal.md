@@ -4,11 +4,16 @@
 
 - **What failed:** The decode catch-sites (`mapSettingsDecodeError` and the `genesis`/`create_journal`/`join` catches) fold `OutOfMemory` into a refusal (`InvalidSettings`/`BadGenesis`/`BadControlPayload`). The apply side and `registerEntry`'s contract treat OOM as fatal - a refusal leaves that member's fold behind the group.
 - **Impact:** On an allocator failure while decoding one entry, the member refuses it while everyone else folds it - permanent fold divergence, silently served onward.
-- **Resolution:** Still open. Statically validated.
+- **Resolution:** Resolved - the decode catch-sites now propagate `OutOfMemory` (a new `decodeCatch` helper, plus an explicit arm in `mapSettingsDecodeError`), and `onSlot` re-raises it instead of swallowing it in the "chain's rules decide" arm.
 
 ## Status
 
-Open.
+Resolved - `decodeCatch` (chain.zig) propagates `OutOfMemory` through the
+`applyGenesis` / `applyCreateJournalValidated` / `applyJoin` decode
+catch-sites, `mapSettingsDecodeError` special-cases it before the generic
+mapping, and `onSlot` (node.zig) returns it instead of swallowing it in the
+`else` arm — the member stops serving rather than keep a fold that diverged
+on an allocator failure.
 
 ## Symptom and impact
 
@@ -27,7 +32,16 @@ The decode-side error mapping contradicts the apply-side convention: OOM must pr
 
 ## Resolution
 
-Not yet fixed. Suggested fix: propagate `OutOfMemory` through the decode catch-sites (special-case it before the generic mapping). A regression test should fail the payload decode under a failing allocator and assert the fold treats it as fatal, not as a refusal.
+Fixed: `decodeCatch` (chain.zig) returns `error.OutOfMemory` unchanged
+through the `applyGenesis`, `applyCreateJournalValidated` and `applyJoin`
+catch-sites; `mapSettingsDecodeError` gained an explicit
+`error.OutOfMemory => error.OutOfMemory` arm; and `onSlot`'s error switch
+gained `error.OutOfMemory => return error.OutOfMemory` so the broadcast path
+treats OOM as fatal instead of swallowing it as "the chain's rules decide".
+Regression test: "decode OutOfMemory propagates as fatal, never a refusal"
+asserts the mapping, and fails the settings decode under a
+`std.testing.FailingAllocator`, expecting `error.OutOfMemory` from
+`applyControl`.
 
 ## Verification
 

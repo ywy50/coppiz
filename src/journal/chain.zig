@@ -552,8 +552,8 @@ pub const FoldState = struct {
     ) ApplyError!void {
         if (self.head != null) return error.BadGenesis;
         if (sl.epoch != 1 or sl.seq != 1) return error.BadGenesis;
-        var payload = decodeGenesisPayload(self.allocator, en.payload) catch
-            return error.BadGenesis;
+        var payload = decodeGenesisPayload(self.allocator, en.payload) catch |err|
+            return decodeCatch(err, error.BadGenesis);
         defer payload.deinit(self.allocator);
         const founder_id = deriveMemberId(payload.founder_key);
         if (!std.mem.eql(u8, &en.author, &founder_id)) return error.BadGenesis;
@@ -605,8 +605,8 @@ pub const FoldState = struct {
         sl: *const slot.Slot,
         en: *const entry.Entry,
     ) ApplyError!void {
-        var payload = decodeCreateJournalPayload(self.allocator, en.payload) catch
-            return error.BadControlPayload;
+        var payload = decodeCreateJournalPayload(self.allocator, en.payload) catch |err|
+            return decodeCatch(err, error.BadControlPayload);
         defer payload.deinit(self.allocator);
         if (self.journals.contains(payload.journal_id)) return error.JournalExists;
         if (payload.name.len == 0 or payload.name.len > max_journal_name) {
@@ -921,8 +921,18 @@ fn id16LessThan(_: void, a: [16]u8, b: [16]u8) bool {
     return std.mem.order(u8, &a, &b) == .lt;
 }
 
+/// The decode catch-sites fold a *chain* decode failure into the named
+/// refusal, but OutOfMemory must propagate: the apply-side convention
+/// treats OOM as fatal (registerEntry), and folding it into a refusal
+/// would make the member silently diverge from every member that did not
+/// OOM (bug 2026-08-28-sweep3-decode-oom-mapped-to-refusal).
+pub fn decodeCatch(err: anyerror, refusal: ApplyError) ApplyError {
+    return if (err == error.OutOfMemory) error.OutOfMemory else refusal;
+}
+
 fn mapSettingsDecodeError(err: anyerror) ApplyError {
     return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
         error.UnknownKey => error.UnknownSetting,
         error.ScopeMismatch => error.ScopeMismatch,
         else => error.InvalidSettings,
@@ -1464,6 +1474,62 @@ test "settings: cluster changes apply, frozen leadership refuses, bad keys name 
         const sl2 = try nextControlSlot(&fix, &fold, entry.entryHash(&m2.en), 1005);
         try std.testing.expectError(error.NotLiveChangeable, fold.applyControl(&sl2, &m2.en));
     }
+}
+
+test "decode OutOfMemory propagates as fatal, never a refusal" {
+    // mapSettingsDecodeError and the decode catch-sites fold a *chain*
+    // decode failure into their named refusal, but OutOfMemory must
+    // propagate — the apply side treats OOM as fatal (registerEntry), and
+    // folding it into a refusal would make the member silently diverge
+    // from every member that did not OOM (bug
+    // 2026-08-28-sweep3-decode-oom-mapped-to-refusal).
+    try std.testing.expectEqual(
+        ApplyError.OutOfMemory,
+        mapSettingsDecodeError(error.OutOfMemory),
+    );
+    try std.testing.expectEqual(
+        ApplyError.OutOfMemory,
+        decodeCatch(error.OutOfMemory, error.BadGenesis),
+    );
+    try std.testing.expectEqual(
+        ApplyError.OutOfMemory,
+        decodeCatch(error.OutOfMemory, error.BadControlPayload),
+    );
+    try std.testing.expectEqual(
+        ApplyError.BadGenesis,
+        decodeCatch(error.InvalidLength, error.BadGenesis),
+    );
+    try std.testing.expectEqual(
+        ApplyError.UnknownSetting,
+        mapSettingsDecodeError(error.UnknownKey),
+    );
+
+    // The fold under a failing allocator: the settings decode's first
+    // allocation fails inside applyControl, which must report OutOfMemory —
+    // the fatal error — not InvalidSettings (a refusal the broadcast path
+    // would swallow as "the chain's rules decide").
+    var fix = Fix.init();
+    var fa = std.testing.FailingAllocator.init(test_alloc, .{});
+    var fold = try FoldState.init(fa.allocator(), true, [_]u8{0} ** 16);
+    defer fold.deinit();
+    const g = try fix.genesisPair(&.{});
+    defer test_alloc.free(g.payload);
+    try fold.applyControl(&g.sl, &g.en);
+
+    const max_journals = schema.keyIndex("cluster.max_journals").?;
+    const changes = [_]validate.Change{.{ .key = max_journals, .value = .{ .u32 = 64 } }};
+    const pl = SettingsPayload{
+        .scope = .cluster,
+        .journal_id = [_]u8{0} ** 16,
+        .changes = &changes,
+    };
+    const buf = try test_alloc.alloc(u8, settings_fold.payloadLen(pl));
+    defer test_alloc.free(buf);
+    try settings_fold.encodePayload(pl, buf);
+    const en = try fix.entryFor(.settings, fix.control_id, 2, 0, buf);
+    const sl = try fix.slotFor(1, 2, entry.entryHash(&en), fold.head_slot_hash, 1001);
+    fa.fail_index = fa.alloc_index;
+    try std.testing.expectError(error.OutOfMemory, fold.applyControl(&sl, &en));
 }
 
 test "data entries: valid appends, and each refusal names its reason" {

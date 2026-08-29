@@ -1901,6 +1901,12 @@ pub const ClusterNode = struct {
                 }
                 try self.onDivergence(conn_id, m.sl.leader, m.sl.epoch);
             },
+            // An OutOfMemory mid-fold leaves the fold partially advanced;
+            // the apply-side convention treats it as fatal (registerEntry),
+            // and the member must stop serving rather than keep a fold that
+            // diverges from every member that did not OOM (bug
+            // 2026-08-28-sweep3-decode-oom-mapped-to-refusal).
+            error.OutOfMemory => return error.OutOfMemory,
             else => {
                 // NotLeader (a stale leader's broadcast), DuplicateConflict,
                 // etc. — the chain's own rules decide; nothing to do.
