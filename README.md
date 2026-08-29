@@ -222,7 +222,7 @@ the records, not here.
 | [docs/ROADMAP.md](docs/ROADMAP.md) | what ships in what order |
 | [CHANGELOG.md](CHANGELOG.md), [RELEASES.md](RELEASES.md) | consumer-visible changes; version and release policy |
 | `src/journal/`, `src/settings/`, `src/config/` | the single-member core: codecs, chain, segments, store, schema, local config |
-| `src/cluster/`, `src/sim/` | membership, election, epochs and merge (pure); the deterministic simulator |
+| `src/cluster/`, `src/sim/` | membership, election, epochs, merge and the node loop (pure core + `node.zig`); the deterministic simulator |
 | `examples/` | one embedded host per shape (embed-single, embed-cluster, sidecar) — built by `zig build examples`, each a test |
 | `src/root.zig`, `src/main.zig` | the library; the node binary |
 
