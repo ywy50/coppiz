@@ -19,8 +19,8 @@ status quo, one out-of-the-box option, and a recommendation whose confidence
 is a number from 0 to 10. When it is decided, set its status here and in the
 file, and write the ADR.
 
-There is no tool maintaining this store yet; clanker's `rfc` tool is the
-reference for what one would do ([OQ 41](../open-questions.md#oq-41)).
+There is no tool maintaining this store yet; [RFC 0035](0035-record-store-tooling.md)
+explores whether and how to build one (OQ 41).
 
 ## Inventory
 
@@ -56,3 +56,9 @@ reference for what one would do ([OQ 41](../open-questions.md#oq-41)).
 | [0028](0028-cross-group-routing.md) | Discussion | Cross-group routing and read semantics (OQ 51) |
 | [0029](0029-group-identity-in-headers.md) | Discussion | What group identity the core headers carry now (OQ 52) |
 | [0030](0030-membership-discovery.md) | Discussion | Membership and discovery at 10⁵ (OQ 53) |
+| [0031](0031-stale-who.md) | Discussion | Who may mark stale beyond the author? (OQ 6) |
+| [0032](0032-archival-checkpoint.md) | Discussion | Archival checkpoint: a leader-signed root over a prefix (OQ 24) |
+| [0033](0033-clanker-integration-path.md) | Discussion | The clanker integration path: the spike is the integration (OQ 30) |
+| [0034](0034-leader-lease.md) | Discussion | Leader lease: none, AP posture; the timings are measurement (OQ 37) |
+| [0035](0035-record-store-tooling.md) | Discussion | Record-store tooling: hand-maintained plus the kit's checkers (OQ 41) |
+| [0036](0036-ci-toolchain-pin.md) | Discussion | CI and toolchain pin: Zig 0.16.0 with a musl/glibc matrix (OQ 45) |

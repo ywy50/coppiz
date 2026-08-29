@@ -126,13 +126,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     PRD 0003's status.
     *Blocks:* PRD 0003 phase 3.
 <a id="oq-37"></a>
-37. **Failure-detector timings and leader lease.** [OPEN] Heartbeat 1 s, suspect at
-    5 s are placeholders. Is there a leader *lease* (the old leader stops
-    slotting when it cannot hear a majority of its last-known members), or
-    does it keep slotting until it sees a newer epoch? Without a lease, a
-    leader that is partitioned from everyone keeps writing on its own
-    branch - which is the AP behaviour, so this is OQ 2 again from the
-    leader's side. *Blocks:* PRD 0003 phase 5.
+37. **Failure-detector timings and leader lease.** [OPEN]
+    The decision is explored in
+    [RFC 34](rfcs/0034-leader-lease.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* none - phase 5 shipped; the timings are a measurement question (OQ 54).
 <a id="oq-60"></a>
 60. **`merge.settle_ms` default.** [OPEN] 30 s is a placeholder, on the record like
     the failure-detector timings above (OQ 37):
@@ -194,10 +191,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
 ## D. TTL, staleness and retention
 
 <a id="oq-6"></a>
-6. **Who may mark stale beyond the author.** [OPEN] The brief is explicit that only
-   the author may; the schema key `stale.who` exists so `leader` or an
-   operator role can be added. Is there a use case (cleaning up after a dead
-   member) strong enough to add it? *Blocks:* nothing in v1.
+6. **Who may mark stale beyond the author.** [OPEN]
+    The decision is explored in
+    [RFC 31](rfcs/0031-stale-who.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* nothing in v1 - leader/operator marking stays opt-in (RFC 0017).
 <a id="oq-9"></a>
 9. **`ttl.grace_ms` default and derivation.** [OPEN] Read-side skew tolerance.
    Could be derived from the observed offset between local clock and the
@@ -208,15 +205,12 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     frequent spams control entries on every member; too rare delays reclaim.
     *Blocks:* PRD 0002 phase 4.
 <a id="oq-24"></a>
-24. **Slot count grows forever.** [OPEN] Under `retain = none` a removed entry still
-    costs one slot (~170 bytes) forever, because removing a slot breaks the
-    chain. A long-lived high-churn journal needs an *archival checkpoint*: a
-    leader-signed root over a prefix that lets members drop the slots
-    behind it while keeping verifiability from the root. That is a second
-    chain-level mechanism and is out of v1. When does it become necessary?
-    *Blocks:* nothing in v1; measure slot growth on the first consumer.
+24. **Slot count grows forever.** [OPEN]
+    The decision is explored in
+    [RFC 32](rfcs/0032-archival-checkpoint.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* nothing in v1; measure slot growth on the first consumer.
 <a id="oq-43"></a>
-43. **What "full state" means under `retain = none`.** [OPEN] A member that joined
+43. **What "full state" means under `retain = none`.** [RESOLVED] A member that joined
     after a checkpoint never sees removed payloads; it has the full *chain*
     but not every byte that ever existed. PRD 0003's "definitely has the
     full state" should be defined as "at head of the chain", and the docs
@@ -226,6 +220,13 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     journal that has checkpointed cannot be joined or backfilled until this
     is answered. *Blocks:* PRD 0003 phase 1 wording; the sync path's
     refusal is the current behaviour.
+
+    **Resolved 2026-08-29** (documentation): the docs define "definitely
+    has the full state" as "at head of the chain" (PRD 0003, member
+    states). The sync path's refusal of compacted records is a code item
+    that stays - a checkpointed journal still cannot be joined or
+    backfilled until snapshot serving
+    ([RFC 22](rfcs/0022-snapshot-format.md)) lands.
 <a id="oq-57"></a>
 57. **Is author-marked staleness itself switchable per journal?** [RESOLVED] [ADR
     0002](adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md)
@@ -467,13 +468,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     Recorded in [ADR 0007](adrs/0007-the-library-is-the-primary-surface.md);
     PRD 0005's steps 1–3 shipped with the decision.
 <a id="oq-30"></a>
-30. **Integration path with clanker.** [OPEN] clanker's RFC 0019 stage-1 spike is
-    specified in clanker's tree and unrun. Run it there first (throwaway) and
-    then build coppiz, or build coppiz's core and make the spike *use* coppiz?
-    The second avoids building the cursor logic twice; the first gives
-    clanker an answer without waiting. Which code survives? *Blocks:* PRD
-    0005 phase 5. *Answer from:* the operator, jointly with clanker's RFC
-    0019 next steps.
+30. **Integration path with clanker.** [OPEN]
+    The decision is explored in
+    [RFC 33](rfcs/0033-clanker-integration-path.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* PRD 0005 phase 5. *Answer from:* the operator, jointly with clanker's RFC 0019 next steps.
 <a id="oq-34"></a>
 34. **Journal lifecycle.** [PARTIAL]
     The decision is explored in
@@ -566,12 +564,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     delayed, never advanced. Failure detection is the one monotonic-time
     path, as the question noted.
 <a id="oq-41"></a>
-41. **Record-store tooling.** [OPEN] clanker maintains its `docs/` stores with
-    sandboxed tools (`clanker rfc`, `clanker adr`, …) that write
-    compare-and-swap and keep the inventories in sync. coppiz's stores are
-    hand-maintained for now; inventories drift the way clanker's did before
-    its tools existed. Reuse clanker's tools pointed at this tree, or accept
-    hand maintenance until the project is bigger? *Blocks:* nothing.
+41. **Record-store tooling.** [OPEN]
+    The decision is explored in
+    [RFC 35](rfcs/0035-record-store-tooling.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* nothing.
 <a id="oq-44"></a>
 44. **Determinism of fold under merge *with* checkpoints.** [RESOLVED] PRD 0002's rule
     (each branch's checkpoint removes only what its own fold names; no
@@ -584,14 +580,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     scenario in the simulator (OQ 27's second half); the determinism claim is
     pinned by that scenario when it lands.
 <a id="oq-45"></a>
-45. **CI and toolchain pin.** [OPEN] Which Zig build to pin in CI (0.16.0 release),
-    and whether to test musl and glibc targets there. The merge-gate half of
-    this question is settled in-tree rather than in CI: `zig build test` runs
-    the lint gates - formatting, the 100-column cap, test registration,
-    declaration analysis, gate coverage; `zig build lint` runs them alone -
-    and build.zig names this question for the CI half that remains open.
-    *Blocks:* the first external contribution; the repository's own commits
-    are gated locally by `zig build test` today.
+45. **CI and toolchain pin.** [OPEN]
+    The decision is explored in
+    [RFC 36](rfcs/0036-ci-toolchain-pin.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* the first external contribution; the repository's own commits are gated locally by `zig build test` today.
 <a id="oq-59"></a>
 59. **Does the fetchable package carry the design docs?** [OPEN]
     The decision is explored in
