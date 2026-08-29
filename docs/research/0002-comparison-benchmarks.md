@@ -24,7 +24,7 @@ This note answers the *how*: the harness design (workloads, metrics,
 durability contract, fairness rules) and the evidence on each candidate. It
 does not choose the final system list; that is a decision ([RFC 0004]
 candidate). The internal measurement set that replaces the tier numbers is
-[OQ 54](../open-questions.md); this suite shares its harness where possible
+[OQ 54](../open-questions.md#oq-54); this suite shares its harness where possible
 and adds the external comparison rows.
 
 ## TL;DR
@@ -154,7 +154,7 @@ first-consumer shape and stay out of v1 of the suite.
   time. Relevant rows: coppiz, JetStream (subscription), SQLite (poll).
   Optional in v1.
 - **W5 - join/backfill.** A fresh member joins a cluster holding a 1 GB
-  journal; measure time-to-head, MB/s, and peak network. [OQ 54](../open-questions.md)
+  journal; measure time-to-head, MB/s, and peak network. [OQ 54](../open-questions.md#oq-54)
   already names this; it is the number hosts actually feel.
 - **W6 - partition and heal (3 nodes, behaviour).** Cut the leader (or one
   side) off for T seconds; record write availability on each side
@@ -166,10 +166,10 @@ first-consumer shape and stay out of v1 of the suite.
   refuted; `configured`+`stall` is the same test with the opposite expected
   outcome.
 - **W7 - memory and connections at n = 1, 3, 6.** RSS per member, fd count,
-  connection count ([OQ 54](../open-questions.md) sibling). The "library vs
+  connection count ([OQ 54](../open-questions.md#oq-54) sibling). The "library vs
   server" claim (C3) mostly shows up here.
 - **W8 - multi-process one-file (SQLite-only row).** SQLite's file-lock
-  habit coppiz v1 lacks ([OQ 47](../open-questions.md)). Benchmark it anyway:
+  habit coppiz v1 lacks ([OQ 47](../open-questions.md#oq-47)). Benchmark it anyway:
   the gap should be measured and tracked, not asserted.
 
 ### Metrics
@@ -530,7 +530,7 @@ from that re-read are in the log.
 
 ## Out-of-the-box options
 
-- **Already in the tree:** [OQ 54](../open-questions.md)'s internal
+- **Already in the tree:** [OQ 54](../open-questions.md#oq-54)'s internal
   measurement set (append latency at n = 1, memory/connections at 8/16/32,
   append-to-visible p50/p99, join/backfill of a 1 GB journal) is the seed -
   the coppiz driver doubles as the comparison driver. The e2e harness in
@@ -785,7 +785,7 @@ These stay **open**. New evidence that bears on them, not a choice:
   append-log suitability.
 - **coppiz's own claims changing** - a quorum mode (OQ 1) or a read
   consistency guarantee (OQ 31) would add rows, not remove them.
-- **The tier numbers changing** ([OQ 54](../open-questions.md) measurements)
+- **The tier numbers changing** ([OQ 54](../open-questions.md#oq-54) measurements)
   - the comparison rows stay, the internal reference points move.
 
 ## References

@@ -14,7 +14,7 @@ under `ttl.retain = none` and reopens.
 
 ## Symptom and impact
 
-A member that compacted under `retain = none` and restarts fails to open: the fold rebuild (`Node.open` → `foldAll` → `foldJournal` → `store.scan`) hits a chain-continuity refusal and the node cannot start. `refold()` (the [OQ 44](../../open-questions.md) heal path) breaks identically. The shipped e2e test exercising `retain = none` (`cluster/node.zig:3118`) never reopens the node, so the gap is uncovered.
+A member that compacted under `retain = none` and restarts fails to open: the fold rebuild (`Node.open` → `foldAll` → `foldJournal` → `store.scan`) hits a chain-continuity refusal and the node cannot start. `refold()` (the [OQ 44](../../open-questions.md#oq-44) heal path) breaks identically. The shipped e2e test exercising `retain = none` (`cluster/node.zig:3118`) never reopens the node, so the gap is uncovered.
 
 ## Reproduction
 

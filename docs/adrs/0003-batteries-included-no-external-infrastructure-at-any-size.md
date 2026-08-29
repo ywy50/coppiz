@@ -49,7 +49,7 @@ cannot be absent at size 1 needs a reason in its PRD.
 - coppiz owns the whole distributed-systems surface - delivery, retention,
   backfill, election, merge - which clanker's research called "the category
   of work most likely to be subtly wrong". The deterministic simulator
-  ([OQ 27](../open-questions.md)) is the mitigation, and it is why the pure
+  ([OQ 27](../open-questions.md#oq-27)) is the mitigation, and it is why the pure
   fold/election/merge split in PRDs 0001–0003 is not optional.
 - Features that would need external infrastructure to do well (global
   discovery, cross-datacenter routing) arrive late or not at all; past the

@@ -20,7 +20,7 @@ is a number from 0 to 10. When it is decided, set its status here and in the
 file, and write the ADR.
 
 There is no tool maintaining this store yet; clanker's `rfc` tool is the
-reference for what one would do ([OQ 41](../open-questions.md)).
+reference for what one would do ([OQ 41](../open-questions.md#oq-41)).
 
 ## Inventory
 

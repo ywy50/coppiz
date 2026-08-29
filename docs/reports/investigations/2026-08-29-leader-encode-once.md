@@ -1,4 +1,4 @@
-# Investigation — the leader encodes each replicated slot twice
+# Investigation - the leader encodes each replicated slot twice
 
 ## TL;DR
 
@@ -7,12 +7,12 @@
   both?
 - **Finding:** every leader-authored slot was encoded twice: once by
   `Store.append` for the on-disk record, once by the broadcast's
-  `encodeSlot` for the wire — an extra encode and CRC over the same bytes
+  `encodeSlot` for the wire - an extra encode and CRC over the same bytes
   per replicated slot, per leader. The wire record is byte-identical to the
   store record by construction (`segment.encodeRecord` is the only encoder),
   and the follower already appends those wire bytes verbatim
   (2026-08-29 sweep item 7).
-- **Resolution:** implemented — `slotAndBroadcast` and `appendEpoch` encode
+- **Resolution:** implemented - `slotAndBroadcast` and `appendEpoch` encode
   once and share the bytes between the store write (`applyReplicated`'s
   raw-record path) and the broadcast (`encodeSlotRecord`).
 
@@ -39,13 +39,13 @@ before implementation.
    `store.append` encodes the record (`store.zig:283-300`), then
    `broadcastToMembers` → `message.encode` → `encodeSlot`
    (`message.zig:337-341`), which re-encodes the same `sl`/`en`
-   (`segment.encodeRecord` — one CRC pass over the whole record). Same shape
+   (`segment.encodeRecord` - one CRC pass over the whole record). Same shape
    in `appendEpoch` (`node.zig:1717-1750`).
 2. **The two byte streams are identical.** `store.append` and `encodeSlot`
    both call `segment.encodeRecord(sl, en, buf)` on the same values; the
    follower's `decodeSlot` hands the received record to
    `applyReplicated(..., record)` → `Store.appendRecord`, which writes them
-   verbatim — so the wire bytes *are* the on-disk form, and reusing one
+   verbatim - so the wire bytes *are* the on-disk form, and reusing one
    encode on the leader changes neither.
 3. **The message already carries the record.** `SlotMsg.record`
    (`message.zig:327-333`) is the raw record bytes; every broadcast call
@@ -54,15 +54,15 @@ before implementation.
 
 ## Hypotheses and tests
 
-- **Hypothesis A — one encode can serve store and wire.** If the leader
+- **Hypothesis A - one encode can serve store and wire.** If the leader
   encodes first, `applyReplicated(..., record)` writes those bytes to the
   store, and the broadcast copies them (a `len | crc`-aware
-  `encodeSlotRecord`). *Result:* supported — byte-identical output on both
+  `encodeSlotRecord`). *Result:* supported - byte-identical output on both
   paths, verified by reading; the change removes exactly one
   `segment.encodeRecord` (and its CRC) per leader-authored slot.
-- **Hypothesis B — all other broadcast call sites are unaffected.** The
+- **Hypothesis B - all other broadcast call sites are unaffected.** The
   `message.encode` slot branch falls back to `encodeSlot` when
-  `record.len == 0` (the `&.{}` default). *Result:* supported — only
+  `record.len == 0` (the `&.{}` default). *Result:* supported - only
   `slotAndBroadcast` and `appendEpoch` pass a non-empty record.
 
 ## Finding
@@ -83,7 +83,7 @@ follower path is untouched (it already appends the wire bytes verbatim).
 
 Verification: `zig build` clean; the full gate and direct test-binary runs
 are recorded in the stack's final verification (this PR's broadcast change
-is exercised by every cluster e2e test — G4, G6, the partition/merge tests).
+is exercised by every cluster e2e test - G4, G6, the partition/merge tests).
 
 ## References
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-{{status}} - searched {{date}}.
+{{status}} - searched or measured {{date}}.
 
 Research is evidence, not a decision: it records what exists, how good it is,
 and how confident the finding is. The decision that follows belongs in an
@@ -14,7 +14,8 @@ and how confident the finding is. The decision that follows belongs in an
 
 State it precisely enough that a source either answers it or does not. "What
 should we use for X" is not answerable; "which X can run inside a
-wasm32-freestanding guest with no libc" is.
+wasm32-freestanding guest with no libc" is. For a measurement, say which
+default or choice the numbers will settle.
 
 ## TL;DR
 
@@ -31,6 +32,30 @@ evidence for these lines.
   gaps are.
 - **Freshness:** the date of the sweep, and the newest source found. Anything
   that ages fast (release cadence, pricing, hosted APIs) should say so.
+
+For a measurement (a benchmark or experiment), the reproducibility contract
+lives in the two sections below instead: a number is evidence only if a
+stranger can re-run it.
+
+## Harness
+
+For measurement notes: the reproducible setup - machine and OS, toolchain
+version, the exact commands that produced the numbers, the workload, and any
+conditions that could affect them (load, filesystem, mounts). State enough
+that the run can be repeated verbatim.
+
+## Results
+
+For measurement notes: the raw numbers with the environment and the date
+they were taken, before analysis. Keep the implications out of this section;
+they belong in the TL;DR and the analysis.
+
+## Analysis
+
+For measurement notes: what the numbers imply for the default or choice
+they were taken to settle - the trade-off in the units that matter (per-op
+cost against the expected rate), and the conclusion. State the limits
+(hardware, load, filesystem) that bound it.
 
 ## Options found
 

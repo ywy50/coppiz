@@ -50,6 +50,7 @@ it, on top of the decode. With the leader-side encode-once work landed
 every variable-length part into the arena and returns a message that owns
 them. The frame body is freed by the reader after the handler returns
 (`node.zig:622-625` for the loop, `transport.zig` for the hub/TCP readers).
+
 The biggest parts are the segment records inside `slot`, `sync_page` and
 `read_page`: a broadcast slot's record is `dupe`d (`message.zig:348`), then
 `decodeSlot` parses it; `onSlot` hands it to `applyReplicated`, which writes
@@ -189,8 +190,8 @@ change; no wire, disk, or public API surface is touched.
 
 ## References
 
-- Investigation evidence: [2026-08-29 write-path data flow](2026-08-29-runtime-sweep-queue-wire.md)
-  (the receive-path dupe), [2026-08-29 runtime speedup sweep findings](2026-08-29-runtime-sweep-findings.md)
+- Investigation evidence: [2026-08-29 write-path data flow](../reports/investigations/2026-08-29-runtime-sweep-queue-wire.md)
+  (the receive-path dupe), [2026-08-29 runtime speedup sweep findings](../reports/investigations/2026-08-29-runtime-sweep-findings.md)
   (item 15)
 - Code: `src/net/message.zig` (`decode`, `decodeSlot`, `decodeSyncPage`,
   `decodeReadPage`), `src/cluster/node.zig` (`onFrame` arena, `onSlot`,

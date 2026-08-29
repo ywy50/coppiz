@@ -32,7 +32,7 @@ to land. Update it when a PRD changes status.
 - **Join order decided** (2026-08-27) - [RFC 0002](rfcs/0002-how-join-order-is-made-unspoofable.md)
   decided as option A (join is a chain entry; seniority is its slot
   position), recorded in [ADR 0005](adrs/0005-join-order-is-slot-position.md);
-  [OQ 58](open-questions.md) and [OQ 33](open-questions.md) resolved with
+  [OQ 58](open-questions.md#oq-58) and [OQ 33](open-questions.md#oq-33) resolved with
   the drafted defaults.
 - **Cluster core: membership, election, epochs and merge** (2026-08-27) -
   [PRD 0003](prds/0003-membership-and-leadership.md) phases 1–3: the pure
@@ -42,17 +42,17 @@ to land. Update it when a PRD changes status.
   election, mode_change handover), the `merge` entry with the checkpoint
   settle rule, the re-slot path with the OQ 33 no-op semantics, and the
   survivor rule shared with election.
-- **Deterministic simulator** (2026-08-27) - [OQ 27](open-questions.md): a
+- **Deterministic simulator** (2026-08-27) - [OQ 27](open-questions.md#oq-27): a
   seeded, single-threaded world of in-memory nodes driving
   the pure fold/election/merge functions with partitions, crashes, clock
   skew and reordered delivery. Scenarios: partition-heal-merge (G7 core),
   partitioned joins with deterministic seniority (RFC 0002), leader crash,
   reorder, configured + stall (G4 core), clock skew. Pins the merge
   discipline: on heal every node re-folds from the last common slot
-  ([OQ 44](open-questions.md)).
+  ([OQ 44](open-questions.md#oq-44)).
 - **Membership and leadership: wire, node loop, e2e** (2026-08-27) -
   [PRD 0003](prds/0003-membership-and-leadership.md) phases 4–6, on
-  [OQ 19](open-questions.md) decided (own binary framing over one TCP
+  [OQ 19](open-questions.md#oq-19) decided (own binary framing over one TCP
   connection):
   - the replication wire (`src/net/` - framing, the message set, and a
     transport seam with TCP and an in-memory hub implementation),
@@ -84,7 +84,7 @@ to land. Update it when a PRD changes status.
 
 The same binary and settings schema at every tier; what changes is which
 mechanisms are on. The numbers are design intent, to be replaced by
-measurement ([OQ 54](open-questions.md)). Detail: [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md).
+measurement ([OQ 54](open-questions.md#oq-54)). Detail: [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md).
 
 | Tier | Instances | What it is |
 |---|---|---|
@@ -102,12 +102,12 @@ the phases.
 1. **First host integration (clanker)** - PRD 0005 phase 5: a clanker branch
    with `ck_state` over coppiz, one stream replicated between two instances,
    measured against its spike note's three journeys. A second, unrelated
-   host example follows to keep the API general ([OQ 46](open-questions.md)).
-2. **First public release** - reopened claims ([OQ 40](open-questions.md),
+   host example follows to keep the API general ([OQ 46](open-questions.md#oq-46)).
+2. **First public release** - reopened claims ([OQ 40](open-questions.md#oq-40),
    resolved 2026-08-27), CI ([OQ 45]), rolling-upgrade procedure ([OQ 26]),
    backup runbook ([OQ 39]). The licence is Apache-2.0
    ([ADR 0006](adrs/0006-the-library-is-apache-2-0-licensed.md),
-   [OQ 18](open-questions.md) resolved); the name is `coppiz`
+   [OQ 18](open-questions.md#oq-18) resolved); the name is `coppiz`
    ([ADR 0004](adrs/0004-the-product-is-named-coppiz.md)).
 
 ## Later

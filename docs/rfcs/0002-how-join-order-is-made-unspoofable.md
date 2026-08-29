@@ -5,7 +5,7 @@
 Decided - 2026-08-27, option A (join is a chain entry; seniority is its slot
 position). [ADR 0005](../adrs/0005-join-order-is-slot-position.md) records
 the choice; PRD 0003 phases 1–3 implement it. The open question it left on
-concurrent-join ordering is [OQ 58](../open-questions.md), resolved the same
+concurrent-join ordering is [OQ 58](../open-questions.md#oq-58), resolved the same
 day to the admitter's receipt order.
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -40,7 +40,7 @@ member can gain by lying, so this mechanism is the security core of the mode.
    exception; see option A's cons).
 
 **Out of scope.** Who *admits* a member (PRD 0003 admission). Whether
-seniority resets on rejoin ([OQ 4](../open-questions.md)).
+seniority resets on rejoin ([OQ 4](../open-questions.md#oq-4)).
 
 ## Current state
 
@@ -181,9 +181,9 @@ deterministic, which B and C's are not.
 
 - Should concurrent `join`s within one leader's batch be ordered by the
   admitter's receipt order or by newcomer id, to remove the admitter's
-  discretion entirely? ([OQ 58](../open-questions.md); the operator; cheap
+  discretion entirely? ([OQ 58](../open-questions.md#oq-58); the operator; cheap
   to decide either way)
-- Seniority on rejoin ([OQ 4](../open-questions.md)).
+- Seniority on rejoin ([OQ 4](../open-questions.md#oq-4)).
 
 ## Next steps / action items
 
