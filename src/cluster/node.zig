@@ -47,6 +47,14 @@ const transport = net.transport;
 /// capped by `framing.max_body_bytes` either way.
 pub const provisional_page_bytes: u32 = 64 * 1024;
 
+/// The first redial delay after a connection to a member fails, and the
+/// ceiling the delay doubles up to. The ceiling exceeds the default
+/// `cluster.suspect_after_ms` (5 s), so a member left at the ceiling is
+/// suspected before it can be redialled — which is why the delay is reset
+/// the moment a connection to that member is established again.
+pub const initial_redial_backoff_ms: u64 = 250;
+pub const max_redial_backoff_ms: u64 = 8000;
+
 // ---------------------------------------------------------------------------
 // Mailbox
 // ---------------------------------------------------------------------------
@@ -202,7 +210,11 @@ const MemberState = struct {
     next_heartbeat_ms: u64 = 0,
     /// When to (re)dial; grows by `backoff_ms` on failures.
     dial_at_ms: u64 = 0,
-    backoff_ms: u64 = 250,
+    /// The current redial delay. Doubles on every failed dial or dropped
+    /// connection up to `max_redial_backoff_ms`, and is reset to
+    /// `initial_redial_backoff_ms` by `noteConnected` once a connection to
+    /// this member is up again.
+    backoff_ms: u64 = initial_redial_backoff_ms,
 };
 
 /// Upper bound on an advertised address. A real `host:port` needs at most
@@ -846,10 +858,34 @@ pub const ClusterNode = struct {
         while (mit.next()) |ms| {
             if (std.mem.eql(u8, ms.address, address)) {
                 // Not `.lost`: the suspect timer owns that transition.
-                ms.dial_at_ms = self.elapsedMs() + ms.backoff_ms;
-                ms.backoff_ms = @min(ms.backoff_ms * 2, 8000);
+                self.scheduleRedial(ms);
             }
         }
+    }
+
+    /// Schedules the next dial of a member and widens its backoff. The
+    /// backoff is a recovery delay, not a permanent property: it is reset
+    /// by `noteConnected` as soon as a connection to that member is up, so
+    /// an unrelated blip months apart is retried at
+    /// `initial_redial_backoff_ms`, not at the ceiling.
+    fn scheduleRedial(self: *ClusterNode, ms: *MemberState) void {
+        ms.dial_at_ms = self.elapsedMs() + ms.backoff_ms;
+        ms.backoff_ms = @min(ms.backoff_ms * 2, max_redial_backoff_ms);
+    }
+
+    /// A connection to `ms` is established: the recovery delay has done its
+    /// job, so it goes back to its floor and no redial is pending.
+    ///
+    /// Nothing used to clear it. `backoff_ms` only ever doubled, so a member
+    /// that had lost its connection a few times stayed pinned at
+    /// `max_redial_backoff_ms` for the life of the process — and that
+    /// ceiling is above the default `cluster.suspect_after_ms`, so every
+    /// later blip, however brief, expired the suspect timer before the
+    /// redial was even attempted and dropped the member out of the election
+    /// (bug 2026-08-30-redial-backoff-never-resets).
+    fn noteConnected(ms: *MemberState) void {
+        ms.backoff_ms = initial_redial_backoff_ms;
+        ms.dial_at_ms = 0;
     }
 
     fn onFrame(self: *ClusterNode, conn_id: u64, body: []const u8) !void {
@@ -1250,8 +1286,7 @@ pub const ClusterNode = struct {
                 // Not `.lost` here: the suspect timer owns that transition,
                 // so a quick redial cannot eject the member from elections.
                 ms.conn_id = null;
-                ms.dial_at_ms = self.elapsedMs() + ms.backoff_ms;
-                ms.backoff_ms = @min(ms.backoff_ms * 2, 8000);
+                self.scheduleRedial(ms);
             }
         }
         cs.conn.shutdown(self.io);
@@ -1382,6 +1417,7 @@ pub const ClusterNode = struct {
             ms.address = updated;
             ms.last_heard_ms = self.elapsedMs();
             ms.state = .member;
+            noteConnected(ms);
         } else {
             // A newcomer: the admitter appends its join, then it backfills.
             try self.members.put(self.allocator, h.member_id, .{
@@ -1524,6 +1560,7 @@ pub const ClusterNode = struct {
             ms.conn_id = conn_id;
             ms.last_heard_ms = self.elapsedMs();
             ms.state = .member;
+            noteConnected(ms);
         } else {
             try self.members.put(self.allocator, a.member_id, .{
                 .address = try self.allocator.dupe(u8, a.address),
@@ -4971,4 +5008,95 @@ test "a replicated slot whose store write is refused stops the member" {
     dup_sl.entry_hash = entry.entryHash(&dup);
     try cn.onSlot(3, .{ .reslotted = false, .record = &.{}, .sl = dup_sl, .en = dup });
     try std.testing.expect(!cn.stopped.load(.acquire));
+}
+
+test "a member's redial backoff resets when its connection comes back" {
+    // `backoff_ms` only ever doubled. A member whose connection had dropped
+    // a few times was pinned at `max_redial_backoff_ms` (8 s) for the life
+    // of the process, and that ceiling is above the default
+    // `cluster.suspect_after_ms` (5 s): every later blip, however brief,
+    // expired the suspect timer before the redial was attempted, so the
+    // member fell out of the election each time (bug
+    // 2026-08-30-redial-backoff-never-resets).
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    const peer_id = [_]u8{7} ** 16;
+    try cn.members.put(test_alloc, peer_id, .{
+        .address = try test_alloc.dupe(u8, "peer"),
+        .public_key = [_]u8{0} ** 32,
+    });
+
+    // Three failed dials widen the delay: 250 -> 500 -> 1000 -> 2000.
+    cn.onDialFailed("peer");
+    cn.onDialFailed("peer");
+    cn.onDialFailed("peer");
+    try std.testing.expectEqual(
+        @as(u64, initial_redial_backoff_ms * 8),
+        cn.members.get(peer_id).?.backoff_ms,
+    );
+    try std.testing.expect(cn.members.get(peer_id).?.dial_at_ms != 0);
+
+    // The dial finally lands and the peer answers the hello.
+    const Sink = struct {
+        fn send(_: *anyopaque, _: std.Io, _: []const u8) net.transport.SendError!void {}
+        fn recv(
+            _: *anyopaque,
+            _: std.Io,
+            _: std.mem.Allocator,
+        ) net.transport.RecvError![]u8 {
+            return error.EndOfStream;
+        }
+        fn nop(_: *anyopaque, _: std.Io) void {}
+    };
+    var sink_ctx: u8 = 0;
+    try cn.conns.put(test_alloc, 9, .{ .conn = .{
+        .ctx = &sink_ctx,
+        .recv_frame = Sink.recv,
+        .send_frame = Sink.send,
+        .shutdown_fn = Sink.nop,
+        .close_fn = Sink.nop,
+    } });
+    try cn.onHelloAck(9, .{
+        .admitted = true,
+        .refusal = .none,
+        .member_id = peer_id,
+        .address = "peer",
+        .genesis_hash = cn.node.group_hash,
+        .epoch = 1,
+        .leader = cn.node.member_id,
+    });
+
+    // The recovery delay has done its job: back to the floor, nothing
+    // pending. Left at the ceiling, the next blip would suspect the member
+    // before the redial (8000 > the 5000 ms default suspect timer).
+    const after = cn.members.get(peer_id).?;
+    try std.testing.expectEqual(@as(?u64, 9), after.conn_id);
+    try std.testing.expectEqual(initial_redial_backoff_ms, after.backoff_ms);
+    try std.testing.expectEqual(@as(u64, 0), after.dial_at_ms);
+    try std.testing.expect(after.backoff_ms < 5000);
 }
