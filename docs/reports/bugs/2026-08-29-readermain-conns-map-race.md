@@ -1,4 +1,4 @@
-# Bug - `readerMain` reads the `conns` map from a pool thread while the loop thread mutates it (latent, not fixed)
+# Bug - `readerMain` reads the `conns` map from a pool thread while the loop thread mutates it
 
 ## TL;DR
 
@@ -12,13 +12,15 @@
   reallocated and the old allocation freed, so the reader can be walking
   freed memory: `.?` on a miss is `unreachable`, and a torn read yields a
   `Conn` whose function pointers are garbage.
-- **Resolution:** **Not fixed.** `src/cluster/node.zig` is outside the
-  territory of the sweep that found this. Suggested fix below; it is one
-  line.
+- **Resolution:** Fixed. `readerMain` takes the `Conn` by value, so no task
+  thread touches the map at all.
 
 ## Status
 
-Open. Found by reading, not by an observed failure - see *Reproduction*.
+Resolved by the `src/cluster/` session, 2026-08-29. Found by reading, not by
+an observed failure - see *Reproduction*. **The race itself was never
+reproduced, before or after the fix**; what the fix removes is verifiable by
+inspection, and that is all this record claims.
 
 ## Symptom and impact
 
@@ -96,25 +98,53 @@ the only path that closes it, and it runs after the reader has exited and
 posted `peer_gone`. So there is nothing about the id-then-lookup shape that
 the value could not have done directly.
 
-## Suggested fix (not applied)
+## Resolution
 
-Pass the value the task needs, so the pool thread never touches the map:
+The suggested fix, applied as written: `onConnReady` hands the value it
+already holds to the task, and `readerMain` takes it as a parameter instead
+of looking it up.
 
 ```zig
     self.group.async(self.io, readerMain, .{ self, conn_id, conn });
 ```
 
 ```zig
-fn readerMain(self: *ClusterNode, conn_id: u64, conn: net.transport.Conn) error{Canceled}!void {
+fn readerMain(
+    self: *ClusterNode,
+    conn_id: u64,
+    conn: net.transport.Conn,
+) error{Canceled}!void {
     while (true) {
 ```
 
-`conn_id` is still needed for the `frame` and `peer_gone` events. The
-`.?` disappears with the lookup, which also removes an `unreachable` on a
-path a shutdown race could otherwise reach.
+`conn_id` is still needed for the `frame` and `peer_gone` events. The `.?`
+disappears with the lookup, which also removes an `unreachable` on a path a
+shutdown race could otherwise reach.
 
-Whoever applies it owns checking one thing this report did not: that no
-other `self.conns` access has drifted onto a non-loop thread since.
+The two things this report asked whoever applied it to check, both checked:
+
+- **No other `self.conns` access has drifted off the loop thread.** There are
+  seventeen after the change (`deinit` x2, `onConnReady`, `onPeerGone` x2,
+  `onFrame` x2, the send helpers, `onHello`, `onHelloAck`, `closeConn`,
+  `closeDupConn`, `sendForward`, `onHeartbeat`, `broadcast`), and every one
+  is reached from the loop task. `dialMain`, `acceptMain` and `timerMain`
+  still touch only `io`, `allocator`, `options`, `mailbox` and `tick_ms`.
+- **The value outlives the reader.** Every close path in the tree only
+  *shuts down* the conn: `closeConn` and `closeDupConn` set `closing` and
+  call `cs.conn.shutdown`, which wakes the reader with an error. The only
+  calls to `Conn.close` are in `onPeerGone`, which the reader itself
+  triggers as its last act, and in `deinit`, which runs after
+  `waitForStop`.
+
+## Verification
+
+- `zig build test`: green. **No test fails on the unfixed tree**, so there is
+  no control run for this one, and none is claimed. The defect is a data
+  race with no way to force its window from this suite; what changed is
+  structural, and the structure is what the two checks above establish.
+- The whole `cluster.node` suite, including the process-level e2e tests that
+  build a three-member mesh over TCP (every peer dialing at once is exactly
+  the shape that grows the map under the reader), passes with the change.
 
 ## Follow-up
 
@@ -132,4 +162,4 @@ one.
 - Related: [2026-08-29-hub-pipes-append-unsynchronised.md](2026-08-29-hub-pipes-append-unsynchronised.md)
   and [2026-08-28-hub-listener-close-race.md](2026-08-28-hub-listener-close-race.md)
   are the same class on the hub side, both fixed with a mutex.
-- Fix: none
+- Fix: this commit
