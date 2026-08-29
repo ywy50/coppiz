@@ -1,9 +1,9 @@
-# Bug — The now-live merge settle rule kills the leader's checkpoint cadence: `MergeSettling` is fatal to the loop after every heal
+# Bug - The now-live merge settle rule kills the leader's checkpoint cadence: `MergeSettling` is fatal to the loop after every heal
 
 ## TL;DR
 
-- **What failed:** The sweep-1 fix made the settle rule live (`applyCheckpoint` now reads `cluster.last_merge`). The leader's checkpoint cadence is its only automatic caller, and it treats the refusal as fatal: `checkpointForBroadcast` → `driveCheckpoints` → `onTick` → `catch self.fatal()` — the serving loop stops.
-- **Impact:** Right after a healed merge, the leader crash-loops (or exits) whenever a checkpoint is due with a non-empty removal set within `merge.settle_ms` — the worst possible moment.
+- **What failed:** The sweep-1 fix made the settle rule live (`applyCheckpoint` now reads `cluster.last_merge`). The leader's checkpoint cadence is its only automatic caller, and it treats the refusal as fatal: `checkpointForBroadcast` → `driveCheckpoints` → `onTick` → `catch self.fatal()` - the serving loop stops.
+- **Impact:** Right after a healed merge, the leader crash-loops (or exits) whenever a checkpoint is due with a non-empty removal set within `merge.settle_ms` - the worst possible moment.
 - **Resolution:** Still open. Statically validated (fix regression).
 
 ## Status
@@ -12,7 +12,7 @@ Open. The rule itself is correct ([PRD 0002](../../prds/0002-ttl-and-staleness.m
 
 ## Symptom and impact
 
-Pre-fix the rule was dead (`self.last_merge` was never set on a data fold), so the cadence could never see `MergeSettling`. The fix (`chain.zig:703-706`) activated a refusal path whose only caller is fatal. After any merge, for a data journal with `ttl.enforce`/`stale.enforce` enabled and entries that expired during the partition (non-empty removal set), the next checkpoint attempt refuses, `onTick` errors, and the loop calls `self.fatal()` — `coppiz serve` exits. On restart the fold re-folds the merge entry, so the same state re-triggers it: a crash-loop until the `settle_ms` window (default 30 s) passes.
+Pre-fix the rule was dead (`self.last_merge` was never set on a data fold), so the cadence could never see `MergeSettling`. The fix (`chain.zig:703-706`) activated a refusal path whose only caller is fatal. After any merge, for a data journal with `ttl.enforce`/`stale.enforce` enabled and entries that expired during the partition (non-empty removal set), the next checkpoint attempt refuses, `onTick` errors, and the loop calls `self.fatal()` - `coppiz serve` exits. On restart the fold re-folds the merge entry, so the same state re-triggers it: a crash-loop until the `settle_ms` window (default 30 s) passes.
 
 ## Reproduction
 
@@ -23,7 +23,7 @@ Not dynamically reproduced (needs a merge + an expirable journal); statically co
 3. `onTick` calls `driveCheckpoints` with `try` (`node.zig:895`).
 4. The loop: `.tick => self.onTick() catch self.fatal()` (`node.zig:608`).
 
-The empty-set guard (`journal.zig:386-389`) means the refusal only fires when there *is* something to remove — exactly the post-partition state the settle rule exists to protect.
+The empty-set guard (`journal.zig:386-389`) means the refusal only fires when there *is* something to remove - exactly the post-partition state the settle rule exists to protect.
 
 ## Root cause
 

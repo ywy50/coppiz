@@ -1,33 +1,33 @@
-# PRD 0006 — Scaling 1 → n → groups: recursive groups, sharding, and parity
+# PRD 0006 - Scaling 1 → n → groups: recursive groups, sharding, and parity
 
 ## Status
 
-Draft — 2026-08-21, from the operator's big-picture statement of the same
+Draft - 2026-08-21, from the operator's big-picture statement of the same
 day. This PRD is **mostly later work**, and that is the point of writing it
 now: it names what the core (PRDs 0001–0004) must get right *today* so that
 the overlay can be added without redesign, and it parks everything else
 behind measured triggers. Nothing here ships before the single-group system
 is green. Source of truth once shipped: `src/federation/` (group membership,
-routing, parity) — a name chosen now so no one puts it in `src/cluster/`.
+routing, parity) - a name chosen now so no one puts it in `src/cluster/`.
 
 ## Problem
 
 The big picture, in the operator's words (2026-08-21): natural scalability
 from 1 to n, "no matter if even or uneven number"; fast and very slim to get
 started; and still running efficiently at 1,000, 10,000 or 100,000
-instances. Past a certain size the flat design cannot do that — a full mesh
+instances. Past a certain size the flat design cannot do that - a full mesh
 is O(n²) connections and every member holding every byte is O(n) copies of
-everything — so the operator's later overlay is: **group** instances, where
+everything - so the operator's later overlay is: **group** instances, where
 each group is *exactly the system built now* with its own leader election
 inside; make a group the leader for a specific part of the journal
 (sharding); and, to save space, break the journal down across groups with
 **data parity** instead of full copies. Groups use the same leadership
 modes and concurrency model as members do, so no particular group count is
-required — confirmed 2026-08-21, [OQ 49](../open-questions.md) resolved.
+required - confirmed 2026-08-21, [OQ 49](../open-questions.md) resolved.
 
 The risk this PRD exists to prevent: a core that quietly assumes "one
 cluster, one chain, every member has everything" in a place that is
-expensive to change — an id format, a header, a validation rule, a routing
+expensive to change - an id format, a header, a validation rule, a routing
 assumption in the API. Those assumptions are cheap to avoid now and
 prohibitive after the on-disk and wire formats freeze.
 
@@ -40,8 +40,8 @@ prohibitive after the on-disk and wire formats freeze.
 3. Groups compose recursively: a cluster of groups is the same system with
    groups as members, so the membership, election and settings machinery is
    reused rather than reinvented at the next level.
-4. A journal (or a range of one) can be *owned* by one group — that group's
-   leader sequences it, that group's members replicate it in full — and
+4. A journal (or a range of one) can be *owned* by one group - that group's
+   leader sequences it, that group's members replicate it in full - and
    other groups route to it rather than copy it.
 5. A journal can optionally be stored with parity across groups, so k of m
    groups can reconstruct it, trading copies for reconstruction cost.
@@ -66,8 +66,8 @@ prohibitive after the on-disk and wire formats freeze.
 ### Scale tiers
 
 The same binary and the same settings schema at every tier; what changes is
-which mechanisms are switched on. Numbers are the *design intent* — where a
-mechanism is expected to be needed — not measurements; the first
+which mechanisms are switched on. Numbers are the *design intent* - where a
+mechanism is expected to be needed - not measurements; the first
 measurements replace them ([OQ 54](../open-questions.md)).
 
 | Tier | Instances | Topology | What is new at this tier | PRD |
@@ -76,7 +76,7 @@ measurements replace them ([OQ 54](../open-questions.md)).
 | 1 | 2–32 | one group, full mesh | membership, election, replication, merge | 0003 |
 | 2 | 32–~1,000 | several groups; each a tier-1 group | group membership, journal ownership, routing | this PRD, phase 1–2 |
 | 3 | ~1,000–100,000 | groups of groups | recursive membership; leader-star or gossip inside large groups | this PRD, phase 3; OQ 25 |
-| parity | any, with tier ≥ 2 | — | k-of-m storage across groups for selected journals | this PRD, phase 4 |
+| parity | any, with tier ≥ 2 | - | k-of-m storage across groups for selected journals | this PRD, phase 4 |
 
 ### A group is the system
 
@@ -89,15 +89,15 @@ hash) and, when federated, the address of the **federation** it belongs to.
 A **federation** is a cluster whose members are groups. It is run by the
 same code: the federation's `genesis` is written by the founding group, a
 group joins with a `join` entry authored by an existing member group, group
-seniority is that slot, and the federation's leader — the group whose leader
-speaks for it — is chosen by the same `leader(mode, settings, members,
+seniority is that slot, and the federation's leader - the group whose leader
+speaks for it - is chosen by the same `leader(mode, settings, members,
 liveness)` function over groups. A group is *represented* in the federation
 by its current leader; when the group's leader changes, the representative
 changes, the group's seniority does not. The federation holds one control
 journal: group membership, journal ownership, and federation-level settings.
 Its entries are signed by the representing leader's member key, and
 validation accepts a group's entry only from a member the group's own chain
-currently names leader — which is checkable because the group's membership
+currently names leader - which is checkable because the group's membership
 chain is readable by the federation (groups exchange their control chains,
 not their data).
 
@@ -111,7 +111,7 @@ What *is* different one level up is that a group's liveness and leadership
 are derived, not direct, and two rules follow. **Validation looks into the
 group's chain:** a federation entry signed by group B's representative is
 accepted only if B's own membership chain, as the validator last saw it,
-names that member B's leader — otherwise any member of B could speak for B.
+names that member B's leader - otherwise any member of B could speak for B.
 Groups therefore exchange their *control* chains (membership, epochs), which
 are small, never their data. **Representative churn must not read as
 death:** a group re-electing internally is briefly silent at the federation
@@ -126,7 +126,7 @@ The unit of ownership is a **journal** (the chain-per-journal choice in
 self-contained chain that can live in one group). The federation's control
 journal maps `journal id → owning group`. Inside the owning group, nothing is
 different from tier 1: that group's leader sequences, its members hold the
-full chain. Other groups hold *no copy* of that journal — they hold the map.
+full chain. Other groups hold *no copy* of that journal - they hold the map.
 
 A consumer anywhere appends to journal L by handing the entry to its local
 member; the local member looks up L's owner, forwards to that group's
@@ -134,7 +134,7 @@ leader, and returns when the owner acknowledges (the `write.ack` setting is
 honoured by the owning group). Reads of a journal the local group does not
 own are forwarded the same way, or served from a **follower copy** the local
 group has chosen to keep (a read-only replica, backfilled like any syncing
-member, never sequencing) — the per-journal setting `replicate.followers`
+member, never sequencing) - the per-journal setting `replicate.followers`
 names which groups keep one.
 
 A journal that is too hot for one group is split by **range**: `journal id +
@@ -195,17 +195,17 @@ steps 1–8); OQ 7, 25, 48, 50, 51, 52, 53 decided (OQ 49 already is).
 **Implementation** (each phase behind a measured trigger named in the
 roadmap):
 
-1. `src/federation/membership.zig` — group identity, federation genesis and
+1. `src/federation/membership.zig` - group identity, federation genesis and
    join, representative validation against the group's chain. Reuses
    `src/cluster/membership.zig` and `election.zig` unchanged by
    parameterising their member type. Trigger: a deployment that needs more
    than one group.
-2. `src/federation/ownership.zig`, `src/federation/route.zig` — the owner
+2. `src/federation/ownership.zig`, `src/federation/route.zig` - the owner
    map, forwarding, follower copies, ownership transfer. Trigger: same.
 3. Range split by author prefix; leader-star or gossip inside large groups
    (OQ 25). Trigger: a group at `max_members`, or a journal too hot for one
    group.
-4. `src/federation/parity.zig` — sealed-segment encoding, fragment
+4. `src/federation/parity.zig` - sealed-segment encoding, fragment
    placement, reconstruction on read. Trigger: storage cost measured as the
    binding constraint.
 5. Federation-level simulator scenarios (OQ 27): group partition, ownership
@@ -215,7 +215,7 @@ roadmap):
 
 | Condition | Behaviour |
 |---|---|
-| Owning group entirely unreachable | appends to its journals return `owner_unreachable`; reads serve from a follower copy if one exists, else fail; other journals unaffected — a dead group strands only its own journals |
+| Owning group entirely unreachable | appends to its journals return `owner_unreachable`; reads serve from a follower copy if one exists, else fail; other journals unaffected - a dead group strands only its own journals |
 | Owning group's leader changes | the group's internal epoch handles it; forwarders retry at the new leader; the federation's representative updates on the next heartbeat; the federation does not suspect the group because its `suspect_after_ms` exceeds the group's election time |
 | A non-leader member of a group signs a federation entry | refused `not_representative`: the validator's copy of that group's control chain does not name the signer as leader |
 | Ownership transfer interrupted | the chain is frozen at a slot on the old owner; the new owner either completes backfill and opens its epoch, or the federation reverts the map entry; the slot is never sequenced by two owners because the freeze is a chain event |
@@ -250,5 +250,5 @@ All in [the register](../open-questions.md): grouping unit and range key
 its reconstruction cost (OQ 50), cross-group routing and read semantics
 (OQ 51), what group identity the core headers must carry now (OQ 52),
 membership and discovery at 10⁵ instances (OQ 53), and the measurements that
-replace the tier numbers (OQ 54). OQ 49 (uneven group count) is resolved —
+replace the tier numbers (OQ 54). OQ 49 (uneven group count) is resolved -
 see *A group is the system* above.

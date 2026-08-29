@@ -1,4 +1,4 @@
-# Bug — The simulator's `heal` discards losing-side messages still in inboxes
+# Bug - The simulator's `heal` discards losing-side messages still in inboxes
 
 ## TL;DR
 
@@ -12,7 +12,7 @@ Open.
 
 ## Symptom and impact
 
-`heal` (`sim.zig:589-600`): the merged chain is built from `tailOf(side)` = `partition_sides[side].items[0]`'s chain (only *folded* messages, `sim.zig:604-607`); then every node's `inbox` is cleared (`:596`) and re-folded from the merged chain. A broadcast in flight (in an inbox, not yet folded — `slotAndBroadcast` applies only to the author, `sim.zig:299-324`) at heal time never makes it into the merged chain. No test currently hits it (all shipped scenarios `tick` before `heal`), and `assertConverged` cannot catch it (all nodes share the same merged chain).
+`heal` (`sim.zig:589-600`): the merged chain is built from `tailOf(side)` = `partition_sides[side].items[0]`'s chain (only *folded* messages, `sim.zig:604-607`); then every node's `inbox` is cleared (`:596`) and re-folded from the merged chain. A broadcast in flight (in an inbox, not yet folded - `slotAndBroadcast` applies only to the author, `sim.zig:299-324`) at heal time never makes it into the merged chain. No test currently hits it (all shipped scenarios `tick` before `heal`), and `assertConverged` cannot catch it (all nodes share the same merged chain).
 
 ## Reproduction
 

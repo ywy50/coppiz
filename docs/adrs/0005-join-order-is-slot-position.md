@@ -1,4 +1,4 @@
-# ADR 0005 — Join order is slot position; seniority is unforgeable by the chain
+# ADR 0005 - Join order is slot position; seniority is unforgeable by the chain
 
 ## Status
 
@@ -7,7 +7,7 @@ Accepted
 ## Context
 
 The brief (2026-08-21) makes "whoever joined earliest leads" a first-class
-election mode — `seniority` — precisely because it works at n = 1 and n = 2
+election mode - `seniority` - precisely because it works at n = 1 and n = 2
 where quorum does not, and requires that a member cannot falsify its join
 date. Leadership is the most valuable thing a member can gain by lying, so
 the mechanism that orders joins is the security core of the mode. The
@@ -15,7 +15,7 @@ candidates are argued in [RFC 0002](../rfcs/0002-how-join-order-is-made-unspoofa
 a chain entry (A), leader-issued certificates with timestamps (B), timestamp
 gossip with agreement (C), an external authority list (D), self-reported
 join time (E), and a verifiable delay function (F). Every alternative except
-A depends on a clock — which a liar controls — or on an authority, which
+A depends on a clock - which a liar controls - or on an authority, which
 `configured` mode already is. At n = 2, witness medians (C) and certificates
 (B) are incomparable by construction, so a partition merge has no
 deterministic rule under them.

@@ -1,9 +1,9 @@
-# Bug — A chainless joiner whose first tick fires before admission never backfills and can never join
+# Bug - A chainless joiner whose first tick fires before admission never backfills and can never join
 
 ## TL;DR
 
-- **What failed:** `init` sets `syncing = true` for a chainless member; `driveBackfill` clears it on the first tick whenever the cursor map is empty — and it is empty until the first `hello_ack` seeds it. The seed is gated on `syncing`, so a joiner whose first tick (100 ms) beats its handshake stays `syncing = false` forever with no cursor and never syncs.
-- **Impact:** A permanent, silent join failure — the member connects, but never folds genesis, never becomes leader-eligible, and never forwards. Exactly the "admitter comes up late" case the seed-retry design documents.
+- **What failed:** `init` sets `syncing = true` for a chainless member; `driveBackfill` clears it on the first tick whenever the cursor map is empty - and it is empty until the first `hello_ack` seeds it. The seed is gated on `syncing`, so a joiner whose first tick (100 ms) beats its handshake stays `syncing = false` forever with no cursor and never syncs.
+- **Impact:** A permanent, silent join failure - the member connects, but never folds genesis, never becomes leader-eligible, and never forwards. Exactly the "admitter comes up late" case the seed-retry design documents.
 - **Resolution:** Still open. Statically validated (corroborated by two independent reviews).
 
 ## Status
@@ -17,13 +17,13 @@ A fresh joiner starts `syncing = true` (`node.zig:337`, `control.head == null`).
 1. Tick 1: `syncing` → false (empty cursors = "at head").
 2. `hello_ack` arrives: the seed is skipped (`syncing` false).
 3. `driveBackfill`'s own guard (`!self.syncing`, `:946`) now blocks the only sync driver.
-4. Nothing re-arms `syncing` for a joiner — the only other `syncing = true` sites are the two merge-loser paths (`:2136`, `:2158`).
+4. Nothing re-arms `syncing` for a joiner - the only other `syncing = true` sites are the two merge-loser paths (`:2136`, `:2158`).
 
 The joiner sits at epoch 0, re-dialing every ~2 s, re-hitting the same guard on every admission. A restart re-hits the same race. The e2e tests never see it because the hub transport round trip is microseconds.
 
 ## Reproduction
 
-Not dynamically reproduced (timing race); statically complete. All `syncing` and cursor-seed sites enumerated (grep): `init:337`, `driveBackfill:966`, `onHelloAck:1440` (guarded), `onSyncPage:2025/2035` (post-page), loser paths — no re-arm exists.
+Not dynamically reproduced (timing race); statically complete. All `syncing` and cursor-seed sites enumerated (grep): `init:337`, `driveBackfill:966`, `onHelloAck:1440` (guarded), `onSyncPage:2025/2035` (post-page), loser paths - no re-arm exists.
 
 ## Root cause
 

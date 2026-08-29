@@ -1,9 +1,9 @@
-# Bug — Wire reads silently drop compacted (retain=none) records; the local read shows them as `(removed)`
+# Bug - Wire reads silently drop compacted (retain=none) records; the local read shows them as `(removed)`
 
 ## TL;DR
 
-- **What failed:** `onReadReq`'s callback does `const e = en orelse return;` — a `retain=none` compacted record (slot-only, no entry) is never encoded into a `read_page`. The same records are served to local reads and rendered `(removed)`.
-- **Impact:** `coppiz read`/`coppiz head` over the wire show a position gap with no marker, while the identical read on a locked directory shows `(removed)` — inconsistent output for the same command, with no note (the sync path documents the drop explicitly).
+- **What failed:** `onReadReq`'s callback does `const e = en orelse return;` - a `retain=none` compacted record (slot-only, no entry) is never encoded into a `read_page`. The same records are served to local reads and rendered `(removed)`.
+- **Impact:** `coppiz read`/`coppiz head` over the wire show a position gap with no marker, while the identical read on a locked directory shows `(removed)` - inconsistent output for the same command, with no note (the sync path documents the drop explicitly).
 - **Resolution:** Still open. Statically validated.
 
 ## Status
@@ -32,7 +32,7 @@ Not yet fixed. Suggested direction: encode a slot-only record into the page (or 
 
 ## Follow-up
 
-None — output-consistency issue, no data loss.
+None - output-consistency issue, no data loss.
 
 ## References
 

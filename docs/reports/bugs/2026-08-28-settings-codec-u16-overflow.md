@@ -1,14 +1,14 @@
-# Bug — Settings codec truncates u16 length fields: a value ≥ 64 KiB panics the leader in debug builds
+# Bug - Settings codec truncates u16 length fields: a value ≥ 64 KiB panics the leader in debug builds
 
 ## TL;DR
 
 - **What failed:** `encodeChanges`/`encodeValue` write per-value and per-item lengths into u16 fields with unchecked `@intCast`; the sizes are computed in `usize`. Any settings value whose encoded form reaches 64 KiB panics in Debug/ReleaseSafe ("integer does not fit") and silently corrupts the payload in ReleaseFast/Small.
-- **Impact:** A leader crashes (debug builds — the default for `zig build run` and tests) on a settings change or genesis that the fold otherwise accepts. No encode-side cap exists; `journal.max_entry_bytes` (16 MiB) is far above the limit.
+- **Impact:** A leader crashes (debug builds - the default for `zig build run` and tests) on a settings change or genesis that the fold otherwise accepts. No encode-side cap exists; `journal.max_entry_bytes` (16 MiB) is far above the limit.
 - **Resolution:** Still open. Reproduced dynamically.
 
 ## Status
 
-Resolved — `encodeChanges`/`encodePayload`/`encodeValue` now refuse with
+Resolved - `encodeChanges`/`encodePayload`/`encodeValue` now refuse with
 `error.SettingsTooLarge` when a count or length exceeds `max u16`;
 regression tests in `fold.zig` (a 65,536-byte item) and the atomic-commit
 test drive the encode path.
@@ -27,9 +27,9 @@ The same panic is reachable from the wire: a client's `settings` message whose c
 
 ## Reproduction
 
-Standalone repro (validated): build a `string_list` value for `leadership.authorities` with one 65,536-byte item; `changesLen` returns 65,546 (> 65,535); calling `encodeChanges` panics with "integer does not fit in destination type" at `fold.zig:52`. In ReleaseFast/Small the same call silently writes a truncated u16 length whose bytes no longer match the payload — encode and decode disagree, and the entry is later refused as `InvalidLength` or misparsed.
+Standalone repro (validated): build a `string_list` value for `leadership.authorities` with one 65,536-byte item; `changesLen` returns 65,546 (> 65,535); calling `encodeChanges` panics with "integer does not fit in destination type" at `fold.zig:52`. In ReleaseFast/Small the same call silently writes a truncated u16 length whose bytes no longer match the payload - encode and decode disagree, and the entry is later refused as `InvalidLength` or misparsed.
 
-Expected: an error, or a documented cap, not a panic/corruption. The decode side reads u16 fields (`decodeChanges`, `decodeValue`), so the wire format itself is capped at 64 KiB per value — the encode side must enforce the same.
+Expected: an error, or a documented cap, not a panic/corruption. The decode side reads u16 fields (`decodeChanges`, `decodeValue`), so the wire format itself is capped at 64 KiB per value - the encode side must enforce the same.
 
 ## Root cause
 
@@ -46,10 +46,10 @@ Fixed. `schema.encodeValue` returns `error{SettingsTooLarge}` when the
 string_list count or an item length exceeds `max u16`; `fold.encodeChanges`
 refuses a change list whose count or any `valueLen` exceeds `max u16`; and
 `fold.encodePayload` propagates. The error set
-(`fold.SettingsTooLargeError`) ripples through every caller —
+(`fold.SettingsTooLargeError`) ripples through every caller -
 `chain.encodeGenesisPayload`/`encodeCreateJournalPayload`, the node's
 settings/genesis paths, `journal.init`, the CLI `settings set`, and the
-simulator — which now propagate it (`try`) instead of silently
+simulator - which now propagate it (`try`) instead of silently
 truncating. No wire-format change: the decode side's u16 fields are the
 cap, and the encode side now enforces the same bound.
 
@@ -60,7 +60,7 @@ over-long item from `encodeValue`.
 
 ## Verification
 
-- Dynamic: standalone repro — `changesLen = 65546`; `encodeChanges` panics with "integer does not fit in destination type" (`fold.zig:52`). Confirmed on this toolchain (`zig 0.16.0`).
+- Dynamic: standalone repro - `changesLen = 65546`; `encodeChanges` panics with "integer does not fit in destination type" (`fold.zig:52`). Confirmed on this toolchain (`zig 0.16.0`).
 - Static: all three `@intCast` sites verified; decode side reads u16 (`fold.zig:71-92`, `schema.zig:424+`); no encode-side cap found by grep.
 
 ## Follow-up

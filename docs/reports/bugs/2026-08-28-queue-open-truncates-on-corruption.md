@@ -1,20 +1,20 @@
-# Bug — `Queue.open` truncates the queue on any decode failure, silently dropping acknowledged entries on mid-file corruption
+# Bug - `Queue.open` truncates the queue on any decode failure, silently dropping acknowledged entries on mid-file corruption
 
 ## TL;DR
 
-- **What failed:** `Queue.open` breaks its record scan on *any* decode error and truncates the queue file. A single flipped byte in the middle of the file silently discards every later queued entry — acknowledged, fsynced writes — where the store refuses the identical situation as `Corrupt`.
+- **What failed:** `Queue.open` breaks its record scan on *any* decode error and truncates the queue file. A single flipped byte in the middle of the file silently discards every later queued entry - acknowledged, fsynced writes - where the store refuses the identical situation as `Corrupt`.
 - **Impact:** Lost acknowledged appends under partial corruption; the queue's own doc comment ("torn tail = unacknowledged") is wrong for mid-file damage.
 - **Resolution:** Still open. Statically validated.
 
 ## Status
 
-Resolved — `Queue.open` mirrors the store's torn-tail test: a valid
+Resolved - `Queue.open` mirrors the store's torn-tail test: a valid
 record after the break refuses with `Corrupt`; regression test flips a
 byte mid-file.
 
 ## Symptom and impact
 
-The unslotted queue is durable (`src/journal/queue.zig`); entries the node accepted from clients sit here until slotted. On restart, `Queue.open` replays the file. If any record mid-file fails to decode (bit rot, partial overwrite, torn write beyond the tail), the open path truncates the file at the failure point and **drops every queued entry after it** — including ones that were fsynced before the corruption happened. The store, by contrast, distinguishes a torn tail from mid-file corruption (`findValidRecordAfter`, `store.zig:743`) and refuses mid-file damage with `Corrupt` ([G3](../../glossary.md)).
+The unslotted queue is durable (`src/journal/queue.zig`); entries the node accepted from clients sit here until slotted. On restart, `Queue.open` replays the file. If any record mid-file fails to decode (bit rot, partial overwrite, torn write beyond the tail), the open path truncates the file at the failure point and **drops every queued entry after it** - including ones that were fsynced before the corruption happened. The store, by contrast, distinguishes a torn tail from mid-file corruption (`findValidRecordAfter`, `store.zig:743`) and refuses mid-file damage with `Corrupt` ([G3](../../glossary.md)).
 
 ## Reproduction
 
@@ -35,7 +35,7 @@ is truncated as before.
 
 Regression test ("mid-file corruption is refused at open, not truncated
 away"): two records, one flipped byte inside the first record's payload
-— open now refuses with `Corrupt` instead of silently dropping the
+- open now refuses with `Corrupt` instead of silently dropping the
 acknowledged second entry. Verified to fail (the old code truncated and
 returned success) against the pre-fix scan.
 

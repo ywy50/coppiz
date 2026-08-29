@@ -1,4 +1,4 @@
-# Bug — `reforwardQueue`'s leader-slot branches never complete `pending_locals`: an embedded host's `localAppend` hangs forever on election
+# Bug - `reforwardQueue`'s leader-slot branches never complete `pending_locals`: an embedded host's `localAppend` hangs forever on election
 
 ## TL;DR
 
@@ -12,7 +12,7 @@ Open. Regression window introduced by `f401606` (the sweep-1 fix added `complete
 
 ## Symptom and impact
 
-A host thread blocked forever in `localAppend` with no timeout and no error — the entry is durably queued and eventually slotted (replicated), but the caller is never told. The wire-client sibling is handled (acked); only the embedded-host path leaks.
+A host thread blocked forever in `localAppend` with no timeout and no error - the entry is durably queued and eventually slotted (replicated), but the caller is never told. The wire-client sibling is handled (acked); only the embedded-host path leaks.
 
 ## Reproduction
 
@@ -21,7 +21,7 @@ Not dynamically reproduced (needs a leaderless window + an election); statically
 1. Member is a follower with no reachable leader; host calls `localAppend` → `onLocalAppend` (follower branch) queues the entry, registers the completion in `pending_locals`, `sendForward` no-ops (`node.zig:1726-1729`).
 2. The member is elected: `onTick` → `runElection` → `appendEpoch` → **`reforwardQueue()`** (`node.zig:1721`) runs *before* `slotQueuedEntries` (`node.zig:894`).
 3. `reforwardQueue`'s leader branch (`node.zig:562-571`) finds the entry unknown, `slotAndBroadcast`s it, and acks **only** `pending_clients` (`:564-571`). `pending_locals` is untouched.
-4. `applyReplicated` (inside `slotAndBroadcast`) trims the queue; `slotQueuedEntries` (`:979-1003`) — which *does* complete `pending_locals` (`:998-1000`) — never sees the entry.
+4. `applyReplicated` (inside `slotAndBroadcast`) trims the queue; `slotQueuedEntries` (`:979-1003`) - which *does* complete `pending_locals` (`:998-1000`) - never sees the entry.
 
 Contrast the already-fixed sibling: the entry-known branch (`:553-561`) calls `completePendingFor` (`:1848-1856`, resolves both), and `slotQueuedEntries`' known branch does too (`:987-993`). Only the two leader-slot branches of `reforwardQueue` were missed.
 

@@ -1,4 +1,4 @@
-# Investigation — <symptom or question>
+# Investigation - <symptom or question>
 
 ## TL;DR
 
@@ -8,7 +8,7 @@
 
 ## Status
 
-Investigating / Resolved / Closed — not a bug. State what evidence would move
+Investigating / Resolved / Closed - not a bug. State what evidence would move
 the investigation to the next status.
 
 ## Trigger and scope

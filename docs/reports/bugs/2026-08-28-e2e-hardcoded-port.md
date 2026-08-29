@@ -1,14 +1,14 @@
-# Bug — One process-level e2e test hardcodes a port, defeating the pid-derived port design
+# Bug - One process-level e2e test hardcodes a port, defeating the pid-derived port design
 
 ## TL;DR
 
-- **What failed:** The test-suite header (`main.zig:1040-1043`) derives test ports from the test pid "so an aborted earlier run … or a parallel checkout cannot collide on fixed ports", and `testAddr` implements that — but the test "members and doctor reach a serving node over the wire" hardcodes `"127.0.0.1:17431"` instead of `testAddr(...)`.
+- **What failed:** The test-suite header (`main.zig:1040-1043`) derives test ports from the test pid "so an aborted earlier run … or a parallel checkout cannot collide on fixed ports", and `testAddr` implements that - but the test "members and doctor reach a serving node over the wire" hardcodes `"127.0.0.1:17431"` instead of `testAddr(...)`.
 - **Impact:** A stale `serve` from an aborted run (the exact case the design exists for) or a concurrent checkout on the same machine binds 17431 → `tcpListen` fails → flaky test.
 - **Resolution:** Still open. Statically validated.
 
 ## Status
 
-Resolved — the literal is replaced with `testAddr(7)` (the pid-derived
+Resolved - the literal is replaced with `testAddr(7)` (the pid-derived
 scheme); one-line fix.
 
 ## Symptom and impact

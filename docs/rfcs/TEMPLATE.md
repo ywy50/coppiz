@@ -1,8 +1,8 @@
-# RFC {{number}} — {{title}}
+# RFC {{number}} - {{title}}
 
 ## Status
 
-{{status}} — opened {{date}}.
+{{status}} - opened {{date}}.
 
 An RFC is a *request for comment*: it presents the options and a recommendation
 so a decision can be made, and it is not itself the decision record. When it is
@@ -15,7 +15,7 @@ reversal supersedes that ADR; this file keeps the reasoning that produced it.
 {{overview}}
 
 **Decision to make.** One sentence, phrased as the question the reader must
-answer — "which X do we adopt for Y", not "we should adopt X".
+answer - "which X do we adopt for Y", not "we should adopt X".
 
 **Why now.** What forces the choice: a blocked implementation, a cost, a
 failure, a deadline, a dependency that is going away.
@@ -38,17 +38,17 @@ strawman.
 ## Options considered
 
 One subsection per option. Include the status quo ("do nothing / keep the
-workaround") and at least one *out-of-the-box* option — something already in
+workaround") and at least one *out-of-the-box* option - something already in
 the tree, a standard-library or OS primitive, an existing tool used differently,
 or buying instead of building. An RFC with only the two obvious libraries has
 not finished looking.
 
-### Option A — <name>
+### Option A - <name>
 
 - **What it is:** one or two sentences.
 - **Maturity:** release cadence, last release, maintainer count, licence,
   who else runs it in production.
-- **How it would fit:** what changes here — files, dependencies, build steps,
+- **How it would fit:** what changes here - files, dependencies, build steps,
   sandbox policy, operational surface.
 - **Pros:**
 - **Cons:**
@@ -57,7 +57,7 @@ not finished looking.
 - **Evidence:** links, with what each one actually shows. Mark anything not
   verified as `unverified`.
 
-### Option B — <name>
+### Option B - <name>
 
 - **What it is:**
 - **Maturity:**
@@ -68,7 +68,7 @@ not finished looking.
 - **Cost to leave:**
 - **Evidence:**
 
-### Option C — status quo
+### Option C - status quo
 
 - **What it is:** keep doing what we do today.
 - **Pros:**
@@ -79,7 +79,7 @@ not finished looking.
 ## Implications by horizon
 
 What following each candidate means over time. Where the options differ only in
-one horizon, say so — that is usually the deciding fact.
+one horizon, say so - that is usually the deciding fact.
 
 ### Short term (this release / 0–3 months)
 
@@ -110,7 +110,7 @@ the specific evidence that would raise it, and the finding that would sink the
 recommendation entirely.
 
 **Rationale.** Why this option beats the runner-up against the drivers above,
-in terms of the trade-off accepted — not a restatement of its pros.
+in terms of the trade-off accepted - not a restatement of its pros.
 
 **Reversibility.** How hard it is to undo, and the point of no return (a
 migrated data format, a public API, a dependency baked into the build).

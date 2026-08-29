@@ -1,9 +1,9 @@
-# Bug — `parsePeerKey` frees the old `public_key` before validating the new one: a malformed second key is a double-free
+# Bug - `parsePeerKey` frees the old `public_key` before validating the new one: a malformed second key is a double-free
 
 ## TL;DR
 
 - **What failed:** On a `public_key` line, the parser frees the peer's existing key first, then hex-validates the new value. A malformed second `public_key` (duplicate key, bad length/hex) returns `error.InvalidValue` with the field dangling; the caller's `errdefer config.deinit()` frees it again.
-- **Impact:** Double-free/UB on a reachable, non-OOM operator error — a typo'd second key in a `[[peers]]` block. Debug allocators abort; release builds corrupt the heap silently.
+- **Impact:** Double-free/UB on a reachable, non-OOM operator error - a typo'd second key in a `[[peers]]` block. Debug allocators abort; release builds corrupt the heap silently.
 - **Resolution:** Still open. Reproduced dynamically. Fix regression introduced by `f401606` (the hex check was added between the free and the dupe).
 
 ## Status
@@ -27,7 +27,7 @@ peer.public_key = try allocator.dupe(u8, hex);
 
 ## Reproduction
 
-Dynamically reproduced with a throwaway test: `parse` a config with `[[peers]]`, a valid 64-hex `public_key`, then a second `public_key = "bad"`. `parse` returns `error.InvalidValue`; the test's `config.deinit()` aborts (SIGABRT) in `local.zig:50` — the debug allocator's double-free trap. No OOM involved.
+Dynamically reproduced with a throwaway test: `parse` a config with `[[peers]]`, a valid 64-hex `public_key`, then a second `public_key = "bad"`. `parse` returns `error.InvalidValue`; the test's `config.deinit()` aborts (SIGABRT) in `local.zig:50` - the debug allocator's double-free trap. No OOM involved.
 
 ## Root cause
 
@@ -35,7 +35,7 @@ Free-before-validate: the field must be re-assigned (or cleared) before any refu
 
 ## Resolution
 
-Not yet fixed. Suggested fix: validate first, dupe into a local, then free the old and assign — or clear the field (`peer.public_key = null`) before returning the error. A regression test should parse a duplicate-key block with a malformed second value under `std.testing.allocator` and complete `deinit` without aborting.
+Not yet fixed. Suggested fix: validate first, dupe into a local, then free the old and assign - or clear the field (`peer.public_key = null`) before returning the error. A regression test should parse a duplicate-key block with a malformed second value under `std.testing.allocator` and complete `deinit` without aborting.
 
 ## Verification
 

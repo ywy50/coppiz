@@ -1,9 +1,9 @@
-# Bug — `leaderHex` makes a single un-retried status call: the process-level suite flakes with `ConnectionRefused`
+# Bug - `leaderHex` makes a single un-retried status call: the process-level suite flakes with `ConnectionRefused`
 
 ## TL;DR
 
 - **What failed:** Every other status read retries (`waitStatus` polls up to 30 s, `pollRead` 20 s); `leaderHex` issues exactly one more `status` child and any transient failure (`ConnectionRefused` while serve boots, `FileNotFound` before the key file exists) fails the test.
-- **Impact:** Flaky `zig build test` process-level suite — observed failing 3 of the first 4 cold-cache runs with this exact trace, then passing on warm runs.
+- **Impact:** Flaky `zig build test` process-level suite - observed failing 3 of the first 4 cold-cache runs with this exact trace, then passing on warm runs.
 - **Resolution:** Still open. Statically validated; the failure was observed.
 
 ## Status
@@ -12,7 +12,7 @@ Open.
 
 ## Symptom and impact
 
-`leaderHex` (`main.zig:1146-1154`) follows `waitStatus(bt, "epoch 1")` with one direct `runRaw(status)`; a non-zero child exit (`cmdStatus`'s `wireHello` → `ConnectionRefused`, `main.zig:474`) fails the test via `orelse return error.NoLeader`. The window is real: serve still booting when the second status child runs, or `member.key` not yet written by the serve at boot (`main.zig:229-232`) — the latter surfaces as `FileNotFound` in `memberIdentity`, which `waitStatus` retries fine and `leaderHex` does not. Aggravated by the suite's concurrent example-test binaries.
+`leaderHex` (`main.zig:1146-1154`) follows `waitStatus(bt, "epoch 1")` with one direct `runRaw(status)`; a non-zero child exit (`cmdStatus`'s `wireHello` → `ConnectionRefused`, `main.zig:474`) fails the test via `orelse return error.NoLeader`. The window is real: serve still booting when the second status child runs, or `member.key` not yet written by the serve at boot (`main.zig:229-232`) - the latter surfaces as `FileNotFound` in `memberIdentity`, which `waitStatus` retries fine and `leaderHex` does not. Aggravated by the suite's concurrent example-test binaries.
 
 ## Reproduction
 

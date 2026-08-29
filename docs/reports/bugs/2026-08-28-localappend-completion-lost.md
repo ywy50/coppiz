@@ -1,4 +1,4 @@
-# Bug — `ClusterNode.localAppend` completions are lost during backfill/merge: the embedded host's write blocks forever
+# Bug - `ClusterNode.localAppend` completions are lost during backfill/merge: the embedded host's write blocks forever
 
 ## TL;DR
 
@@ -8,14 +8,14 @@
 
 ## Status
 
-Resolved — `completePendingFor` resolves the embedded host's completion
+Resolved - `completePendingFor` resolves the embedded host's completion
 and the wire client's ack on every path where the entry's slot lands:
 the broadcast (`onSlot`), a sync page (`onSyncPage`), and the queue
 sweeps' already-known skip (`slotQueuedEntries`/`reforwardQueue`).
 
 ## Symptom and impact
 
-`localAppend` is the library's host-facing write API. Its contract (docstring at `node.zig:1335-1338`): "The completion is posted exactly once on every path — a refusal or the slotted entry id." That is false on the sync path. A host that appends during backfill (or during a merge) blocks forever with no timeout — there is no error return and no cancellation while the node runs.
+`localAppend` is the library's host-facing write API. Its contract (docstring at `node.zig:1335-1338`): "The completion is posted exactly once on every path - a refusal or the slotted entry id." That is false on the sync path. A host that appends during backfill (or during a merge) blocks forever with no timeout - there is no error return and no cancellation while the node runs.
 
 ## Reproduction
 
@@ -23,10 +23,10 @@ Not dynamically reproduced (the backfill window is timing-dependent and the hang
 
 - `pending_locals` is registered only at `node.zig:1374` (`onLocalAppend`, follower branch, after `sendForward`).
 - It is resolved only at:
-  - `node.zig:889-890` (`slotQueuedEntries`, leader slotting its own queue) — with an `entryKnown` skip at `:884` that returns without completing,
-  - `node.zig:1654-1655` (`onSlot`) — **but only if the guard at `:1610` (`if (self.syncing or self.merging_from != null) return;`) did not already drop the whole broadcast**.
+  - `node.zig:889-890` (`slotQueuedEntries`, leader slotting its own queue) - with an `entryKnown` skip at `:884` that returns without completing,
+  - `node.zig:1654-1655` (`onSlot`) - **but only if the guard at `:1610` (`if (self.syncing or self.merging_from != null) return;`) did not already drop the whole broadcast**.
 - The sync path (`onSyncPage` → `applyReplicated`, `node.zig:1756-1842`) never references `pending_locals` (grep-verified).
-- `reforwardQueue` (`node.zig:436-477`) resolves only `pending_clients` (`:465-472`); and its `entryKnown` skip (`:459-461`) removes the queued entry from the durable queue **without** completing — the exact drop that seals the hang once the slot arrives via sync page.
+- `reforwardQueue` (`node.zig:436-477`) resolves only `pending_clients` (`:465-472`); and its `entryKnown` skip (`:459-461`) removes the queued entry from the durable queue **without** completing - the exact drop that seals the hang once the slot arrives via sync page.
 
 Sequence: host calls `localAppend` while the member is backfilling → entry forwarded, completion in `pending_locals` → leader slots and broadcasts → follower's `onSlot` returns at the sync guard → the slot arrives later via `onSyncPage` (fold advances, completion untouched) → backfill ends, `reforwardQueue` sees the entry known and drops it from the queue → `pending_locals` entry leaks and the semaphore never posts. The same shape loses wire-client acks (`pending_clients`) during a leader-change re-forward (`reforwardQueue`'s `slotAndBroadcast` path acks only clients, `:464-472`).
 
@@ -47,7 +47,7 @@ is dropped. The docstring's "posted exactly once on every path" now
 holds.
 
 The follow-up crash (`leaderConnId` null-deref on a chainless joiner)
-was left as-is — it is on the same path but was not part of this defect.
+was left as-is - it is on the same path but was not part of this defect.
 A deterministic regression test is not practical (the backfill window is
 timing-dependent, and the hang is unbounded); the resolution sites were
 enumerated and each now resolves, matching the report's static
@@ -59,7 +59,7 @@ completeness argument.
 
 ## Follow-up
 
-Related crash on the same path: `leaderConnId` (`node.zig:1567`) does `self.node.control.epoch.?` with no null guard — a chainless joiner appending to `__cluster__` before its first sync page panics the loop. Worth covering in the same fix.
+Related crash on the same path: `leaderConnId` (`node.zig:1567`) does `self.node.control.epoch.?` with no null guard - a chainless joiner appending to `__cluster__` before its first sync page panics the loop. Worth covering in the same fix.
 
 ## References
 

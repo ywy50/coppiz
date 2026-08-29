@@ -1,9 +1,9 @@
-# Bug — `decodeValue` string_list leaks already-duped items on its error paths
+# Bug - `decodeValue` string_list leaks already-duped items on its error paths
 
 ## TL;DR
 
 - **What failed:** `decodeValue`'s `errdefer allocator.free(items)` frees only the outer array; items dupe'd before a failure (OOM mid-loop, `InvalidLength`, or trailing garbage) leak.
-- **Impact:** Refusal-path leak only — a malformed settings entry leaks `count × len` bytes on every member that decodes it while refusing.
+- **Impact:** Refusal-path leak only - a malformed settings entry leaks `count × len` bytes on every member that decodes it while refusing.
 - **Resolution:** Still open. Statically validated.
 
 ## Status

@@ -1,8 +1,8 @@
-# ADR 0003 — Batteries included: replication, election and storage ship inside the library, and no external infrastructure is required at any size
+# ADR 0003 - Batteries included: replication, election and storage ship inside the library, and no external infrastructure is required at any size
 
 ## Status
 
-Accepted — 2026-08-21.
+Accepted - 2026-08-21.
 
 ## Context
 
@@ -31,7 +31,7 @@ directory; with no peers that is a complete one-member journal, and adding
 peers is configuration of the *same* node, never a new component. coppiz
 never depends on an external coordinator (etcd, ZooKeeper, Consul), a
 separate replication daemon, a message broker, or a discovery service, and
-the node binary is the same library wrapped — a convenience, not a required
+the node binary is the same library wrapped - a convenience, not a required
 piece of infrastructure.
 
 "Slim to start, expandable" is a rule on how features land: each mechanism
@@ -46,8 +46,8 @@ cannot be absent at size 1 needs a reason in its PRD.
 - A host pays one dependency and one data directory; "deploying coppiz" is
   deploying the host. Any Zig program embeds it the same way; clanker's
   single static binary is one instance of that, not the reason for it.
-- coppiz owns the whole distributed-systems surface — delivery, retention,
-  backfill, election, merge — which clanker's research called "the category
+- coppiz owns the whole distributed-systems surface - delivery, retention,
+  backfill, election, merge - which clanker's research called "the category
   of work most likely to be subtly wrong". The deterministic simulator
   ([OQ 27](../open-questions.md)) is the mitigation, and it is why the pure
   fold/election/merge split in PRDs 0001–0003 is not optional.
@@ -56,10 +56,10 @@ cannot be absent at size 1 needs a reason in its PRD.
   small-cluster range the growth path is more groups rather than bigger ones
   ([PRD 0006](../prds/0006-scaling-to-groups-sharding-and-parity.md)), with
   leader-star or gossip topology inside large groups ([OQ
-  25](../open-questions.md)) — still inside the library.
+  25](../open-questions.md)) - still inside the library.
 - Non-Zig hosts reach it through the node binary or a future C ABI
   ([RFC 0001](../rfcs/0001-library-first-or-service-first.md)); anything the
   node binary can do, the library can do.
-- Reversing this — requiring a component outside the library — is a
+- Reversing this - requiring a component outside the library - is a
   superseding ADR, because it changes what "using coppiz" means for every
   host.

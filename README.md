@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <em>A replicated, append-only store in Zig you embed like SQLite — from one
+  <em>A replicated, append-only store in Zig you embed like SQLite - from one
   process to a fleet, with no quorum, no sidecar, and optional TTL for
   rolling-window state.</em>
 </p>
@@ -19,7 +19,7 @@
 
 ## Quick start
 
-The only prerequisite is a Zig 0.16 toolchain — its minimum version is pinned
+The only prerequisite is a Zig 0.16 toolchain - its minimum version is pinned
 in `build.zig.zon`; nothing else needs installing.
 
 **Run the node.** One process is a complete journal; `init` writes the member
@@ -33,7 +33,7 @@ zig-out/bin/coppiz read --dir ./data --journal main
 zig-out/bin/coppiz head --dir ./data --journal main
 ```
 
-**Or embed the library.** The API is pre-1.0 — [PRD
+**Or embed the library.** The API is pre-1.0 - [PRD
 0005](docs/prds/0005-embedding-the-library-as-the-product.md) pins the shape,
 names will move. The SQLite case: a data directory, an allocator, an `std.Io`,
 and a node:
@@ -62,9 +62,9 @@ try node.readRange(events, null, null, false, false, &found, struct {
 }.on);
 ```
 
-In a cluster, a host writes through the loop of its own member —
+In a cluster, a host writes through the loop of its own member -
 `cluster.ClusterNode.localAppend` queues, forwards to the leader and blocks
-until the slot folds back — and reads the same way
+until the slot folds back - and reads the same way
 (`cluster.ClusterNode.localReadRange` runs the read through the loop), or
 over the wire as a client to the local member, while the loop runs. The
 three host shapes are `examples/`, built and tested by `zig build examples`.
@@ -76,7 +76,7 @@ detail.
 ## Status
 
 Working today: a single process is a complete journal (append, read, follow,
-restart), and a cluster replicates for real — the pure membership fold,
+restart), and a cluster replicates for real - the pure membership fold,
 election and epoch/merge rules, the node loop over the wire, and settings,
 TTL and checkpoint cleanup all in the chain. A host embeds the library and
 writes through its member's loop. Not yet: federation
@@ -89,7 +89,7 @@ what ships in what order in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 **What it is.** coppiz is a replicated, append-only store for Zig programs: a
 library you link and give a data directory, with storage, replication,
-election and cleanup inside it — nothing to install or run beside it. Entries
+election and cleanup inside it - nothing to install or run beside it. Entries
 are signed, hash-chained, and replicated in full to every member of the
 group. One process is a complete, working store (the SQLite shape); a fleet
 needs no quorum, no odd member count, and no redeploy; and past one group the
@@ -100,9 +100,9 @@ same code composes groups instead of growing one ([ADR
 **How it works, at a glance.** The design rests on one separation and one
 rule ([PRD 0001](docs/prds/0001-journal-core.md)):
 
-- **Entry versus slot.** An *entry* is what an author writes — immutable,
+- **Entry versus slot.** An *entry* is what an author writes - immutable,
   author-signed, identified by `(author, author_seq)`. A *slot* is where the
-  journal put it — `(epoch, seq)`, assigned and signed by the leader of that
+  journal put it - `(epoch, seq)`, assigned and signed by the leader of that
   epoch, hash-chained to the previous slot. Content never changes; order can
   heal after a partition by re-slotting unchanged entries.
 - **Everything the journal knows about itself is in the chain.** Membership,
@@ -125,9 +125,9 @@ client ─append─▶ local member ──forward──▶ leader ──(slot, e
 
 - **Leadership without quorum.** There is no vote: `leader(mode, settings,
   members, liveness)` is a pure function every member evaluates over its
-  fold. `seniority` (earliest join — unspoofable, because join order *is*
+  fold. `seniority` (earliest join - unspoofable, because join order *is*
   chain position), an operator's `configured` authority list (name one of
-  two members, or an odd subset of six), or `combined` — all well-defined at
+  two members, or an odd subset of six), or `combined` - all well-defined at
   1, 2, and any even count, and switchable at runtime when the cluster
   allows it. A partition under `seniority` yields a leader per side and a
   deterministic merge on heal
@@ -171,14 +171,14 @@ cut it: the server-shaped stores (etcd, Postgres, NATS) want a cluster stood
 up first; the Raft stores (rqlite, dqlite) want a quorum and an odd member
 count, so two nodes can't elect; the gossip/CRDT stores converge but don't
 order. coppiz is for the gap between "write files and hope" and "run
-infrastructure" — slim at size 1, expandable by settings as members are
+infrastructure" - slim at size 1, expandable by settings as members are
 added ([ADR 0003](docs/adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
 It is general-purpose: not built for any one host.
 
 ## Build and test
 
 `zig build test` is today's merge gate ([OQ 45](docs/open-questions.md)): it
-builds and runs the unit tests plus the analysis gates — formatting (`zig fmt
+builds and runs the unit tests plus the analysis gates - formatting (`zig fmt
 --check --ast-check`), the 100-column cap, test registration and forced
 declaration analysis, and gate-coverage completeness:
 
@@ -196,12 +196,12 @@ zig build lint
 
 **Shipped (2026-08-27): the single-member core, the pure cluster core, the
 cluster node loop, TTL cleanup end to end, and the embedded-host write
-path.** One process is a complete journal — append, read, follow, restart —
+path.** One process is a complete journal - append, read, follow, restart -
 with settings, TTL and checkpoint cleanup in the chain. On top of that sits
 the cluster core of [PRD 0003](docs/prds/0003-membership-and-leadership.md):
 the pure membership fold, election and epoch/merge rules (driven by the
 deterministic simulator, [OQ 27](docs/open-questions.md)), and the node
-loop over the wire — failure detection, election → epoch, admission
+loop over the wire - failure detection, election → epoch, admission
 (allowlist/open/prompt), and forward/broadcast/backfill, so real processes
 replicate: `coppiz serve` runs a node, members join live, appends through a
 follower replicate to the leader and back, and a healed partition merges
@@ -209,7 +209,7 @@ deterministically. The leader's checkpoint cadence ([PRD
 0002](docs/prds/0002-ttl-and-staleness.md) phases 4–5) keeps every member's
 payloads dropping at the same chain position. A host embeds the library and
 writes through its member's loop (`cluster.ClusterNode.localAppend`), and
-`examples/` — `embed-single`, `embed-cluster`, `sidecar` — builds and tests
+`examples/` - `embed-single`, `embed-cluster`, `sidecar` - builds and tests
 each host shape ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)).
 `coppiz append`/`read`/`head` talk to a serving node over the wire when the
 data directory is locked ([OQ 47](docs/open-questions.md)); `coppiz status`,
@@ -217,7 +217,7 @@ data directory is locked ([OQ 47](docs/open-questions.md)); `coppiz status`,
 round out the CLI. The product is named `coppiz`
 ([ADR 0004](docs/adrs/0004-the-product-is-named-coppiz.md)).
 
-The full design lives in `docs/` — this table is the map; the detail is in
+The full design lives in `docs/` - this table is the map; the detail is in
 the records, not here.
 
 | Path | What |
@@ -233,7 +233,7 @@ the records, not here.
 | [CHANGELOG.md](CHANGELOG.md), [RELEASES.md](RELEASES.md) | consumer-visible changes; version and release policy |
 | `src/journal/`, `src/settings/`, `src/config/` | the single-member core: codecs, chain, segments, store, schema, local config |
 | `src/cluster/`, `src/sim/` | membership, election, epochs, merge and the node loop (pure core + `node.zig`); the deterministic simulator |
-| `examples/` | one embedded host per shape (embed-single, embed-cluster, sidecar) — built by `zig build examples`, each a test |
+| `examples/` | one embedded host per shape (embed-single, embed-cluster, sidecar) - built by `zig build examples`, each a test |
 | `src/root.zig`, `src/main.zig` | the library; the node binary |
 
 ## Origin

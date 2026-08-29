@@ -1,20 +1,20 @@
-# Bug — A re-slot redelivery lowers `authors.last_seq`, bypassing the `DuplicateConflict` rule for later conflicting entries
+# Bug - A re-slot redelivery lowers `authors.last_seq`, bypassing the `DuplicateConflict` rule for later conflicting entries
 
 ## TL;DR
 
-- **What failed:** `checkAuthorSeq` accepts a byte-identical redelivery of an entry *below* the author's recorded `last_seq`, and `registerEntry` then unconditionally writes `authors.last_seq = en.author_seq` — lowering the high-water mark. With the floor lowered, a *different* entry at a seq between the lowered mark and the true last passes the seq check (which early-returns when `author_seq > last_seq`) without any dedup comparison and overwrites the original record.
+- **What failed:** `checkAuthorSeq` accepts a byte-identical redelivery of an entry *below* the author's recorded `last_seq`, and `registerEntry` then unconditionally writes `authors.last_seq = en.author_seq` - lowering the high-water mark. With the floor lowered, a *different* entry at a seq between the lowered mark and the true last passes the seq check (which early-returns when `author_seq > last_seq`) without any dedup comparison and overwrites the original record.
 - **Impact:** The dedup promise in `checkAuthorSeq`'s docstring ("accepted only when it is a byte-identical redelivery") is weakened; a conflicting entry can replace an already-slotted record under a misbehaving/merged leader.
 - **Resolution:** Still open. Statically validated (low severity: trigger requires an adversarial author + slotting order).
 
 ## Status
 
-Resolved — `registerEntry` only ever raises the author's `last_seq`;
+Resolved - `registerEntry` only ever raises the author's `last_seq`;
 regression test redelivers an old entry and checks a conflicting
 same-id entry is still refused.
 
 ## Symptom and impact
 
-Low severity: the trigger is adversarial (a leader re-slotting entries out of order, or a malicious author). But the invariant the whole dedup design rests on — "the entries table is the dedup store; an entry at or below the last seq is accepted only when byte-identical" — is broken by the lowering, and a *different* entry can then be accepted and overwrite the recorded one.
+Low severity: the trigger is adversarial (a leader re-slotting entries out of order, or a malicious author). But the invariant the whole dedup design rests on - "the entries table is the dedup store; an entry at or below the last seq is accepted only when byte-identical" - is broken by the lowering, and a *different* entry can then be accepted and overwrite the recorded one.
 
 ## Reproduction
 
@@ -35,7 +35,7 @@ high-water mark never lowers it and the dedup rule's early return for
 Regression test (`chain.zig` "a redelivery below the author's last_seq
 does not lower it"): E1 (seq 5) and E2 (seq 6) fold, E1 is redelivered
 at a new position (accepted as the byte-identical dedup), then a
-*conflicting* entry with E2's id is refused with `DuplicateConflict` —
+*conflicting* entry with E2's id is refused with `DuplicateConflict` -
 before the fix the redelivery lowered the mark to 5 and the conflict
 passed the seq check without any dedup comparison.
 
@@ -45,7 +45,7 @@ passed the seq check without any dedup comparison.
 
 ## Follow-up
 
-None — contained. Low priority.
+None - contained. Low priority.
 
 ## References
 

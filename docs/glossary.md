@@ -12,7 +12,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **wire client** | the CLI's short-lived connection to a serving node, used when the data-directory lock keeps the CLI out (OQ 47); the client dials with the node's own key, and the node admits it as its operator channel without a join | PRD 0003, OQ 19 |
 | **founder** | the member whose `genesis` created the cluster; seniority 0 | PRD 0003 |
 | **genesis** | the control entry that creates the cluster and its first journal; carries the initial settings and the founder's key; its slot gives the founder seniority 0 | PRD 0001 |
-| **journal** | one named, append-only sequence of slots with its own settings ("schema"); a cluster holds many; a log of slots, not a financial ledger — consumers fold it into whatever view they need. Renamed from "ledger" 2026-08-27; the brief's word, kept there and in verbatim citations | PRD 0001 |
+| **journal** | one named, append-only sequence of slots with its own settings ("schema"); a cluster holds many; a log of slots, not a financial ledger - consumers fold it into whatever view they need. Renamed from "ledger" 2026-08-27; the brief's word, kept there and in verbatim citations | PRD 0001 |
 | **entry** | what an author writes: a fixed, author-signed header plus an opaque payload; immutable; identified by `(author, author_seq)` | PRD 0001 |
 | **entry id** | `(author, author_seq)`; stable forever, across merges and restarts | PRD 0001 |
 | **author** | the member that signed an entry | PRD 0001 |
@@ -46,8 +46,8 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **partition** | members that disagree on liveness; each side may elect its own leader | PRD 0003 |
 | **AP / CP** | the two partition postures, from CAP: an AP choice keeps accepting writes during a partition and heals the divergence afterwards (merge); a CP choice refuses writes rather than risk two leaders (`stall`) | PRD 0001, PRD 0003 |
 | **branch** | the slots one side of a partition produced in its own epoch | PRD 0003 |
-| **branch start** | the first slot of a branch — the epoch entry that opened it | PRD 0003 |
-| **common tail** | the last slot before a branch started — the shared prefix both sides of a partition have; a losing branch truncates to it and re-folds the survivor's chain from it | PRD 0003 |
+| **branch start** | the first slot of a branch - the epoch entry that opened it | PRD 0003 |
+| **common tail** | the last slot before a branch started - the shared prefix both sides of a partition have; a losing branch truncates to it and re-folds the survivor's chain from it | PRD 0003 |
 | **surviving branch** | the branch a merge keeps: its leader appends the `merge` entry and the losing branch's entries are re-slotted after it, in that branch's order | PRD 0003 |
 | **archived branch** | a losing branch's original slots after a merge: its entries are re-slotted into the surviving chain, and these slots are kept (delivered to members without them) so the partition stays verifiable; never appended to again; not to be confused with an archival checkpoint | PRD 0003 |
 | **merge** | the control entry and rule by which the surviving branch re-slots the losing branch's entries after it | PRD 0003 |
@@ -63,7 +63,7 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **grace** | read-side skew tolerance in ms; affects visibility on one member, never bytes | PRD 0002 |
 | **archival checkpoint** | a leader-signed root over a chain prefix that lets members drop the slots behind it while keeping verifiability from the root; out of v1, the bound on slot growth | OQ 24 |
 | **settings** | journal or cluster behaviour stored in the chain via `genesis`/`settings` entries; never per-member | PRD 0004 |
-| **local config** | `coppiz.toml`: paths, identity, peers, fsync — things whose disagreement cannot fork the journal | PRD 0004 |
+| **local config** | `coppiz.toml`: paths, identity, peers, fsync - things whose disagreement cannot fork the journal | PRD 0004 |
 | **scope** | whether a setting is cluster-wide, per journal, or federation-scoped (reserved, PRD 0006) | PRD 0004 |
 | **control journal** | the journal whose chain carries a scope's control entries (membership, settings); whether the cluster's is its own journal or the first data journal is OQ 7 | PRD 0004, PRD 0006 |
 | **control chain** | the chain of a control journal: a group's `genesis`, `join`, `leave`, `epoch` and `merge` slots; what federated groups exchange so a representative can be validated against its own chain | PRD 0006 |
@@ -78,10 +78,10 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **follower copy** | a read-only replica of a journal kept by a non-owning group; backfilled like a syncing member, never sequencing | PRD 0006 |
 | **range key** | the author-id prefix by which one journal is split across groups, keeping each author's stream in one group | PRD 0006 |
 | **sharding** | splitting one journal across groups by range key (`journal id + range key → group`), each group sequencing its ranges; distinct from ownership, which assigns whole journals | PRD 0006 |
-| **instance** | a running coppiz process — the same thing as a *node*; the unit the tier table counts | PRD 0006, ROADMAP |
+| **instance** | a running coppiz process - the same thing as a *node*; the unit the tier table counts | PRD 0006, ROADMAP |
 | **segment** | one on-disk file of slots and their entries in chain order, each record length-prefixed and CRC-checked; its header carries the format version, the journal id and the id of the group that sequenced it | PRD 0001 |
 | **sealed segment** | a storage segment behind the head that will never be appended to; has a recorded hash; the unit of parity | PRD 0001, PRD 0006 |
 | **parity** | k-of-m erasure coding of sealed segments across groups; any k groups reconstruct | PRD 0006 |
 | **tier** | which scaling mechanisms are on: 0 (one process), 1 (one group), 2 (groups), 3 (groups of groups), parity | PRD 0006, ROADMAP |
-| **OQ n** | open question *n* in [open-questions.md](open-questions.md) | — |
+| **OQ n** | open question *n* in [open-questions.md](open-questions.md) | - |
 | **brief** | the operator's founding notes of 2026-08-21, [qnd-notes.md](../qnd-notes.md); records cite them as "the brief"; what was clarified in conversation the same day is recorded in the record that rests on it ([ADR 0003](adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)) | docs/README.md |

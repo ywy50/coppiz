@@ -1,17 +1,17 @@
-# Bug — The process-level e2e tests race the install step: they spawn `zig-out/bin/coppiz` before it may exist
+# Bug - The process-level e2e tests race the install step: they spawn `zig-out/bin/coppiz` before it may exist
 
 ## TL;DR
 
 - **What failed:** The process-level tests in `src/main.zig` spawn the installed binary by relative path (`"zig-out/bin/coppiz"`), but `build.zig` wires the install step as a *sibling* of the run steps under `test`, not a dependency of them. The test binary can start before the exe is compiled and copied.
-- **Impact:** Spurious `zig build test` failures on fast machines/CI — the binary isn't found when the test spawns it. Latent today only because the suite is already red on the two compile errors.
+- **Impact:** Spurious `zig build test` failures on fast machines/CI - the binary isn't found when the test spawns it. Latent today only because the suite is already red on the two compile errors.
 - **Resolution:** Still open. Statically validated (dependency-graph structure).
 
 ## Status
 
-Resolved — the `exe_tests` run step now depends on the coppiz install step
+Resolved - the `exe_tests` run step now depends on the coppiz install step
 (`build.zig`, `addChecks`), wired during the test-build speedup work
 (investigation
-[2026-08-28 — making `zig build test` faster without dropping tests](../investigations/2026-08-28-test-suite-quick-wins.md)).
+[2026-08-28 - making `zig build test` faster without dropping tests](../investigations/2026-08-28-test-suite-quick-wins.md)).
 
 ## Symptom and impact
 
@@ -27,7 +27,7 @@ Both are siblings under `test`. The build runner executes dependencies concurren
 
 ## Reproduction
 
-Not deterministically reproduced (the suite can't currently reach it — the two compile errors block it; after those are fixed, the race appears probabilistically depending on compile scheduling). Statically certain from the dependency graph.
+Not deterministically reproduced (the suite can't currently reach it - the two compile errors block it; after those are fixed, the race appears probabilistically depending on compile scheduling). Statically certain from the dependency graph.
 
 ## Root cause
 
@@ -47,13 +47,13 @@ test_step.dependOn(&exe_tests_run.step);
 
 The run cannot start before the install step (compile + copy to
 `zig-out/bin/coppiz`) completes. The install is scoped to the coppiz binary
-alone — the suite never spawns the example executables, so they stay off the
+alone - the suite never spawns the example executables, so they stay off the
 test path (the same change that removed the wasted example compiles).
 
 The original fix was incomplete for the G2 test: "the suite never spawns
 the example executables" stopped being true when `main.zig`'s G2 test
 began spawning `zig-out/bin/sidecar` (the installed binary was stale in
-the baseline run — built before the G2 feature — and the test failed on
+the baseline run - built before the G2 feature - and the test failed on
 its stderr assertion). `addChecks` now installs the sidecar too (reusing
 the example compile step via `example_exes`) and the exe_tests run
 depends on that install as well, so the test always spawns a current

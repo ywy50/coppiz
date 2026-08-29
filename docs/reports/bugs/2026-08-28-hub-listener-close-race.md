@@ -1,4 +1,4 @@
-# Bug — `HubListener.closeFn` writes `endpoint.closed` without the endpoint mutex (data race, latent)
+# Bug - `HubListener.closeFn` writes `endpoint.closed` without the endpoint mutex (data race, latent)
 
 ## TL;DR
 
@@ -8,7 +8,7 @@
 
 ## Status
 
-Resolved — `closeFn` writes `endpoint.closed` under the endpoint mutex,
+Resolved - `closeFn` writes `endpoint.closed` under the endpoint mutex,
 matching the locking discipline of `pushConn`/`acceptConn`.
 
 ## Symptom and impact

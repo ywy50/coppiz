@@ -1,8 +1,8 @@
-# Research — Comparison benchmarks: which systems, which workloads, and how to run them fairly
+# Research - Comparison benchmarks: which systems, which workloads, and how to run them fairly
 
 ## Status
 
-Draft — searched 2026-08-28; a follow-up sweep the same day (via the shell,
+Draft - searched 2026-08-28; a follow-up sweep the same day (via the shell,
 see Scope and method) closed several of the open items.
 
 Research is evidence, not a decision: it records what exists, how good it is,
@@ -15,8 +15,8 @@ coppiz is positioned as a library to "just use" the way SQLite, dqlite or
 rqlite are ([docs/README.md](../README.md#hosts), [ADR 0003](../adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
 Which stores should the comparison benchmark suite pit against it, what
 workloads and metrics make each comparison fair, and what is the current
-state of each candidate — version, licence, durability semantics, benchmark
-tooling — as of 2026-08-28?
+state of each candidate - version, licence, durability semantics, benchmark
+tooling - as of 2026-08-28?
 
 This note answers the *how*: the harness design (workloads, metrics,
 durability contract, fairness rules) and the evidence on each candidate. It
@@ -31,40 +31,40 @@ and adds the external comparison rows.
   (single-node baseline, clanker's status quo), dqlite (embedded replicated
   library), rqlite (service replicated) are the three named comparators in
   [docs/README.md](../README.md#hosts). Everything else is an extension that
-  must justify itself by the claim it tests — [Options found](#options-found).
+  must justify itself by the claim it tests - [Options found](#options-found).
 - **No rigorous head-to-head benchmark of these systems exists in public.**
   The closest are a crude 2022 gcore wall-clock test (Litestream ≈10 s,
   dqlite ≈22 s, rqlite ≈61.5 s to import Chinook), a qualitative 2020
   Stanford student project, and self-reported vendor numbers (rqlite docs,
   etcd 2016-era doc, LiteFS "~100 tps" FUSE ceiling, CR-SQLite "2.5× insert
-  overhead"). A fair comparison is itself a contribution — `high`,
+  overhead"). A fair comparison is itself a contribution - `high`,
   absence-based after a broad sweep:
   [gcore](https://gcore.com/blog/comparing-litestream-rqlite-dqlite/),
   [evidence log](#evidence-log).
 - **The single most common flaw in every published comparison is durability
-  mismatch** — SQLite `synchronous=NORMAL` or OFF compared against raft
+  mismatch** - SQLite `synchronous=NORMAL` or OFF compared against raft
   systems that fsync every write. The suite must define a durability
   contract (DURABLE / BATCHED / ASYNC) and compare within a class only.
   [etcd's own guide](https://etcd.io/docs/v3.4/op-guide/performance/)
-  states commit latency = fdatasync + RTT — `high`.
+  states commit latency = fdatasync + RTT - `high`.
 - **Each candidate has a different durability floor that must be pinned
   before benchmarking:** SQLite WAL `synchronous=FULL` (fsync WAL per
   commit), dqlite fixed O_DSYNC raft log (no knobs), rqlite raft log fsynced
   per write, etcd WAL fsync, TigerBeetle synchronous 3/6 quorum,
   JetStream `sync_interval=always` + R3 (PubAck ≠ fsync by default),
-  LiteFS async by default (data-loss window on primary crash) — all verified
+  LiteFS async by default (data-loss window on primary crash) - all verified
   at source, 2026-08-28, [evidence log](#evidence-log).
 - **Two of the "modern entrants" are maintenance-risk rows, not fixtures:**
   libSQL's innovation has moved to the Turso rewrite (README banner, last
   `libsql-server` release 2025-02-14) and LiteFS has had no release since
-  2025-04-22 plus a documented "no support" notice — both still benchmarkable,
-  both flagged. CR-SQLite has no append/history semantics until its v2 —
+  2025-04-22 plus a documented "no support" notice - both still benchmarkable,
+  both flagged. CR-SQLite has no append/history semantics until its v2 -
   [Options found](#crsqlite).
 - **The AP/CRDT family (Loro, Automerge, Yjs, Marmot) is a semantics
   comparison, not a throughput one:** published numbers are text-edit
   workloads (dmonad/crdt-benchmarks, Loro's perf page), none measure an
   append-log shape, and none show merge determinism. A partition/heal
-  scenario row is the honest comparison; a throughput row is not —
+  scenario row is the honest comparison; a throughput row is not -
   [Options found](#automerge-yjs-loro).
 
 ## Scope and method
@@ -82,11 +82,11 @@ and adds the external comparison rows.
   everything was verified by direct fetch of named sources. Consequences:
   Hacker News threads with real measured numbers could not be enumerated
   (Algolia API was also down), and no 2024–2026 rigorous third-party
-  head-to-head benchmark was found — these are listed under
+  head-to-head benchmark was found - these are listed under
   [Open questions](#open-questions) for a rerun with working search.
 - **Freshness:** every claim read on 2026-08-28; the newest sources are
   nats-server v2.14.6 (2026-08-27) and Loro 1.15.0 (2026-08-27). Release
-  cadence, licences and maintenance posture age fast — the versions quoted
+  cadence, licences and maintenance posture age fast - the versions quoted
   here are already a snapshot. Anything marked `absence-based` means the
   sweep searched and did not find it; treat it as evidence, not certainty.
 
@@ -131,35 +131,35 @@ OQ 36): 1–2 KB entries in an append-log shape; a large-payload variant
 (64 KB) as an outlier; session-size blobs (1.75 MB) are explicitly *not* a
 first-consumer shape and stay out of v1 of the suite.
 
-- **W1 — single-writer append (n = 1).** One writer appends N entries with
+- **W1 - single-writer append (n = 1).** One writer appends N entries with
   exponential inter-arrival. Measures the floor: pure sequential append cost
   plus fsync policy. Run in both durability classes (see below).
-- **W2 — multi-writer append (3 nodes).** 2–3 writers, one journal. For
+- **W2 - multi-writer append (3 nodes).** 2–3 writers, one journal. For
   coppiz: writers land on different members, forward to the leader
   ([docs/README.md](../README.md#architecture)); for raft systems: clients
   hit the leader. Measures ordering contention and the leader write path.
-- **W3 — read-your-writes / tail read.** Immediately after an append, read
+- **W3 - read-your-writes / tail read.** Immediately after an append, read
   the latest k entries (k = 1, 64). Local reads for coppiz/SQLite/libSQL
   replicas; round-trip reads for services.
-- **W4 — follow / stream.** A cursor consumer keeps up with the tail over
+- **W4 - follow / stream.** A cursor consumer keeps up with the tail over
   time. Relevant rows: coppiz, JetStream (subscription), SQLite (poll).
   Optional in v1.
-- **W5 — join/backfill.** A fresh member joins a cluster holding a 1 GB
+- **W5 - join/backfill.** A fresh member joins a cluster holding a 1 GB
   journal; measure time-to-head, MB/s, and peak network. [OQ 54](../open-questions.md)
   already names this; it is the number hosts actually feel.
-- **W6 — partition and heal (3 nodes, behaviour).** Cut the leader (or one
+- **W6 - partition and heal (3 nodes, behaviour).** Cut the leader (or one
   side) off for T seconds; record write availability on each side
   (CP: refused; coppiz `seniority`: both sides write), then heal. Outcomes:
   zero data loss, deterministic merge (both sides' appends present in a
-  reproducible order), convergence time, and — for CP systems — the stall
+  reproducible order), convergence time, and - for CP systems - the stall
   behaviour itself. This is where coppiz's `seniority` AP default
   ([PRD 0003](../prds/0003-membership-and-leadership.md)) is demonstrated or
   refuted; `configured`+`stall` is the same test with the opposite expected
   outcome.
-- **W7 — memory and connections at n = 1, 3, 6.** RSS per member, fd count,
+- **W7 - memory and connections at n = 1, 3, 6.** RSS per member, fd count,
   connection count ([OQ 54](../open-questions.md) sibling). The "library vs
   server" claim (C3) mostly shows up here.
-- **W8 — multi-process one-file (SQLite-only row).** SQLite's file-lock
+- **W8 - multi-process one-file (SQLite-only row).** SQLite's file-lock
   habit coppiz v1 lacks ([OQ 47](../open-questions.md)). Benchmark it anyway:
   the gap should be measured and tracked, not asserted.
 
@@ -186,17 +186,17 @@ across them:
 | **ASYNC** | ack before stable storage; data-loss window on crash | LiteFS (async by default); rqlite queued writes; coppiz `write.ack=local` on a partitioned member |
 
 Every published comparison surveyed broke this rule at least once
-([evidence log](#evidence-log) — andrecasal, deployn, sqlite.org speed page
+([evidence log](#evidence-log) - andrecasal, deployn, sqlite.org speed page
 being the oldest examples).
 
 ### Topology matrix
 
 - **Single node:** SQLite, coppiz n = 1, libSQL (embedded), Postgres
-  (single server), LiteFS (single node — isolates the FUSE tax).
+  (single server), LiteFS (single node - isolates the FUSE tax).
 - **3-node cluster:** coppiz, dqlite, rqlite, etcd, JetStream R3, LiteFS
   (needs Consul), libSQL primary + replicas (replica *reads* are the point),
   TigerBeetle (fixed-schema mapping, see below).
-- **Partition (3-node):** coppiz, etcd, rqlite, dqlite, JetStream R3 —
+- **Partition (3-node):** coppiz, etcd, rqlite, dqlite, JetStream R3 -
   behavioural only.
 
 Never mix single-node and cluster numbers in one row.
@@ -220,9 +220,9 @@ Never mix single-node and cluster numbers in one row.
 5. **TigerBeetle's own warning:** its benchmark numbers are explicitly "not
    necessarily comparable across different TigerBeetle versions"
    ([benchmark_load.zig](https://raw.githubusercontent.com/tigerbeetle/tigerbeetle/main/src/tigerbeetle/benchmark_load.zig))
-   — pin the version and say so. Same spirit for everything else.
+   - pin the version and say so. Same spirit for everything else.
 6. **Behavioural rows are pass/fail + timing**, never ops/s.
-7. **Harness code lives under the gate coverage** — a `.zig` harness outside
+7. **Harness code lives under the gate coverage** - a `.zig` harness outside
    `src/` needs its own test root or `checked_paths` entry
    ([AGENTS.md](../../AGENTS.md)); prefer `src/bench/` so the lint gates
    cover it.
@@ -238,7 +238,7 @@ Never mix single-node and cluster numbers in one row.
 - etcd: official `benchmark` tool (`benchmark put --total --key-size
   --val-size --clients`); bbolt `bench` for the storage layer.
 - TigerBeetle: `tigerbeetle benchmark` with default "canonical workload";
-  an append-log shape must be mapped onto transfers (fixed schema — the
+  an append-log shape must be mapped onto transfers (fixed schema - the
   comparison is on ordering/durability semantics, not payload flexibility).
 - JetStream: `nats bench js pub --create` + `--throughput` (the flag exists
   for head-to-head against Kafka-style tools).
@@ -256,9 +256,9 @@ Tier 1 is the named trio. Tiers 2–4 are extensions, each justified by the
 claim it tests. Status figures were read on 2026-08-28 at the cited sources;
 full claim-level tracing is in the [Evidence log](#evidence-log).
 
-### Tier 1 — the named trio (claims C1, C2, C4)
+### Tier 1 - the named trio (claims C1, C2, C4)
 
-#### SQLite — the single-node baseline and clanker's status quo
+#### SQLite - the single-node baseline and clanker's status quo
 
 - **What it is:** embedded C library, serverless, WAL-mode append journal.
 - **Status:** 3.53.4 (2026-07-24), public domain, full-time maintainers,
@@ -273,7 +273,7 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
 - **Unknowns:** distro package versions not verified; the 2017
   "35% faster than files" figure is stale.
 
-#### dqlite — the embedded replicated library (Canonical)
+#### dqlite - the embedded replicated library (Canonical)
 
 - **What it is:** embeddable C library, SQLite with a custom in-memory VFS
   + WAL mode; the *raft log* is what hits disk (O_DSYNC segments via Linux
@@ -289,9 +289,9 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
   benchmark numbers anywhere.
 - **Unknowns:** the fsync-before-ack ordering is inferred from source
   (write completion gates the raft append callback) rather than documented
-  — medium confidence; MicroCeph/MicroCloud usage claimed but unverified.
+  - medium confidence; MicroCeph/MicroCloud usage claimed but unverified.
 
-#### rqlite — the service shape of the same idea
+#### rqlite - the service shape of the same idea
 
 - **What it is:** standalone `rqlited` daemon, SQLite + Hashicorp raft,
   HTTP API. Not embedded; you write through HTTP.
@@ -300,16 +300,16 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
   claims to avoid; raft-fsync-per-write makes DURABLE the default.
 - **Pros:** official `rqbench`; well-documented durability semantics
   (raft log fsynced per write; SQLite layer runs WAL `synchronous=OFF` with
-  periodic FULL checkpoints — the raft log is authoritative).
+  periodic FULL checkpoints - the raft log is authoritative).
 - **Cons:** the historical `-raft-on-disk`-style fsync flags are gone from
   current docs and source (absence-based); "used in k0s" claim unverified;
   queued writes (the only non-raft write path) trade durability for speed.
 - **Unknowns:** glibc requirement quoted inconsistently (2.32 vs 2.34) on
   rqlite's own pages.
 
-### Tier 2 — same niche, modern entrants (claims C3, C5, C6, C7)
+### Tier 2 - same niche, modern entrants (claims C3, C5, C6, C7)
 
-#### libSQL / Turso — the fork whose pitch is "SQLite as a library you ship"
+#### libSQL / Turso - the fork whose pitch is "SQLite as a library you ship"
 
 - **What it is:** SQLite fork; embedded C library, `sqld` server, and
   "embedded replicas" (local file serves reads; writes go to the remote
@@ -328,7 +328,7 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
 - **Unknowns:** the C library's actual current SQLite base version; a
   versioned C-library release artifact (tags are `libsql-server-vX.Y.Z`).
 
-#### LiteFS — SQLite replicated at the file layer (Fly.io)
+#### LiteFS - SQLite replicated at the file layer (Fly.io)
 
 - **What it is:** FUSE passthrough filesystem; captures per-transaction
   page sets into LTX files shipped over HTTP. Single primary (Consul lease
@@ -348,7 +348,7 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
   disclaimed by its own author; no multi-node replication benchmark exists
   anywhere; write-forwarding PR was merged but never shipped in docs/code.
 
-#### CR-SQLite — the AP SQLite extension
+#### CR-SQLite - the AP SQLite extension
 
 - **What it is:** SQLite loadable extension; tables become CRRs (conflict
   -free replicated relations); merges resolved by per-column CRDTs.
@@ -357,22 +357,22 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
   announced.
 - **Benchmark fit:** semantics row (C7): its own README says inserts are
   "2.5× slower than regular SQLite tables" and, decisively, **it keeps no
-  history** — the causal event-log design is "v2". An append-log comparison
+  history** - the causal event-log design is "v2". An append-log comparison
   cannot be run against v1.
 - **Pros:** the only CRDT layer on SQLite; measurable conflict-resolution
   semantics.
 - **Cons:** no history, so no append-log shape; no numeric benchmarks; v2
   never landed.
 
-### Tier 3 — positioning rows (claims C3, C4, C5, C6)
+### Tier 3 - positioning rows (claims C3, C4, C5, C6)
 
-#### etcd — the CP quorum baseline
+#### etcd - the CP quorum baseline
 
 - **What it is:** consistent distributed KV, bbolt backend, Raft; designed
   for small in-memory datasets.
 - **Status:** v3.7.1 (2026-07-23), Apache-2.0, CNCF; three maintenance
   branches cutting monthly.
-- **Benchmark fit:** the partition scenario (C4) — docs confirm the
+- **Benchmark fit:** the partition scenario (C4) - docs confirm the
   majority side continues and the minority stalls; and a CP throughput
   reference. **Not** an append-log comparison: its API is current-state KV
   with compaction; the official benchmark doc is a 2016-era artifact
@@ -382,17 +382,17 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
 - **Cons:** KV shape; stale published numbers; "fsync before reply" is
   implied by the FAQ/tuning docs, not stated verbatim.
 
-#### TigerBeetle — the Zig reference
+#### TigerBeetle - the Zig reference
 
 - **What it is:** financial-transactions DB in Zig; fixed Account/Transfer
   schema; ground state is an immutable, hash-chained, append-only log of
   prepares over VSR; io_uring, single-threaded; deterministic simulation
   (VOPR).
-- **Status:** 0.17.9 (2026-07-03), **Apache-2.0 since 2021-01 — the common
+- **Status:** 0.17.9 (2026-07-03), **Apache-2.0 since 2021-01 - the common
   "relicensed in 2024" belief is not supported by the repository record**;
   near-weekly cadence.
 - **Benchmark fit:** closest in *spirit* to coppiz's write model (append
-  -only, hash-chained, fsync-backed, total order) — a same-language sanity
+  -only, hash-chained, fsync-backed, total order) - a same-language sanity
   check that Zig is not the bottleneck. Data shape is fixed, so an
   append-log workload must be mapped onto transfers.
 - **Pros:** official `tigerbeetle benchmark` (canonical workload, percentiles
@@ -403,7 +403,7 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
   talk videos, not text; the DevHub performance page URL was not found.
 - **Unknowns:** DevHub public URL; per-release absolute numbers in text.
 
-#### NATS JetStream — the stream-shaped option
+#### NATS JetStream - the stream-shaped option
 
 - **What it is:** persistence layer inside nats-server; a stream is
   literally a sequence-numbered append-only log with a read-back API; KV is
@@ -411,7 +411,7 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
 - **Status:** nats-server v2.14.6 (2026-08-27), Apache-2.0, CNCF member
   since 2018-03-15 (*sweep 2*; graduation not confirmed), very active.
 - **Benchmark fit:** the stream-shaped baseline (C5): most comparable data
-  shape of all candidates. Durability must be pinned — **PubAck ≠ fsynced
+  shape of all candidates. Durability must be pinned - **PubAck ≠ fsynced
   by default**; file storage syncs on `sync_interval` (`always` degrades
   throughput, documented).
 - **Pros:** official `nats bench js pub` with a `--throughput` flag
@@ -423,7 +423,7 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
 - **Unknowns:** CNCF graduation status (accepted 2018-03-15, graduation
   not confirmed).
 
-#### PostgreSQL — the server baseline
+#### PostgreSQL - the server baseline
 
 - **What it is:** the default "just run a server" answer coppiz exists to
   avoid for small fleets.
@@ -438,52 +438,52 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
   citable as numbers.
 - **Unknowns:** none material.
 
-### Tier 4 — semantics only (claim C7)
+### Tier 4 - semantics only (claim C7)
 
-#### Automerge, Yjs, Loro — CRDT libraries
+#### Automerge, Yjs, Loro - CRDT libraries
 
 - **What they are:** collaborative-data CRDT libraries (JSON/text types);
   all three are history-preserving to varying degrees. Loro is the best fit
-  for a history-shaped workload — it markets version control, time travel
+  for a history-shaped workload - it markets version control, time travel
   and Git-like shallow snapshots as design goals.
 - **Status:** Automerge 3.4.1 (2026-08-12, MIT); Yjs 13.6.32 (2026-08-04,
   MIT, solo maintainer "spare time"); Loro 1.15.0 (2026-08-27, MIT).
 - **Benchmark fit:** the W6 merge-semantics row (deterministic re-slotting
   vs CRDT convergence), not a throughput row. Published numbers
   (dmonad/crdt-benchmarks; Loro's perf page) are text-edit workloads on
-  versions that are already stale — e.g. Loro B4 replay 2,271 ms vs Yjs
+  versions that are already stale - e.g. Loro B4 replay 2,271 ms vs Yjs
   2,616 ms vs Automerge 7,109 ms (Loro 1.0.0-beta.2, Yjs 13.6.15, Automerge
-  2.1.10) — none measure an append-log shape.
+  2.1.10) - none measure an append-log shape.
 - **Pros:** Loro has a reproducible harness (`zxch3n/crdt-benchmarks`).
 - **Cons:** all numbers need rerunning on current versions; no append-log
   workload exists for any of them; the semantics argument ("converge ≠
   correct", research 0001) is the actual point.
 
-#### Marmot — the tunable-ack AP store
+#### Marmot - the tunable-ack AP store
 
 - **What it is:** leaderless distributed SQLite speaking MySQL wire
   protocol; 2PC with ONE/QUORUM/ALL acks; LWW + HLC conflict resolution
-  (not CRDT — no merge semantics).
+  (not CRDT - no merge semantics).
 - **Status:** v2.9.13-beta (2026-04-26), MIT, independent; **beta only**.
 - **Benchmark fit:** its ONE/QUORUM/ALL ack knob is a useful contrast to
   coppiz's `write.ack` (OQ 3), but there are zero published benchmarks and
-  no stable release — semantics row only, if at all.
+  no stable release - semantics row only, if at all.
 - **Cons:** no append-log/history semantics (LWW-by-write); no numbers.
 
-#### Corrosion — no longer a store at all
+#### Corrosion - no longer a store at all
 
 - **What it is:** Fly.io's open-source gossip-based service discovery
   ("replacing Consul"), using cr-sqlite for conflict resolution. Originally
   conceived as the cr-sqlite sync daemon; it pivoted before first public
   release (v0.1.0, 2023-09-20 already had the service-discovery framing).
-- **Benchmark fit:** none for coppiz — it is not a store. Listed so nobody
+- **Benchmark fit:** none for coppiz - it is not a store. Listed so nobody
   re-adds it from the 2021-era survey rows.
 
 ## Out-of-the-box options
 
 - **Already in the tree:** [OQ 54](../open-questions.md)'s internal
   measurement set (append latency at n = 1, memory/connections at 8/16/32,
-  append-to-visible p50/p99, join/backfill of a 1 GB journal) is the seed —
+  append-to-visible p50/p99, join/backfill of a 1 GB journal) is the seed -
   the coppiz driver doubles as the comparison driver. The e2e harness in
   `src/cluster/` (the in-memory hub transport with `drop`/`heal` edges, OQ
   19) already provides the partition-injection machinery W6 needs at the
@@ -497,9 +497,9 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
   unbacked.
 - **Adjacent domain:** the CRDT benchmarks (dmonad/crdt-benchmarks, Loro's
   fork) are the only existing harnesses with published, reproducible
-  numbers — they cover the wrong workload, which is itself a finding.
+  numbers - they cover the wrong workload, which is itself a finding.
 - **Buy, host, or delegate:** benchANT-style hosted benchmark vendors cover
-  client-server DBs only — no coverage of SQLite/rqlite/dqlite/LiteFS/etcd
+  client-server DBs only - no coverage of SQLite/rqlite/dqlite/LiteFS/etcd
   exists there (absence-based). Nothing to buy.
 
 ## Comparison
@@ -511,14 +511,14 @@ full claim-level tracing is in the [Evidence log](#evidence-log).
 | rqlite | 1 | MIT | W1/W2/W4, 3-node + packaging | HTTP hop in the measurement; docs/version drift |
 | libSQL | 2 | MIT | replica reads, C5/C6 | maintenance mode; single-writer |
 | LiteFS | 2 | Apache-2.0 | FUSE tax, C4/C6 | stale releases; async-only; Linux+FUSE |
-| CR-SQLite | 2 | MIT | semantics only (C7) | no history until v2 — cannot run W1 |
+| CR-SQLite | 2 | MIT | semantics only (C7) | no history until v2 - cannot run W1 |
 | etcd | 3 | Apache-2.0 | partition scenario (C4), CP ref | KV shape; stale official numbers |
 | TigerBeetle | 3 | Apache-2.0 | ordering/durability ref | fixed schema; numbers not comparable across versions |
 | NATS JetStream | 3 | Apache-2.0 | stream shape (C5) | messaging semantics; weak default durability |
 | PostgreSQL | 3 | PostgreSQL | one server-baseline row | no citable PG-vs-embedded numbers |
 | Loro/Automerge/Yjs | 4 | MIT | merge semantics (C7) | text-edit workloads; stale versions |
 | Marmot | 4 | MIT | semantics only | beta; zero benchmarks |
-| Corrosion | — | Apache-2.0 | none | not a store (dropped) |
+| Corrosion | - | Apache-2.0 | none | not a store (dropped) |
 
 ## Evidence log
 
@@ -548,11 +548,11 @@ not certainty.
 | rqlite: every write goes through raft and the raft log is fsynced after every write; disk I/O is the bottleneck | https://rqlite.io/docs/guides/performance/ | 2026-08-28 | high |
 | rqlite runs SQLite in WAL mode with synchronous=OFF internally, switching to FULL at checkpoints; raft log is authoritative; journal/synchronous PRAGMAs are rejected | https://rqlite.io/docs/design/, https://rqlite.io/docs/api/api/, `db/db.go` @ v10.2.7 | 2026-08-28 | high |
 | Current rqlite has no `-raft-on-disk`/raft-log-fsync flag; raft tuning flags are `-raft-snap*` + timeouts (absence-based) | https://rqlite.io/docs/guides/config/, source grep @ v10.2.7 | 2026-08-28 | medium |
-| rqlite queued writes (`?queue`) batch and ack before raft persistence — data-loss window on crash; write `level=` names are read-consistency levels, not write levels | https://rqlite.io/docs/api/queued-writes/, https://rqlite.io/docs/api/read-consistency/ | 2026-08-28 | high |
+| rqlite queued writes (`?queue`) batch and ack before raft persistence - data-loss window on crash; write `level=` names are read-consistency levels, not write levels | https://rqlite.io/docs/api/queued-writes/, https://rqlite.io/docs/api/read-consistency/ | 2026-08-28 | high |
 | rqlite waits for quorum commit on every normal write; minority side unavailable on partition | https://rqlite.io/docs/faq/ | 2026-08-28 | high |
 | rqbench (`cmd/rqbench`): `-a -n -b -p -x`, prints Requests/sec and Statements/sec; stress variant exists | https://raw.githubusercontent.com/rqlite/rqlite/v10.2.7/cmd/rqbench/README.md | 2026-08-28 | high |
 | rqlite 2022 blog: ~220 INSERTs/s on a 3-node GCP cluster; queued writes ~15× higher (hardware unspecified, old version) | https://www.philipotoole.com/rqlite-trading-durability-for-performance/ | 2026-08-28 | medium |
-| "rqlite is used in k0s" — claimed by gcore blog only; not found in k0s docs/README | gcore blog vs k0s sources | 2026-08-28 | low |
+| "rqlite is used in k0s" - claimed by gcore blog only; not found in k0s docs/README | gcore blog vs k0s sources | 2026-08-28 | low |
 | libSQL: last `libsql-server` release v0.24.32 (2025-02-14); repo pushed 2026-08-26; README banner points new work to the Turso rewrite (beta) | GitHub API `repos/tursodatabase/libsql`, repo README | 2026-08-28 | high |
 | libSQL licence history: SQLite blessing (2019-03) → Apache-2.0 (2022-09-30) → MIT (2022-10-06); LICENSE.md is MIT today | https://github.com/tursodatabase/libsql/commits/main/LICENSE.md, https://github.com/tursodatabase/libsql/issues/26 | 2026-08-28 | high |
 | libSQL June-2024 licence-change plan: announced but not applied; outcome not verifiable at a primary source; a Turso employee stated "MIT" on HN (2025-03) | HN comment 43535943 (via Algolia); absence in repo/blog archives | 2026-08-28 | medium |
@@ -570,21 +570,21 @@ not certainty.
 | LiteFS requires Linux + FUSE (author confirms Linux-only) | HN item 33204347; https://fly.io/docs/litefs/getting-started/ | 2026-08-28 | high |
 | CR-SQLite v0.16.3 (2024-01-17); MIT (npm declares Apache-2.0); recent commits are build fixes only | GitHub API `repos/vlcn-io/cr-sqlite`, npm `@vlcn.io/crsqlite` | 2026-08-28 | high |
 | CR-SQLite: "inserts into CRRs are 2.5× slower than regular SQLite; reads the same" (vendor claim); no numeric benchmarks elsewhere | https://github.com/vlcn-io/cr-sqlite README + `py/perf/perf.ipynb` | 2026-08-28 | medium |
-| CR-SQLite approach 1 "keeps no history"; the history/GC design is approach 2, "to be implemented in v2" — v2 has not landed | https://github.com/vlcn-io/cr-sqlite README | 2026-08-28 | high |
+| CR-SQLite approach 1 "keeps no history"; the history/GC design is approach 2, "to be implemented in v2" - v2 has not landed | https://github.com/vlcn-io/cr-sqlite README | 2026-08-28 | high |
 | vlcn↔Fly: no formal acquisition announcement found; inferred from repo transfer + contributors + Fly's corrosion blog | absence + https://fly.io/blog/corrosion/, contributor profiles | 2026-08-28 | medium |
 | Corrosion is Fly.io's gossip service discovery ("replacing Consul") using cr-sqlite for conflicts; v1.0.0 (2026-05-14), Apache-2.0; no numeric benchmarks | https://github.com/superfly/corrosion, https://fly.io/blog/corrosion/ | 2026-08-28 | high |
 | Marmot v2.9.13-beta (2026-04-26), MIT; 2PC ONE/QUORUM/ALL acks; LWW+HLC (not CRDT); zero published benchmarks; no stable release | https://github.com/maxpert/marmot, releases | 2026-08-28 | high |
 | Automerge 3.4.1 (2026-08-12), MIT; 2.0-blog replay numbers 1,816 ms vs Yjs 1,074 ms (2023, Ryzen 9 7900X); no live perf docs page (404) | npm/GitHub API; https://automerge.org/blog/automerge-2/ | 2026-08-28 | high |
-| Yjs 13.6.32 (2026-08-04), MIT, solo maintainer; canonical reference is dmonad/crdt-benchmarks (B1.1 append 6,000 chars: yjs 188 ms; B4 replay 259,778 ops: 5,714 ms — yjs 13.6.11, i5-8400) | npm/GitHub API; https://github.com/dmonad/crdt-benchmarks | 2026-08-28 | high |
+| Yjs 13.6.32 (2026-08-04), MIT, solo maintainer; canonical reference is dmonad/crdt-benchmarks (B1.1 append 6,000 chars: yjs 188 ms; B4 replay 259,778 ops: 5,714 ms - yjs 13.6.11, i5-8400) | npm/GitHub API; https://github.com/dmonad/crdt-benchmarks | 2026-08-28 | high |
 | Loro 1.15.0 (2026-08-27), MIT; perf page (Loro 1.0.0-beta.2 vs Yjs 13.6.15 vs Automerge 2.1.10): B4 replay loro 2,271 ms / yjs 2,616 ms / automerge 7,109 ms; C1.1 loro 2,335 ms / yjs 27,138 ms / automerge 50,692 ms | https://github.com/loro-dev/loro-docs/blob/main/pages/docs/performance/index.md | 2026-08-28 | high (vendor-run, reproducible harness) |
-| Loro markets version control / time travel / Git-like shallow snapshots — history-shaped workloads are a stated design goal | https://github.com/loro-dev/loro README, https://loro.dev/blog/v1.0 | 2026-08-28 | high |
+| Loro markets version control / time travel / Git-like shallow snapshots - history-shaped workloads are a stated design goal | https://github.com/loro-dev/loro README, https://loro.dev/blog/v1.0 | 2026-08-28 | high |
 | etcd v3.7.1 (2026-07-23), Apache-2.0, CNCF; maintenance lines v3.6.14 and v3.5.33 same month | GitHub API `repos/etcd-io/etcd/releases/latest` + releases page | 2026-08-28 | high |
 | etcd: majority (n/2)+1 must agree before commit; minority side cannot commit during a partition | https://etcd.io/docs/v3.6/faq/ | 2026-08-28 | high |
 | etcd tuning: `wal_fsync_duration_seconds` p99 should be < 10 ms; fsync on the write path | https://etcd.io/docs/v3.6/faq/, https://etcd.io/docs/v3.6/tuning/ | 2026-08-28 | high |
 | etcd official `benchmark` tool: `benchmark put --endpoints --total --key-size --val-size --clients --conns` | https://github.com/etcd-io/etcd/tree/main/tools/benchmark | 2026-08-28 | high |
 | bbolt `bench`: `bbolt bench db -batch-size 400 -key-size 16` (seq write/read modes) | https://github.com/etcd-io/bbolt/tree/main/cmd/bbolt | 2026-08-28 | high |
-| etcd README "10,000 writes/sec" (undated); official benchmark doc is 2016-era (etcd 2.2.0, GCE n1-highcpu-2) — no current official table | https://github.com/etcd-io/etcd README, https://etcd.io/docs/v3.6/benchmarks/ | 2026-08-28 | high (as historical record) |
-| TigerBeetle 0.17.9 (2026-07-03); Apache-2.0 with the LICENSE file unchanged since 2021-01 — no 2024 relicensing in the record | GitHub API `repos/tigerbeetle/tigerbeetle/commits?path=LICENSE`, releases | 2026-08-28 | high |
+| etcd README "10,000 writes/sec" (undated); official benchmark doc is 2016-era (etcd 2.2.0, GCE n1-highcpu-2) - no current official table | https://github.com/etcd-io/etcd README, https://etcd.io/docs/v3.6/benchmarks/ | 2026-08-28 | high (as historical record) |
+| TigerBeetle 0.17.9 (2026-07-03); Apache-2.0 with the LICENSE file unchanged since 2021-01 - no 2024 relicensing in the record | GitHub API `repos/tigerbeetle/tigerbeetle/commits?path=LICENSE`, releases | 2026-08-28 | high |
 | TigerBeetle: VSR; ground state = immutable hash-chained append-only log of prepares (batches of 8,000); LSM forest, 0.5 MiB blocks; synchronous commit to WAL, flexible quorums 3/6 | https://raw.githubusercontent.com/tigerbeetle/tigerbeetle/main/ARCHITECTURE.md | 2026-08-28 | high |
 | TigerBeetle VOPR: production cluster on one thread with fault injection, seed-reproducible | https://raw.githubusercontent.com/tigerbeetle/tigerbeetle/main/docs/internals/vopr.md | 2026-08-28 | high |
 | `tigerbeetle benchmark`: canonical workload by default, prints throughput + p1/p50/p99/p100; "default benchmark numbers are not necessarily comparable across different TigerBeetle versions" | src/tigerbeetle/benchmark_driver.zig, benchmark_load.zig, docs/internals/HACKING.md | 2026-08-28 | high |
@@ -597,7 +597,7 @@ not certainty.
 | No official absolute JetStream benchmark table (absence-based); natscli README sample numbers are machine-specific | sweep | 2026-08-28 | high |
 | PostgreSQL 18.6 (2026-08-13); PostgreSQL License; pgbench default is a 7-statement TPC-B-inspired txn (update-dominated, one append); `-f -n -M prepared -c -j -T -P -l` flags; `fsync=on`/`synchronous_commit=on` defaults | https://www.postgresql.org/, https://www.postgresql.org/docs/current/pgbench.html, .../runtime-config-wal.html | 2026-08-28 | high |
 | PG-vs-embedded comparisons found are all DIY with ≥1 methodology flaw (durability mismatch universal): andrecasal (SQLite NORMAL vs PG fsync), intuitem (tiny n, untuned PG, self-flagged), deployn (mixed hardware + durability off), PGlite (no disclosure) | https://github.com/andrecasal/sqlite-vs-postgres-benchmark, https://intuitem.com/postgresql-vs-sqlite-2026-benchmark/, https://deployn.de/en/blog/db-performance/, https://pglite.dev/benchmarks | 2026-08-28 | medium each |
-| No rigorous SQLite vs dqlite vs rqlite benchmark exists publicly; no rqlite-vs-etcd head-to-head; no LiteFS vs dqlite vs CR-SQLite benchmark (Fly blog SQLite slugs enumerated via Wayback CDX — no such posts) | sweeps; http://web.archive.org/cdx/search/cdx?url=fly.io/blog/*&filter=urlkey:.*sqlite.* | 2026-08-28 | high (absence-based) |
+| No rigorous SQLite vs dqlite vs rqlite benchmark exists publicly; no rqlite-vs-etcd head-to-head; no LiteFS vs dqlite vs CR-SQLite benchmark (Fly blog SQLite slugs enumerated via Wayback CDX - no such posts) | sweeps; http://web.archive.org/cdx/search/cdx?url=fly.io/blog/*&filter=urlkey:.*sqlite.* | 2026-08-28 | high (absence-based) |
 | TyrantDB (datafuselabs) does not exist publicly (0 GitHub repos match; repo 404) | https://github.com/search?q=tyrantdb&type=repositories | 2026-08-28 | high (absence-based) |
 | benchANT covers client-server DBs only; no coverage of SQLite/rqlite/dqlite/LiteFS/etcd | https://benchant.com/blog, https://benchant.com/more-solutions/benchmarking-platform | 2026-08-28 | medium (coverage claim) |
 | sqg.dev driver-level benchmark (2026-01-19): insertUser turso 63,017 ops/s vs libSQL 28,385 vs better-sqlite3 53,693 (Node.js; driver-level, not engine; not distributed) | https://sqg.dev/blog/sqlite-driver-benchmark/ | 2026-08-28 | high as published |
@@ -605,12 +605,12 @@ not certainty.
 | Methodology: commit latency = fdatasync + network RTT; disclose hardware, versions, workload, commands; rerun in your own environment | https://etcd.io/docs/v3.4/op-guide/performance/ | 2026-08-28 | high |
 | Methodology: pgbench scale factor should exceed client count; run the client from a separate machine; consider separate WAL filesystems | https://wiki.postgresql.org/wiki/Pgbench | 2026-08-28 | high |
 | Methodology: report avg + p95 + p99 + ops/s + resource utilization + process audit trail | https://benchant.com/more-solutions/benchmarking-platform | 2026-08-28 | medium (vendor, standard practice) |
-| Stanford CS244b spring-2020 student project "Distributed SQLite" (Raft-replicated SQLite on sofajraft): 3-node single-host cluster, benchmarked against rqlite and SQLite; reports DSQLite faster on write requests (1,500-INSERT test); hardware disclosed (16 GB / 3.1 GHz i7 vs rqlite; 8 GB / 1.6 GHz vs SQLite); durability not discussed; exact numbers garbled in the PDF text layer — *sweep 2* | https://www.scs.stanford.edu/20sp-cs244b/projects/Distributed%20SQLite.pdf | 2026-08-28 | low (student project; qualitative) |
-| SQLite WAL on NVMe: ~10–20k serialized INSERTs/s (~50 µs/row) with WAL pragmas — HN commenter, story 36208568 "Why SQLite is so great for the edge", 2023-06-06 — *sweep 2* | https://hn.algolia.com/api/v1/items/36208568 | 2026-08-28 | medium (single commenter; disk described only as NVMe) |
-| "libSQL is open source (MIT license)" — Turso engineer `avinassh`, HN Limbo thread (item 43535943), 2025-03-31; matches the repo's MIT LICENSE.md — *sweep 2* | https://hn.algolia.com/api/v1/items/43535943 | 2026-08-28 | high (employee statement) |
-| k0s README and stable docs contain no rqlite mention (checked directly) — gcore's "rqlite used in k0s" claim stays unsubstantiated — *sweep 2* | https://raw.githubusercontent.com/k0sproject/k0s/main/README.md, https://docs.k0sproject.io/stable/ | 2026-08-28 | high (for the check) |
-| NATS accepted to CNCF on 2018-03-15; graduation status not confirmed — *sweep 2* | https://www.cncf.io/projects/ | 2026-08-28 | high (acceptance date) |
-| TigerBeetle "DevHub" is not at `tigerbeetle.com/devhub` nor `github.com/tigerbeetle/devhub` (both 404) — public URL still unknown — *sweep 2* | direct fetches | 2026-08-28 | high (for the 404s) |
+| Stanford CS244b spring-2020 student project "Distributed SQLite" (Raft-replicated SQLite on sofajraft): 3-node single-host cluster, benchmarked against rqlite and SQLite; reports DSQLite faster on write requests (1,500-INSERT test); hardware disclosed (16 GB / 3.1 GHz i7 vs rqlite; 8 GB / 1.6 GHz vs SQLite); durability not discussed; exact numbers garbled in the PDF text layer - *sweep 2* | https://www.scs.stanford.edu/20sp-cs244b/projects/Distributed%20SQLite.pdf | 2026-08-28 | low (student project; qualitative) |
+| SQLite WAL on NVMe: ~10–20k serialized INSERTs/s (~50 µs/row) with WAL pragmas - HN commenter, story 36208568 "Why SQLite is so great for the edge", 2023-06-06 - *sweep 2* | https://hn.algolia.com/api/v1/items/36208568 | 2026-08-28 | medium (single commenter; disk described only as NVMe) |
+| "libSQL is open source (MIT license)" - Turso engineer `avinassh`, HN Limbo thread (item 43535943), 2025-03-31; matches the repo's MIT LICENSE.md - *sweep 2* | https://hn.algolia.com/api/v1/items/43535943 | 2026-08-28 | high (employee statement) |
+| k0s README and stable docs contain no rqlite mention (checked directly) - gcore's "rqlite used in k0s" claim stays unsubstantiated - *sweep 2* | https://raw.githubusercontent.com/k0sproject/k0s/main/README.md, https://docs.k0sproject.io/stable/ | 2026-08-28 | high (for the check) |
+| NATS accepted to CNCF on 2018-03-15; graduation status not confirmed - *sweep 2* | https://www.cncf.io/projects/ | 2026-08-28 | high (acceptance date) |
+| TigerBeetle "DevHub" is not at `tigerbeetle.com/devhub` nor `github.com/tigerbeetle/devhub` (both 404) - public URL still unknown - *sweep 2* | direct fetches | 2026-08-28 | high (for the 404s) |
 
 ## Open questions
 
@@ -623,7 +623,7 @@ cannot settle).
 - **Hacker News threads with real measured numbers.** The Algolia API was
   reachable only from the shell (*sweep 2*); a comment search for
   rqlite/dqlite/LiteFS/libSQL/TigerBeetle benchmarks surfaced no head-to-head
-  numbers — only one generic SQLite data point (evidence log). A rerun with
+  numbers - only one generic SQLite data point (evidence log). A rerun with
   working search should retry HN plus lobste.rs and Reddit for "rqlite
   benchmark", "dqlite benchmark", "LiteFS benchmark", "libSQL benchmark",
   "TigerBeetle benchmark".
@@ -636,18 +636,18 @@ cannot settle).
   exact numbers from the [CS244b PDF]
   (https://www.scs.stanford.edu/20sp-cs244b/projects/Distributed%20SQLite.pdf)
   (the text layer came out garbled).
-- **TigerBeetle DevHub performance page** — referenced in repo docs; public
+- **TigerBeetle DevHub performance page** - referenced in repo docs; public
   URL still unknown (*sweep 2*: `tigerbeetle.com/devhub` and
   `github.com/tigerbeetle/devhub` are both 404). Rerun should also extract
   the "A Trillion Transactions" numbers from the talk video into text.
-- **libSQL June-2024 licence-change plan** — announced, not applied; the
+- **libSQL June-2024 licence-change plan** - announced, not applied; the
   plan's own primary source is still missing, but the current state is
   firmer: Turso engineer confirmed MIT on HN 2025-03-31 and the repo
   LICENSE.md is MIT (*sweep 2*). Rerun: Turso's GitHub org issues and
   archived blog posts for the 2024 announcement itself.
-- **NATS CNCF graduation status** — accepted 2018-03-15 (*sweep 2*);
+- **NATS CNCF graduation status** - accepted 2018-03-15 (*sweep 2*);
   graduation not confirmed.
-- **dqlite official benchmark numbers** — none exist as of this sweep; a
+- **dqlite official benchmark numbers** - none exist as of this sweep; a
   rerun should also confirm the fsync-before-ack ordering in the source
   (currently inferred, medium confidence).
 - **Verified distro package versions** for SQLite; the 2022
@@ -658,19 +658,19 @@ cannot settle).
   another) and whether historical `-raft-on-disk`-style flags existed.
 - **Fly.io blog post enumeration was partial** (Wayback CDX only); a rerun
   with search should check for "LiteFS benchmark" posts after 2025-04.
-- **Loro v1.0 (Rust-rewrite era) announcement publication date** — the
+- **Loro v1.0 (Rust-rewrite era) announcement publication date** - the
   blog page carries none; the npm `1.0.0` date (2023-03-23) is a different
   "1.0" and must not be used.
 
 ### Resolved or narrowed by sweep 2
 
-- **"rqlite used in k0s"** — checked directly: k0s README and stable docs
+- **"rqlite used in k0s"** - checked directly: k0s README and stable docs
   contain no rqlite mention (evidence log). The gcore claim stays
   unsubstantiated until a primary k0s source says otherwise.
-- **libSQL current licence** — MIT, confirmed by a Turso engineer
+- **libSQL current licence** - MIT, confirmed by a Turso engineer
   (2025-03-31) and the repo's LICENSE.md; only the 2024 plan's own source
   is still missing.
-- **CS244b PDF** — fetched and read; it is a 2020 student design project
+- **CS244b PDF** - fetched and read; it is a 2020 student design project
   with a qualitative rqlite comparison, not a benchmark table to cite.
 
 ### Decisions for the operator (block the harness, not the research)
@@ -689,23 +689,23 @@ cannot settle).
   as CI gates; recommendation candidate: a manual runbook executed per
   release milestone, not a build gate.
 - **Which `write.ack`/durability config is the coppiz DURABLE default** for
-  the comparison (OQ 3 is still open) — the suite needs it pinned.
+  the comparison (OQ 3 is still open) - the suite needs it pinned.
 - **Whether TigerBeetle earns a row** given the fixed-schema mapping cost;
   and whether the CRDT family gets the W6 semantics row at all.
 
 ## What would change the answer
 
-- **A rigorous third-party head-to-head benchmark appearing** — it would
+- **A rigorous third-party head-to-head benchmark appearing** - it would
   become the citation instead of this suite (and its methodology a reference).
 - **dqlite publishing official numbers; rqlite/LiteFS/libSQL changing
   licence or maintenance posture** (libSQL's Turso rewrite shipping could
   move it from "maintenance mode" to "rewrite wins").
-- **CR-SQLite v2 landing** (history semantics) — would reopen its
+- **CR-SQLite v2 landing** (history semantics) - would reopen its
   append-log suitability.
-- **coppiz's own claims changing** — a quorum mode (OQ 1) or a read
+- **coppiz's own claims changing** - a quorum mode (OQ 1) or a read
   consistency guarantee (OQ 31) would add rows, not remove them.
 - **The tier numbers changing** ([OQ 54](../open-questions.md) measurements)
-  — the comparison rows stay, the internal reference points move.
+  - the comparison rows stay, the internal reference points move.
 
 ## References
 
@@ -738,7 +738,7 @@ cannot settle).
 - **Survey & methodology:** YCSB README, andrecasal/sqlite-vs-postgres-benchmark,
   intuitem.com/postgresql-vs-sqlite-2026-benchmark, deployn.de, pglite.dev/benchmarks,
   sqg.dev/blog/sqlite-driver-benchmark, benchANT, scs.stanford.edu CS244b
-  project PDF (read; qualitative rqlite comparison — see evidence log).
+  project PDF (read; qualitative rqlite comparison - see evidence log).
 
 ## Appendix
 

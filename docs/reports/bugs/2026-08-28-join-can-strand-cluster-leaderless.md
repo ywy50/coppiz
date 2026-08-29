@@ -1,14 +1,14 @@
-# Bug — A join can silently strand the cluster leaderless: `configured` + `stall` with empty authorities
+# Bug - A join can silently strand the cluster leaderless: `configured` + `stall` with empty authorities
 
 ## TL;DR
 
-- **What failed:** `validateState` allows `leadership.mode = configured` with an empty `authorities` list when `member_count <= 1` (the n=1 exception), but `applyJoin` never re-validates the state against the new member count. After the second member joins, the folded state violates `EmptyAuthoritiesNeedsFallback` — and `election.leader` returns `null` under `fallback = stall`, so no epoch can ever open.
-- **Impact:** A cluster that was valid at n=1 silently becomes leaderless at n=2, and — because only the leader can author settings entries — unfixable once the founder is gone.
+- **What failed:** `validateState` allows `leadership.mode = configured` with an empty `authorities` list when `member_count <= 1` (the n=1 exception), but `applyJoin` never re-validates the state against the new member count. After the second member joins, the folded state violates `EmptyAuthoritiesNeedsFallback` - and `election.leader` returns `null` under `fallback = stall`, so no epoch can ever open.
+- **Impact:** A cluster that was valid at n=1 silently becomes leaderless at n=2, and - because only the leader can author settings entries - unfixable once the founder is gone.
 - **Resolution:** Still open. Statically validated (medium confidence it is unintended).
 
 ## Status
 
-Resolved — `applyJoin` re-validates the settings state at the new member
+Resolved - `applyJoin` re-validates the settings state at the new member
 count and rolls the member back on refusal; regression test added.
 
 ## Symptom and impact
@@ -17,7 +17,7 @@ The n=1 exception is deliberate ([PRD 0003](../../prds/0003-membership-and-leade
 
 - At genesis (n=1): `configured` + `fallback = stall` + empty authorities is accepted.
 - A `join` appends the member (`membership.zig:86-103`) and **does not** re-run `validateState`.
-- At n=2 the folded state now violates the rule; `election.leader`'s configured path finds no authority, `best == null`, and `fallback = stall` returns `null` (`election.zig:176-178`) — `append` answers `no_leader`. The settings fix cannot be authored (only the fold's leader authors settings entries), so the cluster is permanently stalled.
+- At n=2 the folded state now violates the rule; `election.leader`'s configured path finds no authority, `best == null`, and `fallback = stall` returns `null` (`election.zig:176-178`) - `append` answers `no_leader`. The settings fix cannot be authored (only the fold's leader authors settings entries), so the cluster is permanently stalled.
 
 ## Reproduction
 
@@ -27,7 +27,7 @@ Not dynamically reproduced; statically certain:
 2. Admit a second member (join).
 3. `leader(...)` at n=2 returns `null`; writes are refused forever.
 
-A settings change at n=2 would be refused with `EmptyAuthoritiesNeedsFallback` (`applySettings` re-validates against the current count), which is exactly why the state never self-heals — and why it can only get there through the join path.
+A settings change at n=2 would be refused with `EmptyAuthoritiesNeedsFallback` (`applySettings` re-validates against the current count), which is exactly why the state never self-heals - and why it can only get there through the join path.
 
 ## Root cause
 
@@ -38,14 +38,14 @@ The `EmptyAuthoritiesNeedsFallback` invariant is checked only when settings are 
 Fixed. `applyJoin` (and `applyJoinReslotted`, which shares it) runs
 `validate.validateState(&fold.settings, fold.memberCount())` after
 appending the member; a refusal rolls the member back and the join is
-refused with `InvalidSettings` — the same name the fold gives a settings
+refused with `InvalidSettings` - the same name the fold gives a settings
 entry that would violate the rule. `applyLeave` needs no check: every
 whole-state rule is either count-independent or loosens as the count
 shrinks, so a leave cannot create a violation.
 
 Regression test (`membership.zig` "a join that would strand the cluster
 leaderless is refused"): genesis with `leadership.mode = configured`
-(empty authorities, `fallback = stall` — legal at n = 1), then a join —
+(empty authorities, `fallback = stall` - legal at n = 1), then a join -
 refused with `InvalidSettings` and the cluster stays at one member.
 Before the fix the join was accepted and `election.leader` returned
 `null` for every subsequent write.

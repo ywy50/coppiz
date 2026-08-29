@@ -1,9 +1,9 @@
-# Bug — A non-empty authority list that matches no member strands the cluster leaderless (the empty-list fix covered only `len == 0`)
+# Bug - A non-empty authority list that matches no member strands the cluster leaderless (the empty-list fix covered only `len == 0`)
 
 ## TL;DR
 
-- **What failed:** `validateState` refuses only an *empty* authority list. A non-empty list whose entries match no member — a 64-hex public key pasted instead of a 32-hex id, a dead hostname, any non-matching string — passes genesis and every join; once the cluster grows past n=1, `leader()` finds no authority and `fallback = stall` returns `null`.
-- **Impact:** The cluster strands permanently — and, since only the leader can author settings entries, the bad list can never be corrected online. The same no-self-heal class the empty-list fix (2026-08-28-join-can-strand-cluster-leaderless) closed.
+- **What failed:** `validateState` refuses only an *empty* authority list. A non-empty list whose entries match no member - a 64-hex public key pasted instead of a 32-hex id, a dead hostname, any non-matching string - passes genesis and every join; once the cluster grows past n=1, `leader()` finds no authority and `fallback = stall` returns `null`.
+- **Impact:** The cluster strands permanently - and, since only the leader can author settings entries, the bad list can never be corrected online. The same no-self-heal class the empty-list fix (2026-08-28-join-can-strand-cluster-leaderless) closed.
 - **Resolution:** Still open. Statically validated.
 
 ## Status
@@ -12,7 +12,7 @@ Open.
 
 ## Symptom and impact
 
-`validateState` (`validate.zig:89-96`): `empty_ok` guards `list.len == 0` only. `authorityIndex` (`election.zig:81-85`) matches a verbatim address or a 32-hex id — anything else is silently skipped when `leader()` scans for an authority. At genesis n=1 the lone member leads itself (`election.zig:161`), so the bad list is invisible; `applyJoin` re-validates only the *count* (`membership.zig:113`) — a non-empty garbage list passes. At n≥2: `leader()` (`election.zig:176-179`) finds no live authority → `null` → `append` answers `no_leader` forever; no diagnostic anywhere.
+`validateState` (`validate.zig:89-96`): `empty_ok` guards `list.len == 0` only. `authorityIndex` (`election.zig:81-85`) matches a verbatim address or a 32-hex id - anything else is silently skipped when `leader()` scans for an authority. At genesis n=1 the lone member leads itself (`election.zig:161`), so the bad list is invisible; `applyJoin` re-validates only the *count* (`membership.zig:113`) - a non-empty garbage list passes. At n≥2: `leader()` (`election.zig:176-179`) finds no live authority → `null` → `append` answers `no_leader` forever; no diagnostic anywhere.
 
 ## Reproduction
 

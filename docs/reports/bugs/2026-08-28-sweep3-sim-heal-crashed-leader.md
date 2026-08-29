@@ -1,8 +1,8 @@
-# Bug — The simulator's `heal` truncates a side's post-crash branch when the side leader crashed mid-partition
+# Bug - The simulator's `heal` truncates a side's post-crash branch when the side leader crashed mid-partition
 
 ## TL;DR
 
-- **What failed:** `sideLeader`/`tailOf` use the partition set's *first* node without checking `alive`. If that node is a crashed leader, its frozen chain is used both to name the survivor and to build the merged branch — the side's post-crash writes (and its new epoch) are silently dropped, and the result depends on the index order inside the set.
+- **What failed:** `sideLeader`/`tailOf` use the partition set's *first* node without checking `alive`. If that node is a crashed leader, its frozen chain is used both to name the survivor and to build the merged branch - the side's post-crash writes (and its new epoch) are silently dropped, and the result depends on the index order inside the set.
 - **Impact:** Simulator-only, but a harness invariant violation: a scenario combining `partition` → leader `crash` → side re-elects and writes → `heal` silently loses the surviving side's branch. No in-tree test exercises it.
 - **Resolution:** Still open. Statically validated.
 
@@ -12,7 +12,7 @@ Open.
 
 ## Symptom and impact
 
-`sideLeader` (`sim.zig:493-502`) returns the fold-named leader of the set's first node regardless of `alive`; `tailOf` (`:604-607`) slices that same first node's `chain`, frozen at its crash point. Scenario: partition `{A,B} | {C}`; A (leader) writes, crashes; B elects itself (epoch 2) and writes. At `heal`: `sideLeader(0)` returns the crashed A as survivor; `tailOf(0)` slices A's chain `[common..]`, missing B's epoch-2 entry and post-crash writes. The merged chain (common + A's partial branch + merge + re-slots) re-folds cleanly on every live node (A is still a member; `checkChainContinuity` holds), so the heal *succeeds* — with the surviving side's branch permanently truncated. Listing the set as `{B,A}` instead yields the correct heal: the outcome depends on set order.
+`sideLeader` (`sim.zig:493-502`) returns the fold-named leader of the set's first node regardless of `alive`; `tailOf` (`:604-607`) slices that same first node's `chain`, frozen at its crash point. Scenario: partition `{A,B} | {C}`; A (leader) writes, crashes; B elects itself (epoch 2) and writes. At `heal`: `sideLeader(0)` returns the crashed A as survivor; `tailOf(0)` slices A's chain `[common..]`, missing B's epoch-2 entry and post-crash writes. The merged chain (common + A's partial branch + merge + re-slots) re-folds cleanly on every live node (A is still a member; `checkChainContinuity` holds), so the heal *succeeds* - with the surviving side's branch permanently truncated. Listing the set as `{B,A}` instead yields the correct heal: the outcome depends on set order.
 
 ## Reproduction
 

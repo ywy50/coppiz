@@ -1,4 +1,4 @@
-# coppiz — Reference Documentation
+# coppiz - Reference Documentation
 
 Product requirement docs live in [docs/prds/](prds/) ([index](prds/README.md), [template](prds/TEMPLATE.md));
 the Done/Planned narrative is [docs/ROADMAP.md](ROADMAP.md).
@@ -29,12 +29,12 @@ shipped narrative (that is the roadmap).
 | You want to know | Read |
 |---|---|
 | what this is and why it exists | [PRD 0001 Problem](prds/0001-journal-core.md#problem), then [research 0001](research/0001-evidence-carried-from-the-state-store-survey.md) |
-| the data model | [PRD 0001](prds/0001-journal-core.md) — entries, slots, chain, control entries |
-| how cleanup works in an append-only store — opt-in, off by default | [PRD 0002](prds/0002-ttl-and-staleness.md), [ADR 0002](adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md) |
+| the data model | [PRD 0001](prds/0001-journal-core.md) - entries, slots, chain, control entries |
+| how cleanup works in an append-only store - opt-in, off by default | [PRD 0002](prds/0002-ttl-and-staleness.md), [ADR 0002](adrs/0002-entries-are-immutable-ttl-and-author-staleness-are-the-only-mutations.md) |
 | who is leader at 1, 2, 6 members, and what a partition does | [PRD 0003](prds/0003-membership-and-leadership.md), [RFC 0002](rfcs/0002-how-join-order-is-made-unspoofable.md) |
 | where settings live and why not in a config file | [PRD 0004](prds/0004-settings.md) |
 | how a program embeds it, with clanker as the worked example | [PRD 0005](prds/0005-embedding-the-library-as-the-product.md), [RFC 0001](rfcs/0001-library-first-or-service-first.md) |
-| how it gets to 1,000 or 100,000 instances | [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md) — groups, ownership, parity, and what the core must get right now |
+| how it gets to 1,000 or 100,000 instances | [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md) - groups, ownership, parity, and what the core must get right now |
 | what is not decided | [open-questions.md](open-questions.md) |
 
 ## Architecture (implemented down to the node loop and the embedded write path; federation is next)
@@ -44,12 +44,12 @@ standard library only ([ADR 0001](adrs/0001-zig-0-16-standard-library-only-for-t
 and everything a cluster needs ships inside the library
 ([ADR 0003](adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md)).
 Every member of a group holds the group's journals in full (past one
-group, journals are owned and routed — see *Scaling by recursion* below).
+group, journals are owned and routed - see *Scaling by recursion* below).
 The design rests on one separation and one rule:
 
-**The separation: entry versus slot.** An *entry* is what an author writes —
+**The separation: entry versus slot.** An *entry* is what an author writes -
 immutable, author-signed, identified by `(author, author_seq)`. A *slot* is
-where the journal put it — `(epoch, seq)`, assigned and signed by the leader of
+where the journal put it - `(epoch, seq)`, assigned and signed by the leader of
 that epoch, hash-chained to the previous slot. Content never changes; order
 can heal after a partition by re-slotting unchanged entries. Readers that
 need identity use entry ids; readers that need order use slots.
@@ -74,8 +74,8 @@ client ─append─▶ local member ──forward──▶ leader ──(slot, e
 **Leadership without quorum.** There is no vote. `leader(mode, settings,
 members, liveness)` is a pure function every member evaluates over its fold;
 members that agree on liveness agree on the leader, and members that do not
-are partitioned. Three modes — `seniority` (earliest join slot), `configured`
-(an operator list; name one of two, or an odd subset of six), `combined` —
+are partitioned. Three modes - `seniority` (earliest join slot), `configured`
+(an operator list; name one of two, or an odd subset of six), `combined` -
 all well-defined at n = 1, 2, and any even n. A partition under `seniority`
 yields a leader per side and a deterministic merge on heal; `configured` with
 `fallback = stall` refuses writes instead. Modes are settings, so a cluster
@@ -87,7 +87,7 @@ system grows by more groups, not a bigger one: a federation is a cluster
 whose members are groups, elected by the same `leader(...)` function; a
 journal is owned by one group and routed to from the others; sealed segments
 can be stored k-of-m across groups. The core carries a short list of things
-it must get right today for that to stay possible — globally unique journal
+it must get right today for that to stay possible - globally unique journal
 ids, chain per journal, self-describing segments, pure validation and
 election, a reserved federation settings scope
 ([PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md)).
@@ -114,9 +114,9 @@ knows about any particular host ([PRD 0005](prds/0005-embedding-the-library-as-t
 
 clanker is the first host and the origin of the project. Its RFC 0019 (tier
 1: a `ck_state` host channel in `serve`; tier 2 option T: this project)
-defines the first integration. What clanker does today — per-session SQLite
+defines the first integration. What clanker does today - per-session SQLite
 written directly in-process, session event streams replicated to mesh peers
-over loopback HTTP at `cursor + 1`, JSONL streams with no replication — and
+over loopback HTTP at `cursor + 1`, JSONL streams with no replication - and
 how coppiz would slot in are worked through as the example host in PRD 0005.
 Everything coppiz inherits from clanker's survey is listed with its read dates
 in [research 0001](research/0001-evidence-carried-from-the-state-store-survey.md);

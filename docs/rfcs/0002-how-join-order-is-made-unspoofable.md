@@ -1,8 +1,8 @@
-# RFC 0002 — How join order is made unspoofable
+# RFC 0002 - How join order is made unspoofable
 
 ## Status
 
-Decided — 2026-08-27, option A (join is a chain entry; seniority is its slot
+Decided - 2026-08-27, option A (join is a chain entry; seniority is its slot
 position). [ADR 0005](../adrs/0005-join-order-is-slot-position.md) records
 the choice; PRD 0003 phases 1–3 implement it. The open question it left on
 concurrent-join ordering is [OQ 58](../open-questions.md), resolved the same
@@ -22,7 +22,7 @@ joined earlier than it did?
 
 **Why now.** The brief (2026-08-21) makes "who joined earliest leads" a
 first-class election mode precisely because it works at n = 1 and n = 2 where
-quorum does not — and states the requirement that it "cannot be spoofed by any
+quorum does not - and states the requirement that it "cannot be spoofed by any
 member to falsify their join date". Leadership is the most valuable thing a
 member can gain by lying, so this mechanism is the security core of the mode.
 
@@ -44,19 +44,19 @@ seniority resets on rejoin ([OQ 4](../open-questions.md)).
 
 ## Current state
 
-No implementation. The naive design — each member reports its own join
-timestamp and the earliest wins — is the status quo to beat and is option E.
+No implementation. The naive design - each member reports its own join
+timestamp and the earliest wins - is the status quo to beat and is option E.
 
 ## Options considered
 
-### Option A — Join is a chain entry; seniority is its slot position
+### Option A - Join is a chain entry; seniority is its slot position
 
 - **What it is:** a member's `join` is a control entry written by an
   *existing* member (the admitter) and sequenced by the leader into the
   hash-chained, leader-signed slot sequence ([PRD 0001](../prds/0001-journal-core.md)).
   Seniority = the `(epoch, seq)` of that slot; the founder's is the `genesis`
   slot. Time plays no part; order is position.
-- **Maturity:** the mechanism is the journal itself — nothing additional.
+- **Maturity:** the mechanism is the journal itself - nothing additional.
   Append-only logs as membership records is how Raft handles configuration
   changes (membership entries in the log) and how permissioned ledgers record
   enrolment.
@@ -70,13 +70,13 @@ timestamp and the earliest wins — is the status quo to beat and is option E.
   also contradicted by the majority's and by any archived branch. No clocks.
   Free at election time (one table lookup in the fold).
 - **Cons:** the *admitter* decides the position by deciding when to write
-  the `join` — an admitting leader can delay a newcomer to slot a friend
+  the `join` - an admitting leader can delay a newcomer to slot a friend
   first. This is inherent to any admission scheme and is bounded: the
   admitter can only reorder *concurrent* joins, never place anyone before an
   already-slotted member. During a partition, two branches may each admit
   members; merge re-slots the losing branch's joins *after* the survivor's,
   so a member admitted on the losing side ends up junior to everyone admitted
-  on the winning side during the partition — deterministic, but possibly
+  on the winning side during the partition - deterministic, but possibly
   surprising. The merge case is documented in PRD 0003 (*Partition and
   merge*); the admitter's ordering of concurrent joins is an open question
   below, not yet settled in the PRD.
@@ -84,25 +84,25 @@ timestamp and the earliest wins — is the status quo to beat and is option E.
 - **Cost to leave:** the `join` kind and the seniority fold; low.
 - **Evidence:** design reasoning over PRD 0001's chain properties; Raft's
   membership-change-as-log-entry (Ongaro & Ousterhout, *In Search of an
-  Understandable Consensus Algorithm*, §6) — `unverified` here in the sense
+  Understandable Consensus Algorithm*, §6) - `unverified` here in the sense
   that the paper was not reopened for this RFC; the claim is well known.
 
-### Option B — Leader-issued join certificates with timestamps
+### Option B - Leader-issued join certificates with timestamps
 
 - **What it is:** the leader signs a certificate `(member, pubkey, joined_at)`
   at admission; members present certificates; earliest `joined_at` leads.
 - **Pros:** works without a total order; a certificate is self-contained.
-- **Cons:** trusts the issuing leader's clock and honesty — a leader can
+- **Cons:** trusts the issuing leader's clock and honesty - a leader can
   back-date a friend; a member cannot verify a certificate it was not present
   for without the chain anyway; certificate revocation on `leave` needs its
   own mechanism; two leaders during a partition issue incomparable
   certificates with comparable-looking timestamps, so merge has no
   deterministic rule.
-- **Cost to adopt:** a certificate format, store, and revocation list — all
+- **Cost to adopt:** a certificate format, store, and revocation list - all
   things the chain already is.
 - **Evidence:** design reasoning.
 
-### Option C — Timestamp gossip with agreement (median / quorum of witnesses)
+### Option C - Timestamp gossip with agreement (median / quorum of witnesses)
 
 - **What it is:** every member records when it *saw* each newcomer; the
   agreed join time is the median of witnesses' observations.
@@ -113,22 +113,22 @@ timestamp and the earliest wins — is the status quo to beat and is option E.
   deterministic tiebreak that is not time.
 - **Evidence:** design reasoning.
 
-### Option D — Seniority from an external authority (DNS / config order)
+### Option D - Seniority from an external authority (DNS / config order)
 
 - **What it is:** order is the `authorities[]` list.
 - **Cons:** this *is* `configured` mode (PRD 0003); it answers a different
   need and is not automatic (driver 3).
 
-### Option E — Status quo: self-reported join time
+### Option E - Status quo: self-reported join time
 
 - **What it is:** each member states its own join time; earliest wins.
 - **Pros:** trivial.
 - **Cons:** spoofable by construction; fails the brief's requirement in one
   sentence.
 
-### Option F — Out of the box: verifiable delay
+### Option F - Out of the box: verifiable delay
 
-- **What it is:** seniority is proven by work — a verifiable delay function
+- **What it is:** seniority is proven by work - a verifiable delay function
   output chained from genesis, so an earlier position literally takes longer
   to have computed.
 - **Cons:** proves elapsed computation, not join order; a member with a
@@ -157,7 +157,7 @@ timestamp and the earliest wins — is the status quo to beat and is option E.
 
 ## Recommendation
 
-**Recommended option:** A — join is a chain entry; seniority is slot position.
+**Recommended option:** A - join is a chain entry; seniority is slot position.
 
 **Confidence:** 8/10
 
@@ -170,8 +170,8 @@ finding that admitter delay is abused in practice.
 
 **Rationale.** A is the only option that needs no clock, no extra authority
 and no extra store, and it is the only one that is unforgeable against a
-minority rather than merely against an outsider. Its weaknesses — admitter
-ordering of concurrent joins and branch ordering at merge — are bounded and
+minority rather than merely against an outsider. Its weaknesses - admitter
+ordering of concurrent joins and branch ordering at merge - are bounded and
 deterministic, which B and C's are not.
 
 **Reversibility.** Low cost either way while the format is unfrozen; after
@@ -193,8 +193,8 @@ deterministic, which B and C's are not.
 
 ## References
 
-- [PRD 0001](../prds/0001-journal-core.md) — chain, slots, control kinds.
-- [PRD 0003](../prds/0003-membership-and-leadership.md) — the mode this
+- [PRD 0001](../prds/0001-journal-core.md) - chain, slots, control kinds.
+- [PRD 0003](../prds/0003-membership-and-leadership.md) - the mode this
   serves.
-- Raft membership changes as log entries — Ongaro & Ousterhout 2014, §6
+- Raft membership changes as log entries - Ongaro & Ousterhout 2014, §6
   (not reopened for this RFC).

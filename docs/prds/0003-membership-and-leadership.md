@@ -1,8 +1,8 @@
-# PRD 0003 — Membership and leadership: seniority, configured authorities, and scaling 1 → n
+# PRD 0003 - Membership and leadership: seniority, configured authorities, and scaling 1 → n
 
 ## Status
 
-Draft — 2026-08-21. Depends on [PRD 0001](0001-journal-core.md) (control
+Draft - 2026-08-21. Depends on [PRD 0001](0001-journal-core.md) (control
 kinds `genesis`, `join`, `leave`, `epoch`, `merge`; slots; chain) and
 [PRD 0004](0004-settings.md) (`leadership.*` settings and the
 `reconfigurable` gate). The unspoofable-join mechanism it relies on is argued
@@ -21,9 +21,9 @@ re-slotted as no-ops).
 
 Phases 4–6 shipped 2026-08-27, on [OQ 19](../open-questions.md) decided
 (own binary framing over one TCP connection): the replication wire
-(`src/net/` — framing, the message set, and a transport seam with a TCP and
+(`src/net/` - framing, the message set, and a transport seam with a TCP and
 an in-memory hub implementation, so the same loop runs under both), the
-node loop (`src/cluster/node.zig` — failure detector, election → epoch,
+node loop (`src/cluster/node.zig` - failure detector, election → epoch,
 admission with `allowlist`/`open`/`prompt`, forward/broadcast/backfill, and
 the partition/merge with the OQ 44 re-fold discipline), the `coppiz serve`
 CLI with every command falling back to the wire when the data directory is
@@ -38,16 +38,16 @@ questions the matrix names.
 
 Known issue, found 2026-08-27 while exercising the loop from
 `examples/embed-cluster`: a **three-member partition that elects a second
-leader does not reliably converge on heal** — the survivor's branch fetch
+leader does not reliably converge on heal** - the survivor's branch fetch
 or the losers' re-sync can stall without retry (the two-member merge, e2e
-(b), converges; three members — two losers — surfaced a stall). The e2e
+(b), converges; three members - two losers - surfaced a stall). The e2e
 matrix's (b) is two-member; the three-member merge needs the simulator over
 the loop (OQ 27's second half) and a deterministic scenario before it can
 be pinned. Reported rather than silently worked around: the embed-cluster
 example's partition stays short enough to avoid the election.
 
 One implementation note the simulator pinned down ([OQ 44](../open-questions.md)):
-a merge converges only if every node **re-folds from the last common slot** —
+a merge converges only if every node **re-folds from the last common slot** -
 the losing branch's entries re-slot as no-ops for the *survivor's* fold, but
 cannot undo what the loser already folded (a settings change, a join), so
 the loser must discard its branch and fold the merged chain from the common
@@ -57,27 +57,27 @@ a fold rule.
 ## Problem
 
 The brief (2026-08-21) asks for a store that runs as one process and scales
-from there without a redeploy — and names the failure of the usual answer:
+from there without a redeploy - and names the failure of the usual answer:
 Raft-style quorum needs an odd count and a majority, so two instances cannot
 elect, and one instance is a degenerate cluster. Instead of quorum, the brief
 asks for leader election modes an operator can reason about at every size:
 
-- **seniority** — whoever joined the journal earliest leads; the order of
+- **seniority** - whoever joined the journal earliest leads; the order of
   joining must be automatically detected and *unspoofable* by any member.
-- **configured authorities** — the config names who leads in case of conflict
+- **configured authorities** - the config names who leads in case of conflict
   (by id, address or DNS name); for two members, name one; for one member, it
   is its own; for six members, name an odd subset.
-- **combined** — authorities filter who is eligible; seniority (or "who has
+- **combined** - authorities filter who is eligible; seniority (or "who has
   the latest entries, and definitely the full state") orders within them.
-- **live reconfiguration** — a setting decides whether the leadership mode may
+- **live reconfiguration** - a setting decides whether the leadership mode may
   change while running; when it may, the cluster moves between modes and
   sizes without stopping.
 
 What quorum buys, and what giving it up costs, has to be stated plainly:
 quorum is what prevents two leaders during a partition. Without it, two
 halves of a partitioned cluster can each elect the senior member *they can
-see*. The design below accepts that for the append-only case — two leaders
-cannot conflict over content, only over order — and heals order with a
+see*. The design below accepts that for the append-only case - two leaders
+cannot conflict over content, only over order - and heals order with a
 deterministic merge. Where an operator cannot accept two leaders (a strict
 single sequencer), the `configured` mode with `fallback = stall` gives up
 availability instead, and that is the CP/AP choice made per cluster rather
@@ -120,16 +120,16 @@ than baked in. The default is [open question 2](../open-questions.md).
 **Identity.** A member is an Ed25519 keypair plus a 128-bit member id derived
 from the public key (so the id cannot be chosen to collide). The private key
 lives in the member's data directory (`member.key`), never in the journal. The
-public key is in the journal — in `genesis` for the founder and in the `join`
-entry for everyone else — which is how every member verifies every signature
+public key is in the journal - in `genesis` for the founder and in the `join`
+entry for everyone else - which is how every member verifies every signature
 without a side channel.
 
 **Join is an entry, so join order is the chain.** A member's *seniority* is
 the slot of its `join` control entry (the founder's is the `genesis` slot,
 seniority rank 0). This is the whole answer to "cannot be spoofed" (RFC 0002):
 
-- The joining member does not write its own `join`. An *existing* member —
-  the admitter, normally the leader — writes it, after admission, naming the
+- The joining member does not write its own `join`. An *existing* member -
+  the admitter, normally the leader - writes it, after admission, naming the
   newcomer's id, public key and address. The newcomer's first authored entry
   can only come after that slot, because until then no member holds its key
   and every signature it produces is refused.
@@ -159,10 +159,10 @@ as any other. How the allowlist learns the key out of band is [open question
 phrase to "at head of the chain" is [open question
 43](../open-questions.md).
 
-**Leave and seniority.** A `leave` entry — by the member itself, or by the
+**Leave and seniority.** A `leave` entry - by the member itself, or by the
 leader evicting a member that has been `unreachable` for
 `membership.evict_after_ms` (0 = never; default never, [open question
-20](../open-questions.md)) — ends that member's seniority. If the same key
+20](../open-questions.md)) - ends that member's seniority. If the same key
 rejoins, it gets a new `join` slot and therefore the *newest* seniority. A
 member that merely restarts or drops off the network keeps its seniority: its
 `join` slot did not move. So seniority resets only on `leave`, which is a
@@ -181,8 +181,8 @@ larger clusters is [open question 25](../open-questions.md). The cap is per
 ([PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)), and a member
 keeps per-member state only for its own group.
 
-**This cluster is a group.** Everything in this PRD — membership fold,
-`leader(...)`, epochs, merge — is written over an abstract member type so the
+**This cluster is a group.** Everything in this PRD - membership fold,
+`leader(...)`, epochs, merge - is written over an abstract member type so the
 same functions elect among *groups* when clusters federate (PRD 0006 G3). A
 group's identity is its genesis hash; its representative at the next level
 is whoever its own chain currently names leader.
@@ -211,7 +211,7 @@ duration (the AP answer).
 
 `tiebreak = freshest` orders eligible members by the highest `(epoch, seq)`
 they have *acknowledged*, then by seniority. It is evaluated once, at
-election, and frozen for the epoch — it is not re-evaluated on every append,
+election, and frozen for the epoch - it is not re-evaluated on every append,
 or the leader would flap. Because `syncing` members are never eligible, every
 candidate under `freshest` already has the full state up to its head; the
 tiebreak only prefers the one that saw the most before the old leader went.
@@ -225,7 +225,7 @@ leader: self}`. This reason list is tier-1's; the federation overlay of
 the adopted chain after a transfer. Slots in the new epoch start at `seq = 1`. Every member
 validates that the claimed leader is what `leader(...)` returns for *their*
 fold and liveness; a member that disagrees does not accept the epoch and
-keeps its previous view — that is a partition, by definition, and merge
+keeps its previous view - that is a partition, by definition, and merge
 resolves it. Each branch advances its own epoch counter by one per leader
 change, so two concurrent leaders produce two epochs with the same number on
 different branches, which the merge rule orders.
@@ -240,8 +240,8 @@ every entry of the other branch, in that branch's order, after the `merge`.
 Entries are unchanged (same bytes, same ids); only their slots are new. The
 other branch's slots remain readable as history on members that had them and
 are delivered as an archived branch to members that did not, so a chain
-verifier can still check them. The rule is deterministic — any member given
-both heads computes the same survivor and the same re-slot order — so even
+verifier can still check them. The rule is deterministic - any member given
+both heads computes the same survivor and the same re-slot order - so even
 members that were on neither side converge. What readers see: an entry's
 `(epoch, seq)` can change exactly once, at merge, and only for entries
 written on the losing side during the partition; its entry id never changes.
@@ -259,16 +259,16 @@ rediscovered.
 setting they change by a `settings` entry the leader appends. The gate is
 `leadership.reconfigurable`:
 
-- `true` — the `settings` entry is accepted; the current leader appends it,
+- `true` - the `settings` entry is accepted; the current leader appends it,
   then appends an `epoch` with `reason = mode_change` and the leader the new
   mode selects (which may be itself). The handover is one slot wide: the old
   leader stops slotting after the `epoch` entry and forwards to the new one.
-- `false` — every member refuses a `settings` entry that touches
+- `false` - every member refuses a `settings` entry that touches
   `leadership.*`, `invalid_settings: leadership frozen`. The only way to
   change the mode is the offline procedure in [open question
   5](../open-questions.md): stop every member, run `coppiz reconfigure` on
   one, which appends the entry and an epoch locally, then restart the rest so
-  they backfill it — *that* is still a chain event, so no member can be
+  they backfill it - *that* is still a chain event, so no member can be
   running a different mode than the chain says.
 
 Flipping `reconfigurable` itself follows the same rule: from `false` it can
@@ -301,21 +301,21 @@ join-order mechanism), clanker PRD 0011 (admission modes, reused as design).
 
 **Implementation.**
 
-1. `src/cluster/membership.zig` — pure fold of `genesis`/`join`/`leave` into
+1. `src/cluster/membership.zig` - pure fold of `genesis`/`join`/`leave` into
    the member table with seniority and state; validation rules for each.
    Shipped 2026-08-27.
-2. `src/cluster/election.zig` — pure `leader(mode, settings, members,
+2. `src/cluster/election.zig` - pure `leader(mode, settings, members,
    liveness)`; table tests for every mode at n = 1, 2, 3, 4, 6 with every
    liveness subset. Shipped 2026-08-27.
-3. `src/cluster/epoch.zig` — `epoch` validation and the merge rule: given two
+3. `src/cluster/epoch.zig` - `epoch` validation and the merge rule: given two
    heads, compute survivor and re-slot order; property test that any member
    given both heads computes the same result. Shipped 2026-08-27, with the
    deterministic simulator ([OQ 27](../open-questions.md), `src/sim/sim.zig`)
-   as the phase-3 acceptance harness — its scenarios are the first slice of
+   as the phase-3 acceptance harness - its scenarios are the first slice of
    the e2e matrix below.
-4. `src/net/` — framing, heartbeats, forward/broadcast/backfill
+4. `src/net/` - framing, heartbeats, forward/broadcast/backfill
    ([open question 19](../open-questions.md) decides HTTP vs own framing).
-5. `src/cluster/node.zig` — the loop: failure detector → election → epoch;
+5. `src/cluster/node.zig` - the loop: failure detector → election → epoch;
    admission; the reconfigure handover.
 6. E2E: (a) 1 → 2 → 3 members joined live, leader correct at each step under
    each mode; (b) partition a 2-member `seniority` cluster, write on both
@@ -360,7 +360,7 @@ join-order mechanism), clanker PRD 0011 (admission modes, reused as design).
   what an operator expects out of the box ([OQ 2](../open-questions.md)).
 - Seniority on rejoin ([OQ 4]), the offline reconfigure procedure ([OQ 5]),
   eviction ([OQ 20]), topology past 32 ([OQ 25]), and `freshest` semantics
-  ([OQ 12]) — all in [the register](../open-questions.md).
+  ([OQ 12]) - all in [the register](../open-questions.md).
 - A `quorum` mode for n ≥ 3 clusters that want Raft guarantees is roadmap;
   it would be a fourth value of `leadership.mode`, selectable live like the
   others, which is the payoff of making the mode a setting.

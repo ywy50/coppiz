@@ -1,4 +1,4 @@
-# Bug — Duplicate top-level keys in `coppiz.toml` leak the previous value
+# Bug - Duplicate top-level keys in `coppiz.toml` leak the previous value
 
 ## TL;DR
 
@@ -12,7 +12,7 @@ Open.
 
 ## Symptom and impact
 
-`parseTopLevel` (`local.zig:180-195`) does `config.data_dir = try allocator.dupe(...)` etc. for the four string keys with no `free` of a previous value. `data_dir = "/a"\ndata_dir = "/b"\n` leaks the first allocation. `parsePeerKey` frees before re-assign (and the `""` placeholder free is a no-op), and genesis appends — only the top-level strings leak. The peer double-free report's follow-up already noted that the parser does not reject duplicate keys.
+`parseTopLevel` (`local.zig:180-195`) does `config.data_dir = try allocator.dupe(...)` etc. for the four string keys with no `free` of a previous value. `data_dir = "/a"\ndata_dir = "/b"\n` leaks the first allocation. `parsePeerKey` frees before re-assign (and the `""` placeholder free is a no-op), and genesis appends - only the top-level strings leak. The peer double-free report's follow-up already noted that the parser does not reject duplicate keys.
 
 ## Reproduction
 

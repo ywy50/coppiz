@@ -1,4 +1,4 @@
-# Bug — Members learned from the fold after startup are never dialed: the "full mesh" never forms
+# Bug - Members learned from the fold after startup are never dialed: the "full mesh" never forms
 
 ## TL;DR
 
@@ -16,7 +16,7 @@ The mesh design: "One dialer per member pair, so the full mesh never double-dial
 
 ## Reproduction
 
-Not dynamically reproduced; statically certain. Observable whenever the founder of a >2-member cluster fails: the non-seeded pairs have no connection, no heartbeats, and self-elect simultaneously — where a full mesh would have one agreed leader.
+Not dynamically reproduced; statically certain. Observable whenever the founder of a >2-member cluster fails: the non-seeded pairs have no connection, no heartbeats, and self-elect simultaneously - where a full mesh would have one agreed leader.
 
 ## Root cause
 
