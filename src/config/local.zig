@@ -192,26 +192,26 @@ fn parseTopLevel(
 ) ParseError!void {
     if (std.mem.eql(u8, key, "data_dir")) {
         if (config.data_dir != null) return error.DuplicateKey;
-        config.data_dir = try allocator.dupe(u8, unquote(value));
+        config.data_dir = try allocator.dupe(u8, try unquoteChecked(value));
         return;
     }
     if (std.mem.eql(u8, key, "member.key_file")) {
         if (config.member_key_file != null) return error.DuplicateKey;
-        config.member_key_file = try allocator.dupe(u8, unquote(value));
+        config.member_key_file = try allocator.dupe(u8, try unquoteChecked(value));
         return;
     }
     if (std.mem.eql(u8, key, "listen")) {
         if (config.listen != null) return error.DuplicateKey;
-        config.listen = try allocator.dupe(u8, unquote(value));
+        config.listen = try allocator.dupe(u8, try unquoteChecked(value));
         return;
     }
     if (std.mem.eql(u8, key, "log.level")) {
         if (config.log_level != null) return error.DuplicateKey;
-        config.log_level = try allocator.dupe(u8, unquote(value));
+        config.log_level = try allocator.dupe(u8, try unquoteChecked(value));
         return;
     }
     if (std.mem.eql(u8, key, "storage.fsync")) {
-        const v = unquote(value);
+        const v = try unquoteChecked(value);
         if (std.mem.eql(u8, v, "every")) {
             config.fsync = .every;
             return;
@@ -254,13 +254,13 @@ fn parsePeerKey(
 ) ParseError!void {
     const peer = &config.peers.items[config.peers.items.len - 1];
     if (std.mem.eql(u8, key, "address")) {
-        const fresh = try allocator.dupe(u8, unquote(value));
+        const fresh = try allocator.dupe(u8, try unquoteChecked(value));
         allocator.free(peer.address);
         peer.address = fresh;
         return;
     }
     if (std.mem.eql(u8, key, "public_key")) {
-        const hex = unquote(value);
+        const hex = try unquoteChecked(value);
         // A public_key names the peer's identity for the join allowlist; a
         // key that is not exactly 64 hex chars could never verify. Refuse
         // it here — the config layer is deliberately strict — instead of
@@ -300,7 +300,7 @@ pub fn parseValue(
         .u32 => .{ .u32 = std.fmt.parseInt(u32, value, 10) catch return error.InvalidValue },
         .u16 => .{ .u16 = std.fmt.parseInt(u16, value, 10) catch return error.InvalidValue },
         .string_enum => blk: {
-            const name = unquote(value);
+            const name = try unquoteChecked(value);
             const idx = schema.enumValue(key_index, name) orelse return error.InvalidValue;
             break :blk .{ .enum_value = idx };
         },
@@ -359,10 +359,28 @@ fn appendArrayItem(
     item: []const u8,
 ) ParseError!void {
     if (item.len == 0) return;
+    try out.append(allocator, try allocator.dupe(u8, try unquoteChecked(item)));
+}
+
+/// Whether a value's quoting is well formed: either no unescaped quote at
+/// all, or exactly one basic string filling the whole value - opening at
+/// index 0, closing at the last byte, balanced, escape-aware.
+///
+/// Both the array items and the scalar values go through this. Keeping one
+/// implementation is the point: the array half was hardened first (bugs
+/// 2026-08-29-toml-parser-escapes-and-unterminated and
+/// 2026-08-30-config-array-trailing-token) while `data_dir`, `listen`,
+/// `member.key_file`, `log.level`, `storage.fsync`, a peer `address` and a
+/// peer `public_key` kept whatever `unquote` handed back - so
+/// `data_dir = "/var/lib/coppiz` with the closing quote forgotten became a
+/// directory name beginning with a quote (bug
+/// 2026-08-30-toml-scalar-unbalanced-quote).
+fn checkQuoteShape(value: []const u8) ParseError!void {
     var in_quotes = false;
     var backslash_parity: u1 = 0;
     var quote_count: usize = 0;
-    for (item, 0..) |c, i| {
+    var last_quote: usize = 0;
+    for (value, 0..) |c, i| {
         if (c == '\\') {
             backslash_parity ^= 1;
             continue;
@@ -370,28 +388,25 @@ fn appendArrayItem(
         if (c == '"' and backslash_parity == 0) {
             quote_count += 1;
             if (quote_count == 1 and i != 0) return error.InvalidValue;
+            last_quote = i;
             in_quotes = !in_quotes;
         }
         backslash_parity = 0;
     }
     if (in_quotes) return error.InvalidValue; // unterminated
-    if (quote_count > 0) {
-        if (quote_count != 2) return error.InvalidValue;
-        // The closing quote must be the item's last character (after
-        // trimming): a trailing bare token after a quoted item is not a
-        // valid TOML string, and `unquote` would otherwise store it
-        // verbatim, quotes included — a garbage authority entry that can
-        // strand a configured cluster exactly like a ghost authority (bug
-        // 2026-08-30-config-array-trailing-token).
-        const trimmed = std.mem.trim(u8, item, " \t");
-        if (trimmed.len < 2 or trimmed[trimmed.len - 1] != '"') return error.InvalidValue;
-    }
-    try out.append(allocator, try allocator.dupe(u8, unquote(item)));
+    if (quote_count == 0) return;
+    if (quote_count != 2) return error.InvalidValue;
+    // Two quotes, the first at index 0: the second has to end the value, or
+    // there is a bare token after the string (bug
+    // 2026-08-30-config-array-trailing-token).
+    if (last_quote != value.len - 1) return error.InvalidValue;
 }
 
-/// Strips surrounding quotes from a TOML basic string.
-fn unquote(value: []const u8) []const u8 {
+/// Strips surrounding quotes from a TOML basic string, refusing a value
+/// whose quoting is malformed rather than keeping it verbatim.
+fn unquoteChecked(value: []const u8) ParseError![]const u8 {
     const v = std.mem.trim(u8, value, " \t");
+    try checkQuoteShape(v);
     if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') return v[1 .. v.len - 1];
     return v;
 }
@@ -551,6 +566,37 @@ test "malformed authority arrays are refused, not silently parsed" {
     defer config5.deinit();
     const trailing_space = "[genesis]\nleadership.authorities = [\"a\" ]\n";
     try parse(test_alloc, trailing_space, &config5);
+}
+
+test "a scalar value with unbalanced quotes is refused, not stored verbatim" {
+    // Bug 2026-08-30-toml-scalar-unbalanced-quote: the array items were
+    // hardened against this shape, the scalars were not, so `unquote`'s
+    // both-ends rule quietly failed open and the quote became part of the
+    // value - a data directory, listen address or peer key beginning with
+    // a quote character.
+    const cases = [_][]const u8{
+        "data_dir = \"/var/lib/coppiz\n",
+        "data_dir = /var/lib/coppiz\"\n",
+        "data_dir = \"/a\" oops\n",
+        "listen = \"127.0.0.1:6400\n",
+        "member.key_file = \"key\n",
+        "log.level = \"info\n",
+        "storage.fsync = \"every\n",
+        "[[peers]]\naddress = \"127.0.0.1:6400\n",
+    };
+    for (cases) |case| {
+        var config = Config{ .allocator = test_alloc };
+        defer config.deinit();
+        try std.testing.expectError(error.InvalidValue, parse(test_alloc, case, &config));
+    }
+
+    // The well-formed and the unquoted forms both still parse, and a
+    // trailing space after the closing quote is still fine.
+    var ok = Config{ .allocator = test_alloc };
+    defer ok.deinit();
+    try parse(test_alloc, "data_dir = \"/var/lib/coppiz\" \nlisten = 127.0.0.1:6400\n", &ok);
+    try std.testing.expectEqualStrings("/var/lib/coppiz", ok.data_dir.?);
+    try std.testing.expectEqualStrings("127.0.0.1:6400", ok.listen.?);
 }
 
 test "bad values are refused" {

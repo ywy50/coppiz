@@ -136,3 +136,4 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - range reads and open-time discovery on the journal read paths](investigations/2026-08-29-runtime-sweep-journal-read.md)
 - [2026-08-29 - settings key resolution and checkpoint removal sets on the control paths](investigations/2026-08-29-runtime-sweep-settings-checkpoint.md)
 - [2026-08-28 - making `zig build test` faster without dropping tests](investigations/2026-08-28-test-suite-quick-wins.md)
+- [2026-08-30 - a scalar `coppiz.toml` value with unbalanced quotes is stored verbatim, quote included](bugs/2026-08-30-toml-scalar-unbalanced-quote.md)
