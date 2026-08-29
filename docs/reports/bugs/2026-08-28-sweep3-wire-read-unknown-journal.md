@@ -24,7 +24,7 @@ The unknown-journal case was given an empty success response instead of the name
 
 ## Resolution
 
-Fixed: a read of an unknown journal refuses with a named refusal — `read_page` gained a `refusal` field and the client maps it to `error.UnknownJournal`, matching the local read.
+Fixed: a read of an unknown journal refuses with a named refusal - `read_page` gained a `refusal` field and the client maps it to `error.UnknownJournal`, matching the local read.
 
 ## Verification
 

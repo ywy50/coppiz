@@ -31,7 +31,7 @@ The `f401606` fix enumerated the completion sites (`onSlot`, `onSyncPage`, `slot
 
 ## Resolution
 
-Fixed: `reforwardQueue`'s leader-slot branches resolve `pending_locals` — `completePendingFor` on success and the refusal name on error — so an embedded host's `localAppend` no longer hangs when its entry is slotted by a newly-elected leader.
+Fixed: `reforwardQueue`'s leader-slot branches resolve `pending_locals` - `completePendingFor` on success and the refusal name on error - so an embedded host's `localAppend` no longer hangs when its entry is slotted by a newly-elected leader.
 
 ## Verification
 

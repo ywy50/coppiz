@@ -29,7 +29,7 @@ Not dynamically reproduced (needs a joiner over a compacted chain); statically c
 
 ## Resolution
 
-Fixed: sync pages carry slot-only records, the client's `onSyncPage` advances the fold head over them via `advanceHead`, and the merge re-slot skips them — backfill over a `retain = none` chain terminates.
+Fixed: sync pages carry slot-only records, the client's `onSyncPage` advances the fold head over them via `advanceHead`, and the merge re-slot skips them - backfill over a `retain = none` chain terminates.
 
 ## Verification
 
