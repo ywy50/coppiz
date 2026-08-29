@@ -160,6 +160,9 @@ pub const TcpListener = struct {
     fn acceptFn(ctx: *anyopaque, io: std.Io) !Conn {
         const self: *TcpListener = @ptrCast(@alignCast(ctx));
         const stream = try self.server.accept(io);
+        // A failed TcpConn allocation must not leak the OS socket (bug
+        // 2026-08-29-tcp-conn-fd-leak-on-oom).
+        errdefer stream.close(io);
         const conn = try self.allocator.create(TcpConn);
         errdefer self.allocator.destroy(conn);
         conn.* = .{ .allocator = self.allocator, .stream = stream };
@@ -193,6 +196,9 @@ pub const TcpTransport = struct {
         _ = self;
         const addr = try net.IpAddress.parseLiteral(address);
         const stream = try addr.connect(io, .{ .mode = .stream });
+        // A failed TcpConn allocation must not leak the OS socket (bug
+        // 2026-08-29-tcp-conn-fd-leak-on-oom).
+        errdefer stream.close(io);
         const conn = try allocator.create(TcpConn);
         errdefer allocator.destroy(conn);
         conn.* = .{ .allocator = allocator, .stream = stream };
