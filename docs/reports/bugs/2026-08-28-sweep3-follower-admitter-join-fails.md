@@ -12,7 +12,20 @@ Open.
 
 ## Symptom and impact
 
-`onHello` (`node.zig:1246-1298`): admission ack is sent at `:1267`, then for a newcomer the member is inserted (`:1289-1295`) and `admitNewcomer` runs (`:1296`). `admitNewcomer` (`:1367-1382`) calls `authorControl(.join, payload)` - the join is slotted *as the admitter* (its own key, `sl.leader = self.member_id`). `applyControl` refuses any slot whose leader is not the current epoch's leader (`chain.zig:329`), so a follower admitter's join never folds; the `NotLeader` error propagates out of `onHello` → `onFrame`'s catch closes the conn (`node.zig:619`). The joiner already got an admitted ack; its seed retry redials the same follower on a 250 ms → 8 s backoff forever, and `syncPeerConn` finds only the dead peer, so it stays `syncing` indefinitely. Both sides then also dial each other in a closed failure loop.
+`onHello` (`node.zig:1246-1298`): admission ack is sent at `:1267`, then for
+a newcomer the member is inserted (`:1289-1295`) and `admitNewcomer` runs
+(`:1296`). `admitNewcomer` (`:1367-1382`) calls `authorControl(.join,
+payload)` - the join is slotted *as the admitter* (its own key, `sl.leader =
+self.member_id`).
+
+    `applyControl` refuses any slot whose leader is not the
+current epoch's leader (`chain.zig:329`), so a follower admitter's join never
+folds; the `NotLeader` error propagates out of `onHello` → `onFrame`'s catch
+closes the conn (`node.zig:619`). The joiner already got an admitted ack; its
+seed retry redials the same follower on a 250 ms → 8 s backoff forever, and
+`syncPeerConn` finds only the dead peer, so it stays `syncing` indefinitely.
+
+Both sides then also dial each other in a closed failure loop.
 
 The intent is explicit: "the fold admits any member, so whoever received the hello admits - PRD 0003 *Admission*" (`:1365-1366`) and "an existing member - the admitter, normally the leader - writes it" (PRD 0003). A follower admitter is supposed to work; the local slotting makes it fail, and nothing forwards the hello/join to the leader.
 

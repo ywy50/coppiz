@@ -12,7 +12,19 @@ Open. The control chain got its re-slotted variants (OQ 33: `settings` re-slots 
 
 ## Symptom and impact
 
-The control-chain re-slot rule documents that the losing branch's `settings` entries re-slot as no-ops (the survivor's value wins) and that cleanup records have already served their purpose (`applyControlReslotted`, `chain.zig:374-381`). `applyData` has no equivalent: a losing data branch containing a journal-scoped settings change, a checkpoint (routine whenever `ttl`/`stale` enforcement is enabled), or a stale mark under a different enforcement setting refuses with `NotLeader`/`StalenessDisabled`/`NotAuthor`. `doMergeData` (`node.zig:2341-2369`) then errors out of `mergePage` → `onSyncPage` → `onFrame`, which closes the connection and aborts the heal. The survivor's control chain already carries the merge entry, so the retry re-enters the same refusal forever; the loser's divergent data is never merged.
+The control-chain re-slot rule documents that the losing branch's `settings`
+entries re-slot as no-ops (the survivor's value wins) and that cleanup
+records have already served their purpose (`applyControlReslotted`,
+`chain.zig:374-381`). `applyData` has no equivalent: a losing data branch
+containing a journal-scoped settings change, a checkpoint (routine whenever
+`ttl`/`stale` enforcement is enabled), or a stale mark under a different
+enforcement setting refuses with `NotLeader`/`StalenessDisabled`/`NotAuthor`.
+`doMergeData` (`node.zig:2341-2369`) then errors out of `mergePage` →
+`onSyncPage` → `onFrame`, which closes the connection and aborts the heal.
+
+The survivor's control chain already carries the merge entry, so the retry
+re-enters the same refusal forever; the loser's divergent data is never
+merged.
 
 ## Reproduction
 

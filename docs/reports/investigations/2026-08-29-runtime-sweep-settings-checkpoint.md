@@ -60,7 +60,9 @@ against the code before implementation.
    set can never match anything: `removalSet` only removes TTL-expired
    entries (impossible when `ttl.enforce = off` - `expiry.effectiveTtl`
    returns null, `expiry.zig:43-45`) or stale entries under
-   `stale.cleanup = delete` (the default is `keep`). The leader computes the
+   `stale.cleanup = delete` (the default is `keep`).
+
+   The leader computes the
    set up to 3× per checkpoint per journal (`checkpointRemovalSet` for the
    G7/pending-bytes gate, `applyCheckpoint` in the fold, `removalIds` for
    compaction), each a full-table allocation on every member.

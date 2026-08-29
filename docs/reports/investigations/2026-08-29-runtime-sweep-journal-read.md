@@ -37,6 +37,7 @@ before implementation.
    million-entry journal. Then `readRecord` (`journal.zig:792-805`)
    allocated a fresh buffer per record and `store.read` (`store.zig:299-319`)
    did **two** positional reads per record (8-byte prefix, then the body).
+
    A 10-record read was O(n log n) CPU plus 2 syscalls per record; the
    prefix probe is load-bearing for compacted records (the caller's fold
    size is the *original* payload length, which over-sizes the buffer), so

@@ -12,7 +12,20 @@ Open. Introduced by `f401606` (`applyCreateJournalReslotted`).
 
 ## Symptom and impact
 
-`create_journal` is documented as leader-authored (the live rule checks `checkAuthorIsLeader`, `chain.zig:335` + `:603-629` variant). The reslotted inference (`chain.zig:311-313`: any non-epoch entry whose author is not the current leader routes to `applyControlReslotted`) was designed for merge re-slots - where the author is the losing leader - but it fires identically for live entries. `onForward` (`node.zig:1592-1607`) has no kind or author filter: the leader slots any forwarded entry. A member signs a valid `create_journal` (its own key, fresh author_seq), forwards it; the leader's own fold accepts it via the reslotted path (its author ≠ leader), broadcasts, and every member folds the same way - the journal exists. Pre-fix, the reslotted case routed to the author-checking `applyCreateJournal` and refused.
+`create_journal` is documented as leader-authored (the live rule checks
+`checkAuthorIsLeader`, `chain.zig:335` + `:603-629` variant). The reslotted
+inference (`chain.zig:311-313`: any non-epoch entry whose author is not the
+current leader routes to `applyControlReslotted`) was designed for merge
+re-slots - where the author is the losing leader - but it fires identically
+for live entries.
+
+`onForward` (`node.zig:1592-1607`) has no kind or
+author filter: the leader slots any forwarded entry. A member signs a valid
+`create_journal` (its own key, fresh author_seq), forwards it; the leader's
+own fold accepts it via the reslotted path (its author ≠ leader), broadcasts,
+and every member folds the same way - the journal exists. Pre-fix, the
+reslotted case routed to the author-checking `applyCreateJournal` and
+refused.
 
 ## Reproduction
 

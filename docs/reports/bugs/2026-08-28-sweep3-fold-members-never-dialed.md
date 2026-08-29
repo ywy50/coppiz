@@ -12,7 +12,20 @@ Open.
 
 ## Symptom and impact
 
-The mesh design: "One dialer per member pair, so the full mesh never double-dials: the member with the lower id dials the higher" (`node.zig:664-669`). It relies on `onTick` scheduling the dial when `dial_at_ms != 0`. But a member that entered the map via a fold `join` entry (`syncMembersFromFold`, `node.zig:486-506`) is created with `dial_at_ms = 0` (default), `conn_id = null`, `last_heard_ms = 0`, and none of the three `onTick` branches matches it: no heartbeat ever sent (`conn_id == null`), never suspected (`last_heard_ms == 0`), never dialed (`dial_at_ms == 0`, `:864-868`). The only dial paths are `bootstrapDial` (startup, `:645-662`), seed retries, and post-connection/post-failure re-dials (`:858, :1166, :782`). In a growing cluster, each new member talks only to its configured seeds.
+The mesh design: "One dialer per member pair, so the full mesh never
+double-dials: the member with the lower id dials the higher"
+(`node.zig:664-669`). It relies on `onTick` scheduling the dial when
+`dial_at_ms != 0`. But a member that entered the map via a fold `join`
+entry (`syncMembersFromFold`, `node.zig:486-506`) is created with
+`dial_at_ms = 0` (default), `conn_id = null`, `last_heard_ms = 0`, and
+none of the three `onTick` branches matches it: no heartbeat ever sent
+(`conn_id == null`), never suspected (`last_heard_ms == 0`), never dialed
+(`dial_at_ms == 0`, `:864-868`).
+
+The only dial paths are `bootstrapDial`
+(startup, `:645-662`), seed retries, and post-connection/post-failure
+re-dials (`:858, :1166, :782`). In a growing cluster, each new member
+talks only to its configured seeds.
 
 ## Reproduction
 

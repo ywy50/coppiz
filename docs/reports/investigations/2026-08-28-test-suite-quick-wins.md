@@ -153,7 +153,9 @@ loop would block that loop for the sleep's full duration.
 test-runner modes run `test_fn.func()` on the **main thread**
 (`mainTerminal` and the server mode's `.run_test` handler call it directly),
 never on an io worker. The node loops are io tasks on the io's worker
-threads, which keep running while the main thread sleeps. Replacing the ten
+threads, which keep running while the main thread sleeps.
+
+Replacing the ten
 spins with `std.Io.sleep(tio, duration, .awake)` is safe - the gate passed
 twice back-to-back (23/23 steps, 244/244 tests) with all ten replaced. The
 wall clock is unchanged (the waits are wall-clock by design - a 2 s spin and
@@ -205,7 +207,9 @@ complete in 0.1–0.3 s). The ~60 s of `exe_tests` was the test harness:
 `ServingProc.stop` SIGKILLs a serve and then polls `kill(pid, 0)` up to
 500 × 10 ms, but the killed child was never reaped, so it sat as a zombie
 and the poll always burned the full 5 s - and every serve was stopped twice
-(explicitly and via `defer`). Six stops in the "grows" test alone = 30 s of
+(explicitly and via `defer`).
+
+Six stops in the "grows" test alone = 30 s of
 polling. Fixed: `stop` now reaps the child (`wait`) when it still exists,
 guarded so the double-stop's second wait is skipped (a second wait panics
 the io - wait4 → ECHILD). `exe_tests`: 60 s → 4 s; the gate: ~75 s → ~31 s

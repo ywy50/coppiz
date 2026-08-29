@@ -41,6 +41,7 @@ Ordering inside each section is by what blocks implementation first.
    and its *layer*: PRDs 0001 and 0006 call `write.ack` a setting
    (`local | slotted`, honoured by the owning group), PRD 0003 assumes a
    writer can ask for `slotted` without saying where the choice lives.
+
    Disagreement cannot fork the journal, which
    suggests local config or a call parameter with a configured default.
    *Blocks:* none (the slot-ack write path shipped); the `local` variant and
@@ -86,6 +87,7 @@ Ordering inside each section is by what blocks implementation first.
     becomes monotone; dedup still works), or make the author re-announce its
     head on reconnect so the leader can close the gap. *Blocks:* PRD 0001
     phase 2 validation.
+
     **Resolved 2026-08-27** (design): gaps allowed - `author_seq` is
     monotone per (author, journal), and the fold dedups redeliveries by
     looking the entry id up in its table (an entry at or below the author's
@@ -218,11 +220,15 @@ Ordering inside each section is by what blocks implementation first.
     drafted in [PRD 0002](prds/0002-ttl-and-staleness.md) has no setting
     that turns the `stale` cause off: `stale.who` names who may mark
     (always `author` in v1) and `stale.cleanup` only decides what happens
-    *after* a mark. The brief reads both ways ("a toggle to allow mutability
+    *after* a mark.
+
+    The brief reads both ways ("a toggle to allow mutability
     for automatic cleanup via TTL **or** marking entries stale"). Options:
     add a `stale.enforce`-style key (and define what `off` means for an
     entry already marked), or narrow the accepted record's claim to TTL
-    enforcement when it is next touched. Must settle before the settings
+    enforcement when it is next touched.
+
+    Must settle before the settings
     schema is generated ([PRD 0004](prds/0004-settings.md) phase 1).
     **Resolved 2026-08-27** (operator): the `stale` cause is switchable per
     journal, matching ADR 0002. [PRD 0002](prds/0002-ttl-and-staleness.md)'s
@@ -287,11 +293,14 @@ Ordering inside each section is by what blocks implementation first.
     `journal.max_entry_bytes` 16 MiB - the last at OQ 36), and the overflow
     behaviour is settled by code: `append` refuses `queue_full` when the
     queue bound is hit, a too-large payload refuses `too_large`, and journal
-    creation refuses past the cap. What remains open: whether those values
+    creation refuses past the cap.
+
+    What remains open: whether those values
     and refusals are the right ones, and whether `genesis` is refused too
     when the cluster is already at the cap. Sibling of OQ 36. *Blocks:*
     none - the bounds shipped and G6 trips them; the values stay
     provisional.
+
     **Resolved 2026-08-29** (operator): the bounds are operator-configurable
     - the journal cap and entry size are chain settings, the queue bound a
     local-config key - and the provisional defaults stand until measurement.
@@ -304,7 +313,9 @@ Ordering inside each section is by what blocks implementation first.
     `unknown_target`, PRD 0002 failure modes). `sync.page_bytes` got a
     provisional local value (64 KiB, `provisional_page_bytes` in node.zig)
     and `sync.unslotted_max_bytes` a local-config key (OQ 55); the other two
-    still have no layer and no value. For each: is it local config
+    still have no layer and no value.
+
+    For each: is it local config
     or a chain setting - disagreeing on `lag_slots` could elect different
     leaders, which suggests chain; a page size only risks its own tail,
     which suggests local - and what is the default? Sibling of OQ 55.
@@ -338,6 +349,7 @@ Ordering inside each section is by what blocks implementation first.
     livelocks, the same path could burn a production core. *Answer from:* a
     repro under a tracer (strace/perf on the spinning threads), or a bisect
     of the checkpoint/TTL path G4 exercises.
+
     *Trigger:* the investigation 2026-08-28 (test-build speedup) - see its
     resolution.
     *Status:* still open. Two gdb-launched repro attempts (gdb as the
@@ -357,14 +369,18 @@ Ordering inside each section is by what blocks implementation first.
     AutoHashMap) inside `Store.compact` ← `compactRemoved` ←
     `checkpointForBroadcast` ← `driveCheckpoints` ← `onTick` ← `loopMain`
     (the G4 TTL-trio leader, teardown in progress: main thread in
-    `waitForStop`). `std.hash_map`'s probe loop is bounded by table
+    `waitForStop`).
+
+    `std.hash_map`'s probe loop is bounded by table
     capacity, so a long `put` means an overfull table (every probe walks the
     whole capacity) - the observed burn is consistent with the index map's
     `available` accounting going wrong under repeated
     `clearRetainingCapacity` + refill (compaction rebuilds the index on
     every checkpoint), degrading each insert to O(capacity). The compact/
     rebuildIndex path is unchanged by the 2026-08-29 speedup PRs; the
-    original 3/3 observations were also at G4. Next: a repro script that
+    original 3/3 observations were also at G4.
+
+    Next: a repro script that
     runs the G4 test under doubled load, then a bisect of
     `clearRetainingCapacity`/`available` accounting or a switch of the
     store index to `ensureTotalCapacity`-pre-sized rebuilds with an
@@ -378,12 +394,14 @@ Ordering inside each section is by what blocks implementation first.
     binary stream over one TCP connection. If RFC 0001's option D (observer
     clients) is to stay possible, the protocol must be specified. *Blocks:*
     PRD 0003 phase 4.
+
     **Resolved 2026-08-27** (design, at PRD 0003 phase 4): own binary
     framing over one TCP connection - 4-byte little-endian length prefix,
     then a body whose first byte is the wire version and second the message
     kind (all other integers little-endian, as in every coppiz format).
     The slot/entry records inside `slot`, `sync_page` and `read_page` reuse
     the on-disk segment record codec, so one codec serves disk and wire.
+
     The transport is a thin seam (`Conn`/`Listener`/`Transport` in
     `src/net/transport.zig`) with two implementations: TCP, and an
     in-memory hub whose directed edges `drop` and `heal` - the same loop
@@ -419,6 +437,7 @@ Ordering inside each section is by what blocks implementation first.
     a setting?), and can one be *dropped* - which would be the only
     non-chain deletion - or only frozen (no further appends) and expired
     away? *Blocks:* PRD 0001 phase 4 (`node.journal(name)` semantics).
+
     **Resolved in part 2026-08-27** (implementation decision, PRD 0001's
     status): leader-only `create_journal` in v1; the "dropped" half stays
     open. The enforcement has an open bypass - any member can forward a
@@ -458,7 +477,9 @@ Ordering inside each section is by what blocks implementation first.
     multi-process opens natively would mean: one process holds the listener
     and leader role, others append through a local IPC the library provides
     (unix socket in the data dir) - still no external infrastructure, but a
-    second transport to own. Is the SQLite habit important enough to hosts
+    second transport to own.
+
+    Is the SQLite habit important enough to hosts
     to make this v1? *Blocks:* none - v1 shipped the flock + wire-fallback
     model ("the long-lived process owns the directory"); native
     multi-process opens stay open. *Answer
@@ -472,6 +493,7 @@ Ordering inside each section is by what blocks implementation first.
     crates/npm for collisions. Candidates considered: `spine`, `journallet`,
     `zjournal`, `tally`, `quill`, `rostrum`, `accrete`, `crescent`,
     `creszent`, `bonsai`, `bonzai`, `coppice`, `tabula`, `weir`, `coppiz`.
+
     **Resolved 2026-08-27** (operator): the product is named `coppiz` -
     [ADR 0004](adrs/0004-the-product-is-named-coppiz.md). The library
     module, node binary, `build.zig.zon` `.name` and `coppiz.toml` use
@@ -547,7 +569,9 @@ Ordering inside each section is by what blocks implementation first.
     host that adds coppiz as a dependency gets a library whose spec is not in
     the package (SQLite and dqlite ship theirs). Excluding
     [qnd-notes.md](../qnd-notes.md) is clearly right; excluding `docs/` was
-    never stated as a decision. Decide either way before the first host
+    never stated as a decision.
+
+    Decide either way before the first host
     fetches coppiz ([PRD 0005](prds/0005-embedding-the-library-as-the-product.md)
     phase 5) or the first public release. *Blocks:* PRD 0005 phase 5.
     *Answer from:* the operator.
@@ -564,12 +588,15 @@ Ordering inside each section is by what blocks implementation first.
     `configured` and `combined` a federation of 2 or 4 groups elects like 2
     or 4 members do; only a majority-vote (`quorum`) mode at the federation
     level needs an odd count.
+
     **Resolved 2026-08-21** (operator confirmed): groups use the same
     leadership modes and the same concurrency model as members - election is
     a pure function over an abstract member type, and a group supplies the
     same five inputs (identity = genesis hash, seniority = its `join` slot in
     the federation journal, address, liveness and sync via its current
-    representative). An uneven group count is therefore **not** a
+    representative).
+
+    An uneven group count is therefore **not** a
     requirement; it would become one only if a `quorum` mode were chosen at
     the federation level, which is roadmap and not designed. Recorded in
     [PRD 0006](prds/0006-scaling-to-groups-sharding-and-parity.md) (*A group

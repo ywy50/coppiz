@@ -12,7 +12,18 @@ Open.
 
 ## Symptom and impact
 
-`election.View.last_ack` is documented as the member's own verified head for `tiebreak = freshest` (`election.zig`). The node fills it with its own head for everyone (`viewsFor`, `node.zig:2588`), so the freshest authority never wins. `sendHeartbeat` populates the wire `last_ack` with the sender's head (`node.zig:1149`; field at `message.zig:434-452`) but `onHeartbeat` never reads it (`node.zig:1862-1878`) - the field is written, transmitted, and dropped, strong evidence the per-member wiring was intended and lost. The merge path has the same defect: `viewOf` (`node.zig:2202-2215`) feeds the node's own head as *both* branch leaders' `last_ack`, while the simulator's `branchOf`/`viewsFor` use each branch's own head (`sim.zig:667, 379`).
+`election.View.last_ack` is documented as the member's own verified head for
+`tiebreak = freshest` (`election.zig`). The node fills it with its own head
+for everyone (`viewsFor`, `node.zig:2588`), so the freshest authority never
+wins. `sendHeartbeat` populates the wire `last_ack` with the sender's head
+(`node.zig:1149`; field at `message.zig:434-452`) but `onHeartbeat` never
+reads it (`node.zig:1862-1878`) - the field is written, transmitted, and
+dropped, strong evidence the per-member wiring was intended and lost.
+
+The merge path has the same defect: `viewOf` (`node.zig:2202-2215`) feeds
+the node's own head as *both* branch leaders' `last_ack`, while the
+simulator's `branchOf`/`viewsFor` use each branch's own head (`sim.zig:667,
+379`).
 
 ## Reproduction
 

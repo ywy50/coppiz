@@ -22,10 +22,12 @@ re-slotted as no-ops).
 Phases 4–6 shipped 2026-08-27, on [OQ 19](../open-questions.md) decided
 (own binary framing over one TCP connection): the replication wire
 (`src/net/` - framing, the message set, and a transport seam with a TCP and
-an in-memory hub implementation, so the same loop runs under both), the
+an in-memory hub implementation, so the same loop runs under both), and the
 node loop (`src/cluster/node.zig` - failure detector, election → epoch,
 admission with `allowlist`/`open`/`prompt`, forward/broadcast/backfill, and
-the partition/merge with the OQ 44 re-fold discipline), the `coppiz serve`
+the partition/merge with the OQ 44 re-fold discipline).
+
+The `coppiz serve`
 CLI with every command falling back to the wire when the data directory is
 locked, and the e2e matrix of *Acceptance criteria* below (process-level (a)
 (d) (e); (b) and (c) in-process over the hub transport with real stores and

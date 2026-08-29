@@ -103,7 +103,8 @@ write and read paths, PRD 0005);
 `src/settings/` schema, validation, fold; `src/net/` framing, heartbeats,
 backfill; `src/config/` local `coppiz.toml` parsing (PRD 0004); the CLI
 lives in `src/main.zig`; `src/api/` (a service API) is deferred behind the
-first non-Zig consumer ([ADR 0007](adrs/0007-the-library-is-the-primary-surface.md));
+first non-Zig consumer ([ADR 0007](adrs/0007-the-library-is-the-primary-surface.md)).
+
 `src/root.zig` the library API; `examples/` one host per shape
 (PRD 0005); `src/federation/` (later) group membership, ownership, routing,
 parity. Pure logic (codecs, fold, election, merge, expiry) is kept I/O-free
@@ -122,6 +123,7 @@ defines the first integration. What clanker does today - per-session SQLite
 written directly in-process, session event streams replicated to mesh peers
 over loopback HTTP at `cursor + 1`, JSONL streams with no replication - and
 how coppiz would slot in are worked through as the example host in PRD 0005.
+
 Everything coppiz inherits from clanker's survey is listed with its read dates
 in [research 0001](research/0001-evidence-carried-from-the-state-store-survey.md);
 its sandbox and single-binary constraints are the strictest known host
