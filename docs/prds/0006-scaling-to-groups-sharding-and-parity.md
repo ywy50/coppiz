@@ -188,7 +188,7 @@ cheap today and a format break later.
 | Member ids are derived from keys, group id from the genesis hash | identities must be meaningful outside the group that minted them | PRD 0003 |
 | `author_seq` dense per `(author, journal)` and the author id is the range key | one author's stream is always in one group; range splits by author prefix need no renumbering | PRD 0001, this PRD |
 | Validation is a pure function of `(slot, entry, folded state)` | the federation validates a group's control entries with the same function, over that group's chain | PRD 0001 |
-| Election is a pure function over an abstract member set | the federation elects over groups by calling it with groups as members | PRD 0003 |
+| Election is a pure function over an abstract member set - done 2026-08-29: `election.Election(Id)`, with `election.Member` the cluster's 16-byte instantiation | the federation elects over groups by calling it with groups as members | PRD 0003 |
 | Settings have a scope; add `federation` as a third scope alongside `cluster` and `journal` *now* so the schema does not need a breaking change | ownership map and federation mode live there | PRD 0004 |
 | Per-member state is bounded by group size plus group count | no table keyed by every instance in the world | PRD 0003 failure detector; this PRD G6 |
 | Backfill is from *any* member, paged, chain-verified | a follower copy in another group and a reconstructed parity segment both arrive this way | PRD 0001 |
@@ -207,6 +207,13 @@ roadmap):
    `src/cluster/membership.zig` and `election.zig` unchanged by
    parameterising their member type. Trigger: a deployment that needs more
    than one group.
+   - `election.zig` is already parameterised (2026-08-29): it is
+     `Election(Id)`, and a federation instantiates it with a 32-byte group
+     id. That half of this phase is a call, not a change.
+   - `membership.zig` is not, and is the remaining work here. It folds
+     control entries into a `chain.FoldState`, so abstracting it means
+     abstracting what a member table is folded *from*, which is a larger
+     question than the id's width and is deliberately left to this phase.
 2. `src/federation/ownership.zig`, `src/federation/route.zig` - the owner
    map, forwarding, follower copies, ownership transfer. Trigger: same.
 3. Range split by author prefix; leader-star or gossip inside large groups
@@ -237,9 +244,18 @@ roadmap):
   54](../research/0007-tier-number-measurements.md)).
 - [ ] (G2) PRD 0003's acceptance criteria pass unchanged when the cluster
   is a member of a federation.
-- [ ] (G3) Federation membership and election are the same source files as
+- [x] (G3) Federation membership and election are the same source files as
   group membership and election (a test imports both and asserts they are
   the same functions over different member types).
+  - Met for **election** 2026-08-29. `src/cluster/election.zig` is
+    `Election(Id)` over any fixed-size id and the cluster uses
+    `Election([16]u8)`.
+  - The test `(PRD 0006 G3) the same election functions rank groups as they
+    rank members` instantiates `Election([32]u8)` for a group id and asserts
+    function *identity* (`leader == Member.leader`), not similarity.
+  - Membership is **not** covered. `membership.zig` folds chain entries into
+    a `chain.FoldState`, so abstracting it is phase 1's work rather than a
+    now-item; the phase 1 entry below names it.
 - [ ] (G4) Two groups, one journal owned by each; a consumer on either group
   appends to and reads from both; the non-owning group holds no copy.
 - [ ] (G5) A journal stored with `{k=2, m=3}` across three groups reads
