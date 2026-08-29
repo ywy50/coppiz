@@ -568,7 +568,7 @@ Ordering inside each section is by what blocks implementation first.
     and PRD 0001 says a document "is the spec" until code replaces it, so a
     host that adds coppiz as a dependency gets a library whose spec is not in
     the package (SQLite and dqlite ship theirs). Excluding
-    [qnd-notes.md](../qnd-notes.md) is clearly right; excluding `docs/` was
+    [the brief](brief.md) (the operator's private founding notes) is clearly right; excluding `docs/` was
     never stated as a decision.
 
     Decide either way before the first host

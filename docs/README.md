@@ -13,8 +13,7 @@ Cross-cutting unknowns are numbered in [open-questions.md](open-questions.md);
 terms are defined once in [glossary.md](glossary.md).
 
 The operator's original brief (2026-08-21), quoted as "the brief" wherever a
-record refers to it, is [qnd-notes.md](../qnd-notes.md) at the repository
-root. Clarified the same day, in conversation: coppiz is for anyone facing
+record refers to it, is [brief.md](brief.md) in this directory. Clarified the same day, in conversation: coppiz is for anyone facing
 this class of problem, not for clanker specifically; it must be a library to
 "just use" the way SQLite, dqlite or rqlite are, with everything built in and
 no extra infrastructure; slim to start, expandable and naturally scalable.
