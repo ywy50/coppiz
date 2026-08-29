@@ -47,3 +47,7 @@ reference for what one would do ([OQ 41](../open-questions.md#oq-41)).
 | [0019](0019-journal-lifecycle.md) | Discussion | Journal lifecycle: creation is leader-only; there is no drop (OQ 34) |
 | [0020](0020-cursor-id-encoding.md) | Discussion | Cursor and id encoding for consumers (OQ 42) |
 | [0021](0021-host-shapes.md) | Discussion | Which non-clanker hosts are the design targets? (OQ 46) |
+| [0022](0022-snapshot-format.md) | Discussion | Snapshot format: a serialized fold, served to joiners behind a trigger (OQ 17) |
+| [0023](0023-rolling-upgrade.md) | Discussion | Format versioning and rolling upgrade (OQ 26) |
+| [0024](0024-backup-restore.md) | Discussion | Backup and restore (OQ 39) |
+| [0025](0025-docs-in-package.md) | Discussion | Does the fetchable package carry the design docs? (OQ 59) |
