@@ -34,3 +34,7 @@ reference for what one would do ([OQ 41](../open-questions.md#oq-41)).
 | [0006](0006-multi-process-one-data-directory.md) | Discussion | Several processes on one data directory: native multi-process opens or the wire fallback? (OQ 47) |
 | [0007](0007-service-api-auth.md) | Discussion | What authenticates service-API callers off loopback? (OQ 38) |
 | [0008](0008-wire-encryption.md) | Discussion | Wire encryption: plaintext v1, and what protects a non-private deployment (OQ 23) |
+| [0009](0009-trust-model.md) | Discussion | The trust model: crash faults and tamper evidence, not BFT (OQ 1) |
+| [0010](0010-per-journal-leadership.md) | Discussion | Per-journal or cluster-level leadership? (OQ 8) |
+| [0011](0011-topology-past-32.md) | Discussion | Topology past 32 members: leader-star first, gossip later (OQ 25) |
+| [0012](0012-backpressure.md) | Discussion | Backpressure: a slow follower must not slow the writers (OQ 28) |
