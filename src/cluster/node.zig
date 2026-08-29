@@ -280,7 +280,12 @@ pub const ClusterNode = struct {
 
     next_conn_id: u64 = 1,
     /// The first slot of my current branch (the epoch that opened it), and
-    /// the last slot before it (the common prefix both sides share).
+    /// the last slot before it (the common prefix both sides share). Every
+    /// new epoch sets them, including an ordinary failover that no partition
+    /// followed, so `becomeLoser` checks that `branch_start` opened at the
+    /// epoch the divergence is about before it truncates to `common_tail`
+    /// (bug 2026-08-29-branch-facts-never-reset). Both are cleared when a
+    /// merge ends and the branch no longer exists.
     branch_start: ?slot.Position = null,
     common_tail: ?slot.Position = null,
     /// The tick interval, recomputed from settings; read by the timer task.
@@ -2213,7 +2218,7 @@ pub const ClusterNode = struct {
             try self.beginMerge(conn_id, peer_branch_epoch);
             return;
         }
-        try self.becomeLoser(conn_id);
+        try self.becomeLoser(conn_id, peer_branch_epoch);
     }
 
     /// The survivor's merge start: fetch the loser's branch from its first
@@ -2228,10 +2233,27 @@ pub const ClusterNode = struct {
     /// The loser's side of the merge: offer my branch to the survivor,
     /// truncate every journal to the common prefix, re-fold, and backfill
     /// the survivor's chain (which carries the merge and the re-slots).
-    fn becomeLoser(self: *ClusterNode, conn_id: u64) !void {
+    fn becomeLoser(self: *ClusterNode, conn_id: u64, peer_branch_epoch: u64) !void {
         const my_leader = self.node.control.epoch.?.leader;
         const branch_head = self.node.control.head orelse return;
+        // A branch of my own, opened no earlier than the peer's. Every new
+        // epoch sets the branch facts and nothing used to clear them, so a
+        // member whose only history is an ordinary failover still carries a
+        // `common_tail` from it and would truncate the whole cluster's
+        // committed suffix back to it (bug
+        // 2026-08-29-branch-facts-never-reset).
+        //
+        // A partition is symmetric when both sides elect (each opens the
+        // same next epoch number off the same prefix) and asymmetric when
+        // only the loser does (the survivor keeps leading its old epoch, so
+        // its records carry the *lower* epoch). Both give
+        // `branch_start.epoch >= peer_branch_epoch`. A branch of mine that
+        // opened *before* the peer's is not this divergence's counterpart:
+        // the peer elected an epoch I never reached, so I am behind, and the
+        // heartbeat gap catch-up is what recovers that.
+        const branch_start = self.branch_start orelse return;
         if (self.common_tail == null) return; // no branch: just behind
+        if (branch_start.epoch < peer_branch_epoch) return; // behind, not branched
         try self.sendMessage(conn_id, .{ .merge_offer = .{
             .branch_leader = my_leader,
             .branch_head = branch_head,
@@ -2294,6 +2316,12 @@ pub const ClusterNode = struct {
                 slot.Position{ .epoch = 1, .seq = 1 };
             try self.sync_cursors.put(self.allocator, jid, from);
         }
+        // Control and data are both back at the common prefix: the branch
+        // this member had is gone, so the facts describing it must go too,
+        // or the next divergence would truncate to them again (bug
+        // 2026-08-29-branch-facts-never-reset).
+        self.branch_start = null;
+        self.common_tail = null;
     }
 
     /// The survivor's side: the loser offered its branch. Verify the
@@ -2307,7 +2335,7 @@ pub const ClusterNode = struct {
             // A race: the offerer computed the same survivor I did — but I
             // am the loser. (Both sides run the same pure rule, so this only
             // happens if my branch facts lagged; truncate and re-sync.)
-            try self.becomeLoser(conn_id);
+            try self.becomeLoser(conn_id, offer.branch_head.epoch);
             return;
         }
         try self.beginMerge(conn_id, offer.branch_head.epoch);
@@ -2532,6 +2560,11 @@ pub const ClusterNode = struct {
             // is still ahead of it (bug 2026-08-29-merge-data-reslot-refusals).
             try self.reSlotDeferredLeaves();
             self.merging_from = null;
+            // The loser's branch is now part of my chain: the divergence is
+            // over and my own branch facts no longer describe one (bug
+            // 2026-08-29-branch-facts-never-reset).
+            self.branch_start = null;
+            self.common_tail = null;
             // The loser may truncate and re-sync its data now.
             self.sendMessage(conn_id, .merge_ack) catch {};
             var bit = self.merge_buffers.valueIterator();
@@ -4552,4 +4585,84 @@ test "an unsolicited merge_ack truncates nothing: the ack is bound to the offer"
     try std.testing.expect(cn.syncing);
     // One ack per offer: a replay of it is inert.
     try std.testing.expectEqual(@as(?u64, null), cn.merging_to);
+}
+
+test "an ordinary failover is not a branch: becomeLoser truncates nothing" {
+    // Every new epoch sets `branch_start`/`common_tail`, and nothing ever
+    // reset them, so a member whose only history was an ordinary failover
+    // still had a `common_tail` pointing at the slot before it. A later
+    // divergence in which that member is the loser then truncated its chain
+    // back to that tail, discarding slots the whole cluster had committed.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    // A conn that swallows what is written to it: `becomeLoser` sends its
+    // `merge_offer` before it truncates, and the send must not be what
+    // decides the outcome under test.
+    const Sink = struct {
+        fn send(_: *anyopaque, _: std.Io, _: []const u8) net.transport.SendError!void {}
+        fn recv(
+            _: *anyopaque,
+            _: std.Io,
+            _: std.mem.Allocator,
+        ) net.transport.RecvError![]u8 {
+            return error.EndOfStream;
+        }
+        fn nop(_: *anyopaque, _: std.Io) void {}
+    };
+    var sink_ctx: u8 = 0;
+    try cn.conns.put(test_alloc, 9, .{ .conn = .{
+        .ctx = &sink_ctx,
+        .recv_frame = Sink.recv,
+        .send_frame = Sink.send,
+        .shutdown_fn = Sink.nop,
+        .close_fn = Sink.nop,
+    } });
+
+    // The only history: one ordinary failover to epoch 2. No partition ever
+    // happened, so this member holds no branch of its own.
+    try cn.appendEpoch(.leader_lost);
+    const head_before = cn.node.control.head.?;
+    try std.testing.expectEqual(@as(u64, 2), head_before.epoch);
+    try std.testing.expectEqual(@as(u64, 2), cn.branch_start.?.epoch);
+    try std.testing.expectEqual(@as(u64, 1), cn.common_tail.?.epoch);
+
+    // A peer's branch opened at epoch 3, past anything this member ever
+    // reached: I am behind, not branched.
+    try cn.becomeLoser(9, 3);
+    try std.testing.expectEqual(head_before, cn.node.control.head.?);
+    try std.testing.expect(!cn.syncing);
+    try std.testing.expectEqual(@as(?u64, null), cn.merging_to);
+
+    // A real partition still truncates. The peer's branch epoch is 1 here,
+    // the asymmetric shape: only this side elected, so the survivor is still
+    // leading the epoch both sides shared.
+    try cn.becomeLoser(9, 1);
+    try std.testing.expectEqual(@as(u64, 1), cn.node.control.head.?.epoch);
+    try std.testing.expect(cn.syncing);
+    try std.testing.expectEqual(@as(?u64, 9), cn.merging_to);
 }
