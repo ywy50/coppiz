@@ -247,7 +247,11 @@ pub fn tcpListen(
     const addr = try net.IpAddress.parseLiteral(listen);
     // SO_REUSEADDR: a crashed serve's TIME_WAIT socket must not block the
     // restart (process-level tests restart servers on the same port).
-    const server = try addr.listen(io, .{ .mode = .stream, .reuse_address = true });
+    var server = try addr.listen(io, .{ .mode = .stream, .reuse_address = true });
+    // A create failure must not leak the listening socket (the same class
+    // as bug 2026-08-29-tcp-conn-fd-leak-on-oom, which fixed the dial and
+    // accept sides but missed listen).
+    errdefer server.deinit(io);
     const l = try allocator.create(TcpListener);
     errdefer allocator.destroy(l);
     l.* = .{ .allocator = allocator, .server = server };
