@@ -77,6 +77,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - `Hub.drop` leaks the edge key every time an already-dropped edge is dropped again](bugs/2026-08-29-hub-drop-duplicate-edge-key-leak.md)
 - [2026-08-29 - the wire client asserts on the peer's read cursor: a non-advancing `next` panics or loops forever](bugs/2026-08-29-client-read-cursor-assert.md)
 - [2026-08-29 - wire length checks compute in the peer's own narrow int type: an 84-byte hello aborts an unadmitted node](bugs/2026-08-29-wire-length-checks-narrow-int.md)
+- [2026-08-29 - a deferred `leave` that refuses leaves a freed payload in the merge list, and the next free of it is a double free](bugs/2026-08-29-merge-deferred-leaves-double-free.md)
 - [2026-08-28 - sweep3: a chainless joiner whose first tick fires before admission never backfills](bugs/2026-08-28-sweep3-joiner-syncing-race.md)
 - [2026-08-28 - sweep3: an accepted append between ~8 MB and 16 MB can never be replicated](bugs/2026-08-28-sweep3-oversized-entry-unreplicable.md)
 - [2026-08-28 - sweep3: `decodeRecord` length-prefix arithmetic overflows u32 - remote crash](bugs/2026-08-28-sweep3-record-length-overflow.md)

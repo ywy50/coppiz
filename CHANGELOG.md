@@ -43,6 +43,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A merge whose deferred `leave` re-slots refuse part way through no longer
+  leaves freed payloads in the pending list. `reSlotDeferredLeaves` freed each
+  payload in its loop but cleared the list only at the end, so an error left
+  already-freed entries in it and the next free - node shutdown, a peer
+  disconnect, or the next merge - was a double free. The loop drains from the
+  front now, so an entry is in the list exactly while its payload is owned.
 - The wire decoders no longer abort on a peer-supplied length near its type's
   maximum. Thirteen length checks across ten message kinds added a `u16` or
   `u32` field to the message's fixed size and computed the sum in the field's
