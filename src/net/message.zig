@@ -134,7 +134,7 @@ pub fn encodeHello(h: Hello, buf: []u8) void {
 
 pub fn decodeHello(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!Hello {
     if (bytes.len < 82) return error.InvalidLength;
-    const addr_len = std.mem.readInt(u16, bytes[80..82], .little);
+    const addr_len: usize = std.mem.readInt(u16, bytes[80..82], .little);
     if (82 + addr_len != bytes.len) return error.InvalidLength;
     return .{
         .member_id = bytes[0..16].*,
@@ -200,7 +200,7 @@ pub fn decodeHelloAck(allocator: std.mem.Allocator, bytes: []const u8) DecodeErr
     if (bytes[0] > 1) return error.InvalidValue;
     const refusal_int = bytes[1];
     if (refusal_int > @intFromEnum(Refusal.max_members)) return error.InvalidValue;
-    const addr_len = std.mem.readInt(u16, bytes[18..20], .little);
+    const addr_len: usize = std.mem.readInt(u16, bytes[18..20], .little);
     const off = 20 + addr_len;
     if (off + 32 + 8 + 16 != bytes.len) return error.InvalidLength;
     return .{
@@ -243,12 +243,12 @@ pub fn encodeAppend(a: Append, buf: []u8) void {
 
 pub fn decodeAppend(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!Append {
     if (bytes.len < 2 + 4 + 8) return error.InvalidLength;
-    const name_len = std.mem.readInt(u16, bytes[0..2], .little);
+    const name_len: usize = std.mem.readInt(u16, bytes[0..2], .little);
     const payload_off = 2 + name_len;
     if (payload_off + 4 + 8 > bytes.len) return error.InvalidLength;
     var len_buf: [4]u8 = undefined;
     @memcpy(&len_buf, bytes[payload_off .. payload_off + 4]);
-    const payload_len = std.mem.readInt(u32, &len_buf, .little);
+    const payload_len: usize = std.mem.readInt(u32, &len_buf, .little);
     if (payload_off + 4 + payload_len + 8 != bytes.len) return error.InvalidLength;
     var ttl_buf: [8]u8 = undefined;
     @memcpy(&ttl_buf, bytes[payload_off + 4 + payload_len ..]);
@@ -283,7 +283,7 @@ pub fn encodeAck(a: Ack, buf: []u8) void {
 
 pub fn decodeAck(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!Ack {
     if (bytes.len < 42) return error.InvalidLength;
-    const refusal_len = std.mem.readInt(u16, bytes[40..42], .little);
+    const refusal_len: usize = std.mem.readInt(u16, bytes[40..42], .little);
     if (42 + refusal_len != bytes.len) return error.InvalidLength;
     return .{
         .id = readId(bytes[0..24]),
@@ -313,7 +313,7 @@ pub fn encodeForward(f: Forward, buf: []u8) void {
 
 pub fn decodeForward(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!Forward {
     if (bytes.len < 4) return error.InvalidLength;
-    const len = std.mem.readInt(u32, bytes[0..4], .little);
+    const len: usize = std.mem.readInt(u32, bytes[0..4], .little);
     if (4 + len != bytes.len) return error.InvalidLength;
     return .{ .entry_bytes = try allocator.dupe(u8, bytes[4..]) };
 }
@@ -354,7 +354,7 @@ pub fn encodeSlotRecord(reslotted: bool, record: []const u8, buf: []u8) void {
 pub fn decodeSlot(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!SlotMsg {
     if (bytes.len < 5) return error.InvalidLength;
     if (bytes[0] > 1) return error.InvalidValue;
-    const rec_len = std.mem.readInt(u32, bytes[1..5], .little);
+    const rec_len: usize = std.mem.readInt(u32, bytes[1..5], .little);
     if (5 + rec_len != bytes.len) return error.InvalidLength;
     const record = try allocator.dupe(u8, bytes[5..]);
     errdefer allocator.free(record);
@@ -423,7 +423,7 @@ pub fn encodeSyncPage(p: SyncPage, buf: []u8) void {
 
 pub fn decodeSyncPage(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!SyncPage {
     if (bytes.len < 36) return error.InvalidLength;
-    const rec_len = std.mem.readInt(u32, bytes[32..36], .little);
+    const rec_len: usize = std.mem.readInt(u32, bytes[32..36], .little);
     if (36 + rec_len != bytes.len) return error.InvalidLength;
     return .{
         .journal_id = bytes[0..16].*,
@@ -494,7 +494,7 @@ pub fn encodeReadReq(r: ReadReq, buf: []u8) void {
 
 pub fn decodeReadReq(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!ReadReq {
     if (bytes.len < 2 + 22) return error.InvalidLength;
-    const name_len = std.mem.readInt(u16, bytes[0..2], .little);
+    const name_len: usize = std.mem.readInt(u16, bytes[0..2], .little);
     const off = 2 + name_len;
     if (off + 22 != bytes.len) return error.InvalidLength;
     if (bytes[off + 16] > 1 or bytes[off + 17] > 1) return error.InvalidValue;
@@ -536,12 +536,12 @@ pub fn encodeReadPage(p: ReadPage, buf: []u8) void {
 
 pub fn decodeReadPage(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!ReadPage {
     if (bytes.len < 20) return error.InvalidLength;
-    const rec_len = std.mem.readInt(u32, bytes[16..20], .little);
+    const rec_len: usize = std.mem.readInt(u32, bytes[16..20], .little);
     const off = 20 + rec_len;
     if (off + 2 > bytes.len) return error.InvalidLength;
     var len_buf: [2]u8 = undefined;
     @memcpy(&len_buf, bytes[off .. off + 2]);
-    const refusal_len = std.mem.readInt(u16, &len_buf, .little);
+    const refusal_len: usize = std.mem.readInt(u16, &len_buf, .little);
     if (off + 2 + refusal_len != bytes.len) return error.InvalidLength;
     return .{
         .next = readPosition(bytes[0..16]),
@@ -576,12 +576,12 @@ pub fn encodeSettings(s: Settings, buf: []u8) void {
 
 pub fn decodeSettings(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!Settings {
     if (bytes.len < 2 + 4) return error.InvalidLength;
-    const name_len = std.mem.readInt(u16, bytes[0..2], .little);
+    const name_len: usize = std.mem.readInt(u16, bytes[0..2], .little);
     const off = 2 + name_len;
     if (off + 4 > bytes.len) return error.InvalidLength;
     var len_buf: [4]u8 = undefined;
     @memcpy(&len_buf, bytes[off .. off + 4]);
-    const changes_len = std.mem.readInt(u32, &len_buf, .little);
+    const changes_len: usize = std.mem.readInt(u32, &len_buf, .little);
     if (off + 4 + changes_len != bytes.len) return error.InvalidLength;
     return .{
         .journal = try allocator.dupe(u8, bytes[2..off]),
@@ -1112,6 +1112,56 @@ test "bad versions, kinds and lengths are refused by name" {
     try std.testing.expectError(error.UnknownKind, decode(test_alloc, zero_kind));
 
     try std.testing.expectError(error.InvalidLength, decode(test_alloc, buf[0..1]));
+}
+
+test "a length field at its type's maximum is refused, not overflowed" {
+    // Every decoder validates a peer-supplied length by adding it to the
+    // fixed part of the message. Computing that sum in the *field's* type
+    // (u16 or u32) overflows for a length near the type's maximum, which is
+    // an abort in a safe build and a wrapped sum that passes the check in a
+    // release one. The sums are usize now; these bodies are the minimum
+    // length each decoder accepts, with the length field maxed, so every one
+    // of them overflows the pre-fix arithmetic.
+    //
+    // `hello` is the case that matters most: `node.zig`'s `onFrame` decodes
+    // before any admission check runs, so an 84-byte write to an open listen
+    // port reached this with no key, no genesis hash and no allowlist entry.
+    const Case = struct {
+        kind: Kind,
+        /// The payload length: the smallest the decoder accepts.
+        payload_len: usize,
+        /// Where the length field sits inside the payload, and how wide.
+        field_off: usize,
+        field_bytes: usize,
+    };
+    const cases = [_]Case{
+        .{ .kind = .hello, .payload_len = 82, .field_off = 80, .field_bytes = 2 },
+        .{
+            .kind = .hello_ack,
+            .payload_len = hello_ack_fixed_len + 2,
+            .field_off = 18,
+            .field_bytes = 2,
+        },
+        .{ .kind = .append, .payload_len = 14, .field_off = 0, .field_bytes = 2 },
+        .{ .kind = .ack, .payload_len = 42, .field_off = 40, .field_bytes = 2 },
+        .{ .kind = .forward, .payload_len = 4, .field_off = 0, .field_bytes = 4 },
+        .{ .kind = .slot, .payload_len = 5, .field_off = 1, .field_bytes = 4 },
+        .{ .kind = .sync_page, .payload_len = 36, .field_off = 32, .field_bytes = 4 },
+        .{ .kind = .read_req, .payload_len = 24, .field_off = 0, .field_bytes = 2 },
+        .{ .kind = .read_page, .payload_len = 20, .field_off = 16, .field_bytes = 4 },
+        .{ .kind = .settings, .payload_len = 6, .field_off = 0, .field_bytes = 2 },
+    };
+    for (cases) |c| {
+        const body = try test_alloc.alloc(u8, 2 + c.payload_len);
+        defer test_alloc.free(body);
+        @memset(body, 0);
+        body[0] = version;
+        body[1] = @intFromEnum(c.kind);
+        // Max out the length field; every other byte stays zero, which keeps
+        // the enum and boolean fields these decoders check in range.
+        @memset(body[2 + c.field_off ..][0..c.field_bytes], 0xFF);
+        try std.testing.expectError(error.InvalidLength, decode(test_alloc, body));
+    }
 }
 
 const FuzzCtx = struct {
