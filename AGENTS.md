@@ -317,14 +317,16 @@ it shows Git changes, active TODO claims, the resource lease, recent handovers,
 and the latest recorded verification.
 
 Create durable records with `.local/scripts/project-kit.py new-doc <kind> <title>`
-instead of guessing a PRD/ADR number or a dated filename. Kinds: `prd`, `adr`,
-`plan`, `review`, `handover`, `bug`, `investigation`, `postmortem` - the last
-three land under `docs/reports/`; search that directory before diagnosing a
-failure and add each new record to the inventory in `docs/reports/README.md`.
+instead of guessing a PRD/ADR/RFC number or a dated filename. Kinds: `prd`,
+`adr`, `rfc`, `research`, `plan`, `review`, `handover`, `bug`,
+`investigation`, `postmortem` - the last three land under `docs/reports/`;
+`rfc` and `research` are numbered like `prd`/`adr`; search the record's
+directory before diagnosing a failure and add each new record to its
+inventory in `docs/<store>/README.md`.
 
 Run
 `.local/scripts/project-kit.py docs-check` before closing documentation-heavy work.
-It validates required PRD/ADR sections, local Markdown links, numbering, the
+It validates required PRD/ADR/RFC sections, local Markdown links, numbering, the
 generated index, and readability: an overlong wall-of-text paragraph in any
 document under `docs/` is flagged for splitting into shorter paragraphs or a
 list.

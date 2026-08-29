@@ -20,7 +20,7 @@ fi
 title_for() {
 	# BSD sed has no \| alternation, so strip each known prefix separately and
 	# fall back to removing a bare heading marker.
-	sed -n '1{s/^# PRD [0-9][0-9][0-9][0-9] [—-] //; s/^# ADR [0-9][0-9][0-9][0-9] [—-] //; s/^# PRD [—-] //; s/^# //; p;}' "$1"
+	sed -n '1{s/^# PRD [0-9][0-9][0-9][0-9] [—-] //; s/^# ADR [0-9][0-9][0-9][0-9] [—-] //; s/^# RFC [0-9][0-9][0-9][0-9] [—-] //; s/^# Research [—-] //; s/^# PRD [—-] //; s/^# //; p;}' "$1"
 }
 
 status_for() {
@@ -126,6 +126,12 @@ trap 'rm -f "$tmp"' EXIT
 	printf '\n## ADRs\n\n'
 	printf '| ADR | Decision | Status |\n| --- | --- | --- |\n'
 	write_rows "$docs/adrs" 'adrs'
+	printf '\n## RFCs\n\n'
+	printf '| RFC | Title | Status |\n| --- | --- | --- |\n'
+	write_rows "$docs/rfcs" 'rfcs'
+	printf '\n## Research\n\n'
+	printf '| Note | Title | Status |\n| --- | --- | --- |\n'
+	write_rows "$docs/research" 'research'
 	printf '\n## Plans\n\n'
 	printf '| Plan | Title |\n| --- | --- |\n'
 	write_document_rows "$docs/plans" 'plans'
