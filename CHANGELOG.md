@@ -5,6 +5,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- A member no longer truncates its data journals because an arbitrary peer
+  asked it to. `merge_ack` carries no body, and the handler discarded the
+  connection it arrived on, so any admitted member could roll every data
+  journal on a peer back to the last slot of its common epoch. The loser of
+  a merge now records the connection it sent its `merge_offer` on and acts
+  on exactly one ack from exactly that connection.
+
 ### Added
 
 - Election is now a function over an abstract member id, which is what PRD
@@ -54,6 +63,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A replicated `slot` frame is refused when its record does not fill the
+  frame. `decodeSlot` checked the payload's own length prefix but not that
+  the record inside it ended where the payload ends, and `decodeRecord`
+  ignores whatever follows the record it decodes - so a valid record with
+  bytes appended decoded as a valid slot. Those bytes are what the follower
+  hands to the store verbatim, which refuses them with `BadRecord` after the
+  fold has already advanced, leaving the fold one slot ahead of the segment
+  file (bug 2026-08-29-slot-record-trailing-bytes).
 - A `members_page` frame no longer buys the sender a multi-megabyte
   allocation for free. `decodeMembersPage` sized `alloc(MemberInfo, count)`
   from the sender's `u16` count before checking the body could hold that

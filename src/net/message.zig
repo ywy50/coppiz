@@ -359,6 +359,13 @@ pub fn decodeSlot(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!S
     const record = try allocator.dupe(u8, bytes[5..]);
     errdefer allocator.free(record);
     const rec = segment.decodeRecord(record) catch return error.InvalidValue;
+    // The record must fill the payload exactly. `decodeRecord` reads the
+    // record's *own* length prefix and ignores whatever follows it, so a
+    // valid record with junk appended used to decode as a valid slot - and
+    // `record` is the slice `Node.applyReplicated` hands to
+    // `Store.appendRecord` verbatim, which refuses it with `BadRecord`
+    // only after the fold has already advanced.
+    if (rec.next_offset != record.len) return error.InvalidLength;
     // A broadcast slot always carries its full entry; a slot-only record
     // (a `retain = none` compaction artefact) is refused, not misread.
     if (rec.entry == null) return error.InvalidValue;
@@ -953,7 +960,11 @@ test "forward round-trips the entry bytes" {
     try std.testing.expectEqualStrings(bytes, got.forward.entry_bytes);
 }
 
-test "slot round-trips a signed slot with its entry" {
+/// A signed slot and its entry, for the slot-message tests. The payload is
+/// a string literal, so the pair borrows nothing that needs freeing.
+const SignedSlot = struct { sl: slot.Slot, en: entry.Entry };
+
+fn testSignedSlot() !SignedSlot {
     var io_state = std.Io.Threaded.init(test_alloc, .{});
     const kp = crypto.sign.Ed25519.KeyPair.generate(io_state.io());
     var en = entry.Entry{
@@ -980,6 +991,13 @@ test "slot round-trips a signed slot with its entry" {
         .signature = undefined,
     };
     sl.signature = (try slot.sign(kp, &sl)).toBytes();
+    return .{ .sl = sl, .en = en };
+}
+
+test "slot round-trips a signed slot with its entry" {
+    const signed = try testSignedSlot();
+    const sl = signed.sl;
+    const en = signed.en;
 
     var got = try roundTrip(.{ .slot = .{
         .reslotted = true,
@@ -994,6 +1012,42 @@ test "slot round-trips a signed slot with its entry" {
     // The decoded slot record decodes again (the message carries the record).
     const rec = try segment.decodeRecord(got.slot.record);
     try std.testing.expectEqual(sl.position(), rec.slot.position());
+}
+
+test "a slot carrying bytes past the end of its record is refused" {
+    // `segment.decodeRecord` reads the record's own length prefix and
+    // ignores everything after it, so a valid record with junk appended
+    // decoded as a valid slot: the outer `5 + rec_len == bytes.len` check
+    // passes when `rec_len` counts the junk too. `SlotMsg.record` is what
+    // `Node.applyReplicated` appends to the store verbatim, and
+    // `Store.appendRecord` refuses a slice longer than its own length
+    // prefix (`error.BadRecord`) - after the fold has already advanced.
+    const signed = try testSignedSlot();
+    const m = Message{ .slot = .{
+        .reslotted = false,
+        .record = &.{},
+        .sl = signed.sl,
+        .en = signed.en,
+    } };
+    const valid_len = encodedLen(m);
+    const junk = 3;
+    const buf = try test_alloc.alloc(u8, valid_len + junk);
+    defer test_alloc.free(buf);
+    encode(m, buf[0..valid_len]);
+    @memset(buf[valid_len..], 0xAA);
+    // The payload's own length field must cover the junk, or the frame is
+    // refused by the length check instead of by the record check.
+    const rec_len = std.mem.readInt(u32, buf[3..7], .little);
+    std.mem.writeInt(u32, buf[3..7], rec_len + junk, .little);
+
+    try std.testing.expectError(error.InvalidLength, decode(test_alloc, buf));
+
+    // The same bytes without the junk still decode: the check refuses the
+    // surplus, not the record.
+    std.mem.writeInt(u32, buf[3..7], rec_len, .little);
+    var ok = try decode(test_alloc, buf[0..valid_len]);
+    defer ok.deinit(test_alloc);
+    try std.testing.expectEqual(signed.sl.position(), ok.slot.sl.position());
 }
 
 test "sync_req and heartbeat round-trip" {
