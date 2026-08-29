@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -29,7 +29,7 @@ The fold-then-store ordering on the control/checkpoint paths inverts the tier-0 
 
 ## Resolution
 
-Not yet fixed. Suggested direction: make every write path store-then-fold (or make the fold-apply reversible on a store error), and treat store-write failures in `onSlot` as fatal rather than swallowed. A regression test should fail `store.append` and assert the fold is unchanged.
+Fixed: self-authored writes (`appendControl`, `checkpointForBroadcast`) are store-then-fold via `storeThenFold`, with a store rollback to the previous head when the fold refuses; regression test covers the refused-settings reopen.
 
 ## Verification
 

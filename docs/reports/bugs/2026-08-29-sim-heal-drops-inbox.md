@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -24,7 +24,7 @@ Heal snapshots the folded chains instead of draining pending inboxes; inbox mess
 
 ## Resolution
 
-Not yet fixed. Suggested direction: fold each side's inboxes into the branch before building the merged chain (or refuse to heal with pending inboxes). A regression test should append on the losing side and `heal` immediately, then assert the entry resolves.
+Fixed: `heal` folds pending inbox broadcasts into the branches before building the merged chain; regression test appends on the losing side and heals immediately.
 
 ## Verification
 

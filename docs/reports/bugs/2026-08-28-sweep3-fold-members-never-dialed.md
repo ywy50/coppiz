@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -37,7 +37,7 @@ The first dial for a fold-learned member is never scheduled: the scheduler's pre
 
 ## Resolution
 
-Not yet fixed. Suggested direction: in `syncMembersFromFold`, schedule the first dial for new members that this node should dial (lower-id dials higher-id), e.g. set `dial_at_ms = now` when the id rule says this node dials. A regression test should grow a cluster past its seeds and assert every pair eventually holds a connection.
+Fixed: `syncMembersFromFold` schedules a first dial for members this node should dial, so fold-learned members are reached (full mesh) instead of a star topology.
 
 ## Verification
 

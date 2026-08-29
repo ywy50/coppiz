@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -30,7 +30,7 @@ The compacted shape's legitimacy is inferred from the record shape alone, and th
 
 ## Resolution
 
-Not yet fixed. Suggested direction: verify `sl.entry_hash == entry.entryHash(en)` in the fold (this alone rejects stripped records - the hash includes the payload), and/or check `payload_len` against `max_entry_bytes` even for omitted payloads. A regression test should deliver a payload-stripped record for an unknown entry and expect a refusal.
+Fixed: the fold cross-checks the slot's pinned `entry_hash` against the entry's header on every apply path, rejecting forged or payload-stripped records; regression test added.
 
 ## Verification
 

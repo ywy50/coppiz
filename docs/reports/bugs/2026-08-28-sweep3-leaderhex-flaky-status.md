@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -24,7 +24,7 @@ Observed: `zig build test` on cold caches failed with this exact trace in 3 of t
 
 ## Resolution
 
-Not yet fixed. Suggested fix: route `leaderHex` through the same retry/poll path as `waitStatus`. A regression check is repeated `zig build test` runs on cold caches.
+Fixed: `leaderHex` polls its follow-up status read like `waitStatus` instead of issuing one un-retried child, removing the transient-failure flake.
 
 ## Verification
 

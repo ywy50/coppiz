@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -37,7 +37,7 @@ Missing filled-counter in the errdefer, exactly the pattern the sweep's own fix 
 
 ## Resolution
 
-Not yet fixed. Suggested fix: track `filled` and free `items[0..filled]` in the errdefer, mirroring `Value.clone`. A regression test should feed a malformed value under a failing allocator and assert no leak.
+Fixed: `decodeValue`'s string_list errdefer frees the duped prefix via a filled counter; regression test feeds an over-running length and the GPA leak check passes.
 
 ## Verification
 
