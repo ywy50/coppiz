@@ -709,7 +709,9 @@ fn cmdAdmit(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void 
     const data_dir = try std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true });
     var node = try journal.Node.open(gpa, io, data_dir, .{});
     defer node.deinit();
-    if (!std.mem.eql(u8, &node.leader(), &node.member_id)) return error.NotLeader;
+    if (!std.mem.eql(u8, &(node.leader() orelse return error.NotLeader), &node.member_id)) {
+        return error.NotLeader;
+    }
 
     const file = data_dir.openFile(io, "pending.admit", .{}) catch |err| switch (err) {
         error.FileNotFound => return error.NoPendingAdmissions,

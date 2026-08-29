@@ -178,8 +178,11 @@ pub const Node = struct {
         return self.member_id;
     }
 
-    pub fn leader(self: *const Node) [16]u8 {
-        return self.control.epoch.?.leader;
+    /// The control chain's epoch leader; null before any epoch entry has
+    /// folded — a chainless directory holding only member.key (bug
+    /// 2026-08-28-sweep3-cmdadmit-chainless-panic).
+    pub fn leader(self: *const Node) ?[16]u8 {
+        return if (self.control.epoch) |ep| ep.leader else null;
     }
 
     /// The cluster's current epoch number.
