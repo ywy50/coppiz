@@ -122,6 +122,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-30 - a member can occupy another member's id-named authority slot by advertising its id as an address](bugs/2026-08-30-authority-address-id-collision.md)
 - [2026-08-30 - one `merge_offer` frame aborts a member that has not finished its first backfill](bugs/2026-08-30-chainless-merge-offer-panic.md)
 - [2026-08-30 - the survivor broadcasts its merge re-slots as live records, so every other member refuses them](bugs/2026-08-30-merge-data-broadcast-reslotted-false.md)
+- [2026-08-30 - shutting the loop down strands every host thread parked on it](bugs/2026-08-30-shutdown-strands-local-completions.md)
 
 ### Investigations
 

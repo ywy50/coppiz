@@ -138,6 +138,18 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the control chain, a data journal cannot infer the re-slot from
   authorship, so the flag on the wire is its only signal.
 
+- Shutting a `ClusterNode` down now wakes every embedded host thread parked
+  on it. `localAppend` and `localReadRange` block on a semaphore with no
+  timeout, and teardown was the one place the loop was guaranteed never to
+  post it: `deinit` freed the pending-append table without posting, and
+  dropped queued host events on its mailbox drain's `else` arm. A host that
+  appended on a follower with no reachable leader and then shut down blocked
+  for the life of the process. The waiters are released as the loop exits,
+  before `waitForStop` can return, and again from `deinit` for a host that
+  posted during shutdown. `localAppend` reports it as `error.Canceled`
+  rather than `error.Refused`: the cluster refused nothing, and the entry
+  may still be in the durable queue.
+
 ### Added
 
 - A fourth example host, `examples/short-process/`: the command-line shape
