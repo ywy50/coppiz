@@ -669,7 +669,16 @@ pub fn decodeMembersPage(
     bytes: []const u8,
 ) DecodeError!MembersPage {
     if (bytes.len < 26) return error.InvalidLength;
-    const count = std.mem.readInt(u16, bytes[24..26], .little);
+    const count: usize = std.mem.readInt(u16, bytes[24..26], .little);
+    // A member costs at least 34 bytes on the wire (16 id + 16 seniority +
+    // a 2-byte address length), so a body that cannot hold `count` of them
+    // is refused before anything is allocated. Without this the sender's
+    // count alone sized the allocation: `MemberInfo` is 48 bytes, so a
+    // 26-byte frame declaring 65535 members bought 3,145,680 bytes of
+    // alloc-and-free on the node's single loop thread, and `onFrame`
+    // decodes before the role check. Every sibling decoder in this file
+    // already checks its length field against the body first.
+    if (26 + count * 34 > bytes.len) return error.InvalidLength;
     const members = try allocator.alloc(MemberInfo, count);
     var done: usize = 0;
     errdefer {
@@ -1133,6 +1142,47 @@ test "members_req and members_page round-trip" {
     try std.testing.expectEqualStrings("", page.members[0].address);
     try std.testing.expectEqual(test_pos, page.members[1].seniority);
     try std.testing.expectEqualStrings("127.0.0.1:6402", page.members[1].address);
+}
+
+test "members_page refuses a count its body cannot hold, before allocating" {
+    // The sender's `count` sized the allocation on its own. `MemberInfo` is
+    // 48 bytes, so a 26-byte payload declaring 65535 members bought
+    // 3,145,680 bytes of alloc-and-free - and `ClusterNode.onFrame` decodes
+    // every frame on the node's single loop thread before `frameAllowed`
+    // gets to reject the sender. The refusal itself never changed: the loop
+    // below fails the very first `off + 34 > bytes.len` check either way.
+    // What changed is that it now costs nothing to say so.
+    try std.testing.expectEqual(@as(usize, 48), @sizeOf(MemberInfo));
+
+    var body = [_]u8{0} ** 28;
+    body[0] = version;
+    body[1] = @intFromEnum(Kind.members_page);
+    std.mem.writeInt(u16, body[26..28], std.math.maxInt(u16), .little);
+
+    var failing = std.testing.FailingAllocator.init(test_alloc, .{});
+    try std.testing.expectError(
+        error.InvalidLength,
+        decode(failing.allocator(), &body),
+    );
+    try std.testing.expectEqual(@as(usize, 0), failing.allocated_bytes);
+
+    // The counter is not vacuously zero: a well-formed page of one member
+    // through the same allocator does allocate.
+    var infos = [_]MemberInfo{
+        .{ .id = test_id, .seniority = test_pos, .address = "127.0.0.1:6402" },
+    };
+    const m = Message{ .members_page = .{
+        .epoch = 1,
+        .leader = test_id,
+        .members = &infos,
+    } };
+    const buf = try test_alloc.alloc(u8, encodedLen(m));
+    defer test_alloc.free(buf);
+    encode(m, buf);
+    var ok = try decode(failing.allocator(), buf);
+    defer ok.deinit(failing.allocator());
+    try std.testing.expectEqual(@as(usize, 1), ok.members_page.members.len);
+    try std.testing.expect(failing.allocated_bytes > 0);
 }
 
 test "bad versions, kinds and lengths are refused by name" {
