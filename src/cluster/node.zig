@@ -2486,9 +2486,13 @@ pub const ClusterNode = struct {
 
     fn onReadReq(self: *ClusterNode, conn_id: u64, r: message.ReadReq) !void {
         const jid = self.node.journalIdByName(r.journal) orelse {
+            // Refuse with a named refusal, matching the local read's
+            // UnknownJournal, instead of answering with silent empty output
+            // (bug 2026-08-28-sweep3-wire-read-unknown-journal).
             try self.sendMessage(conn_id, .{ .read_page = .{
                 .next = .{ .epoch = 0, .seq = 0 },
                 .records = &.{},
+                .refusal = "unknown_journal",
             } });
             return;
         };
