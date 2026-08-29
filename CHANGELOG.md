@@ -24,6 +24,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Length-prefix arithmetic no longer computes in the prefix's own narrow
+  type. Six checks added an untyped constant to a `u32`/`u16` length read
+  off the wire or off disk, so the sum was evaluated in that narrow type and
+  a length near its maximum overflowed it. `entry.decode` sits behind the
+  replication wire, so one broadcast frame could abort the receiving node;
+  the other five are reached from a corrupt queue or segment file. Every
+  site now widens to `usize` first and refuses the record by name.
 - The readability rules now reach the repository root: docs-check (from
   the project-kit kit) scans the root README, CHANGELOG, RELEASES and
   AGENTS for links, paragraph length and em dashes, not only `docs/`.

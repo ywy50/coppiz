@@ -1008,10 +1008,15 @@ pub fn decodeCreateJournalPayload(
 ) !CreateJournalPayload {
     if (bytes.len < 16 + 2) return error.InvalidLength;
     const name_len = std.mem.readInt(u16, bytes[16..18], .little);
-    if (18 + name_len > bytes.len) return error.InvalidLength;
-    const name = try allocator.dupe(u8, bytes[18 .. 18 + name_len]);
+    // usize arithmetic: the literal coerces down to the peer type, so a bare
+    // `18 + name_len` computes in u16 and a name_len near max u16 overflows
+    // the sum — a panic in safe modes, on a payload a peer chose (bug
+    // 2026-08-29-entry-decode-payload-len-overflow).
+    const name_end = @as(usize, name_len) + 18;
+    if (name_end > bytes.len) return error.InvalidLength;
+    const name = try allocator.dupe(u8, bytes[18..name_end]);
     errdefer allocator.free(name);
-    const changes = try settings_fold.decodeChanges(allocator, bytes[18 + name_len ..], .journal);
+    const changes = try settings_fold.decodeChanges(allocator, bytes[name_end..], .journal);
     return .{ .journal_id = bytes[0..16].*, .name = name, .changes = changes };
 }
 
@@ -2233,5 +2238,18 @@ test "a redelivery below the author's last_seq does not lower it" {
     try std.testing.expectError(
         error.DuplicateConflict,
         cluster.data.applyData(&cluster.control, &sl4, &e2_conflict),
+    );
+}
+
+test "a create_journal name_len near max u16 is refused, not an overflowing sum" {
+    // Bug 2026-08-29-entry-decode-payload-len-overflow: the literal `18`
+    // coerced down to the peer type, so `18 + name_len` computed in u16 and a
+    // name_len near max u16 overflowed the sum — a panic in safe modes, on a
+    // payload a peer chose. It must be refused like any other bad length.
+    var bytes: [18 + 4]u8 = [_]u8{0} ** 22;
+    std.mem.writeInt(u16, bytes[16..18], std.math.maxInt(u16), .little);
+    try std.testing.expectError(
+        error.InvalidLength,
+        decodeCreateJournalPayload(test_alloc, &bytes),
     );
 }

@@ -224,8 +224,13 @@ pub fn decode(
             .payload = &.{},
         };
     }
-    if (bytes.len != header_len + payload_len) {
-        return if (bytes.len < header_len + payload_len) error.Truncated else error.TrailingBytes;
+    // usize arithmetic: `header_len` is a comptime_int, so a bare
+    // `header_len + payload_len` computes in u32 and a payload_len near max
+    // u32 overflows the sum — a panic in safe modes, on bytes a peer chose
+    // (bug 2026-08-29-entry-decode-payload-len-overflow).
+    const total = @as(usize, payload_len) + header_len;
+    if (bytes.len != total) {
+        return if (bytes.len < total) error.Truncated else error.TrailingBytes;
     }
     return .{
         .kind = kind,
@@ -391,4 +396,15 @@ const FuzzCtx = struct {
 
 test "entry decoder fuzzes over untrusted bytes" {
     try std.testing.fuzz(FuzzCtx{}, FuzzCtx.fuzzOne, .{});
+}
+
+test "a payload_len near max u32 is refused, not an overflowing sum" {
+    // Bug 2026-08-29-entry-decode-payload-len-overflow: `header_len` is an
+    // untyped comptime_int, so `header_len + payload_len` computed in u32 and
+    // a payload_len near max u32 overflowed the sum — a panic in safe modes,
+    // on bytes a peer chose. It must be refused like any other bad length.
+    var buf: [header_len + 1]u8 = undefined;
+    try encode(&testEntry(.data, "x"), &buf);
+    std.mem.writeInt(u32, buf[64..68], std.math.maxInt(u32), .little);
+    try std.testing.expectError(error.Truncated, decode(&buf));
 }

@@ -270,7 +270,11 @@ pub const Store = struct {
     ) !void {
         const jd = self.journals.get(journal_id) orelse return error.UnknownJournal;
         if (record.len < segment.record_prefix_len) return error.BadRecord;
-        const size = segment.record_prefix_len + std.mem.readInt(u32, record[0..4], .little);
+        // usize arithmetic: `record_prefix_len` is a comptime_int, so a bare
+        // sum computes in u32 and a length prefix near max u32 wraps past the
+        // equality check (bug 2026-08-29-entry-decode-payload-len-overflow).
+        const size = @as(usize, std.mem.readInt(u32, record[0..4], .little)) +
+            segment.record_prefix_len;
         if (size != record.len) return error.BadRecord;
         if (jd.head_records_len >= self.seal_threshold) try self.sealHead(jd);
 
@@ -348,7 +352,7 @@ pub const Store = struct {
         const n = try seg.file.readPositionalAll(self.io, &prefix, where.offset);
         if (n != prefix.len) return error.Truncated;
         const body_len = std.mem.readInt(u32, prefix[0..4], .little);
-        const total = segment.record_prefix_len + body_len;
+        const total = @as(usize, body_len) + segment.record_prefix_len;
         if (buf.len < total) return error.BufferTooSmall;
         const m = try seg.file.readPositionalAll(self.io, buf[0..total], where.offset);
         if (m != total) return error.Truncated;
@@ -420,7 +424,7 @@ pub const Store = struct {
         const n = try seg.file.readPositionalAll(self.io, &prefix, segment.header_len);
         if (n != prefix.len) return error.Truncated;
         const body_len = std.mem.readInt(u32, prefix[0..4], .little);
-        const total = segment.record_prefix_len + body_len;
+        const total = @as(usize, body_len) + segment.record_prefix_len;
         const buf = try self.allocator.alloc(u8, total);
         defer self.allocator.free(buf);
         const m = try seg.file.readPositionalAll(self.io, buf, segment.header_len);
