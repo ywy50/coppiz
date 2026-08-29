@@ -1651,6 +1651,16 @@ pub const ClusterNode = struct {
             self.closeConn(conn_id);
             return;
         };
+        // Only data entries are forwarded. Control entries are
+        // leader-authored directly; accepting a member's self-signed
+        // control entry here would route it through the fold's re-slot
+        // inference (author != leader) and bypass the leader checks — a
+        // member could create journals or no-op their way past settings
+        // (bug 2026-08-29-live-create-journal-bypass).
+        if (en.kind != .data) {
+            self.closeConn(conn_id);
+            return;
+        }
         if (self.isLeader()) {
             if (self.foldFor(en.journal) == null) {
                 self.closeConn(conn_id);
