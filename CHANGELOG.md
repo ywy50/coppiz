@@ -32,6 +32,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the file afterwards previously got no error and no effect. Doctor now
   warns per drifted key, naming the local value and the folded one, and
   stays an `ok` line when they agree. A drift is a warning, not a failure.
+- The historical settings view PRD 0004 *Reading settings* names:
+  `Node.settingsAt(position)` for cluster scope and
+  `Node.journalSettingsAt(id, position)` for a journal's merged view. The
+  live accessors read the fold at the head; these re-fold the chain and stop
+  after the last slot at or before the position, so a caller can ask what
+  was in force when a given slot was written without standing up a second
+  node. A position before the genesis yields the schema defaults and one
+  past the head yields the head state; the caller owns the returned state.
 
 ### Fixed
 
@@ -41,6 +49,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   already-freed entries in it and the next free - node shutdown, a peer
   disconnect, or the next merge - was a double free. The loop drains from the
   front now, so an entry is in the list exactly while its payload is owned.
+- The wire decoders no longer abort on a peer-supplied length near its type's
+  maximum. Thirteen length checks across ten message kinds added a `u16` or
+  `u32` field to the message's fixed size and computed the sum in the field's
+  own type, which overflows. `hello` was reachable before admission, so an
+  84-byte write to an open listen port aborted a node in a safe build; in
+  `ReleaseFast` the sum wrapped and the malformed body passed the check. The
+  sums are computed in `usize` now, and an over-long declared length is
+  refused as `invalid_length`.
 
 - `coppiz init` refuses a data directory that has already been bootstrapped,
   with `already_initialized`, instead of replacing its `member.key` and
