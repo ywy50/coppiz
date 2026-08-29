@@ -5,6 +5,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- A member no longer truncates its data journals because an arbitrary peer
+  asked it to. `merge_ack` carries no body, and the handler discarded the
+  connection it arrived on, so any admitted member could roll every data
+  journal on a peer back to the last slot of its common epoch. The loser of
+  a merge now records the connection it sent its `merge_offer` on and acts
+  on exactly one ack from exactly that connection.
+
 ### Added
 
 - Election is now a function over an abstract member id, which is what PRD
