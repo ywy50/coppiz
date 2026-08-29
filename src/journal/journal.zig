@@ -397,8 +397,7 @@ pub const Node = struct {
             return null;
         }
 
-        try fold.applyData(&self.control, &sl, &en);
-        try self.store.append(journal_id, &sl, &en);
+        try self.storeThenFold(journal_id, fold, &sl, &en);
         self.notifyFollowers(journal_id, &sl, &en);
         try self.compactRemoved(fold, removed);
         return .{ .sl = sl, .en = en };
@@ -524,13 +523,40 @@ pub const Node = struct {
         };
         en.signature = (try entry.sign(self.keypair, &en)).toBytes();
         const sl = try self.slotFor(fold, &en);
-        if (fold.is_control) {
-            try fold.applyControl(&sl, &en);
-        } else {
-            try fold.applyData(&self.control, &sl, &en);
-        }
-        try self.store.append(fold.journal_id, &sl, &en);
+        try self.storeThenFold(fold.journal_id, fold, &sl, &en);
         self.notifyFollowers(fold.journal_id, &sl, &en);
+    }
+
+    /// Writes `(sl, en)` to the store first, then folds it — the tier-0
+    /// order — so a store write failure (ENOSPC/EIO) leaves the fold
+    /// untouched instead of one record ahead, which would poison the chain
+    /// (bug 2026-08-29-fold-before-store-order). A fold refusal of a
+    /// self-authored entry rolls the store back to the previous head, so
+    /// the journal still reopens.
+    fn storeThenFold(
+        self: *Node,
+        journal_id: [16]u8,
+        fold: *chain.FoldState,
+        sl: *const slot.Slot,
+        en: *const entry.Entry,
+    ) !void {
+        const prev_head = fold.head;
+        try self.store.append(journal_id, sl, en);
+        const result = if (fold.is_control)
+            fold.applyControl(sl, en)
+        else
+            fold.applyData(&self.control, sl, en);
+        result catch |err| {
+            if (prev_head) |h| {
+                self.store.truncate(journal_id, h) catch {};
+            } else {
+                // The refused record is the journal's first: keep nothing.
+                var below = sl.position();
+                if (below.seq > 1) below.seq -= 1 else below.seq = 0;
+                self.store.truncate(journal_id, below) catch {};
+            }
+            return err;
+        };
     }
 
     // -- open-time folding ---------------------------------------------------
@@ -1230,6 +1256,43 @@ test "Node.createJournal creates and registers a journal" {
     defer node2.deinit();
     const side = node2.journalIdByName("side").?;
     try std.testing.expectEqualSlices(u8, &jid, &side);
+}
+
+test "a refused self-authored settings entry leaves the store reopenable" {
+    // Bug 2026-08-29-fold-before-store-order: self-authored entries are
+    // written store-then-fold; a fold refusal must roll the store back to
+    // the previous head, or the refused record poisons the reopen.
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    {
+        var node = try openNode(&env);
+        defer node.deinit();
+        const control = node.control.journal_id;
+        const reconfigurable = schema.keyIndex("leadership.reconfigurable").?;
+        const mode = schema.keyIndex("leadership.mode").?;
+        const freeze = [_]validate.Change{
+            .{ .key = reconfigurable, .value = .{ .boolean = false } },
+        };
+        try node.changeSettings(control, &freeze);
+        const frozen_mode = [_]validate.Change{
+            .{ .key = mode, .value = .{ .enum_value = schema.enumValue(mode, "configured").? } },
+        };
+        try std.testing.expectError(
+            error.NotLiveChangeable,
+            node.changeSettings(control, &frozen_mode),
+        );
+    }
+
+    // The refused entry was rolled back: the journal reopens and folds.
+    var node2 = try openNode(&env);
+    defer node2.deinit();
+    try std.testing.expect(node2.control.head != null);
 }
 
 test "follow delivers existing slots from the cursor, then pushes new ones" {
