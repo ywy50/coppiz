@@ -84,6 +84,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   hands to the store verbatim, which refuses them with `BadRecord` after the
   fold has already advanced, leaving the fold one slot ahead of the segment
   file (bug 2026-08-29-slot-record-trailing-bytes).
+- A `members_page` frame no longer buys the sender a multi-megabyte
+  allocation for free. `decodeMembersPage` sized `alloc(MemberInfo, count)`
+  from the sender's `u16` count before checking the body could hold that
+  many members, so a 26-byte payload declaring 65535 members allocated and
+  freed 3,145,680 bytes - 120,987x amplification, measured - on the node's
+  single loop thread, which decodes every frame before it checks the
+  sender's role. The frame was already refused; the guard every sibling
+  decoder has now refuses it before allocating, at 54 ns instead of 1.6 ms
+  (bug 2026-08-29-wire-length-checks-narrow-int, follow-up section).
 - A `join` that runs out of memory no longer leaves the member in the fold.
   `applyJoin` added the member and then ran the whole-state rule; the rule's
   refusal rolled it back but an allocation failure did not, so the fold kept
