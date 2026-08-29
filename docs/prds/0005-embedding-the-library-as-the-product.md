@@ -245,9 +245,17 @@ example: its RFC 0019 and stage-1 spike note.
   process table).
 - [x] (G4) `follow` delivers a new slot to a callback without the host
   polling.
-- [ ] (G5) No thread exists before `run()`; a test counts them. The library
+- [x] (G5) No thread exists before `run()`; a test counts them. The library
   spawns nothing until a `ClusterNode.start()`; the size-1 path creates no
-  threads at all. A thread-count test is future work.
+  threads at all. Pinned 2026-08-29 by `(PRD 0005 G5) no thread exists
+  before start(), and the size-1 path needs none` in `src/cluster/node.zig`.
+  It counts the worker threads of an `Io.Threaded` the test owns
+  exclusively, walking the implementation's own `worker_threads` list -
+  `std.Thread` enumerates nothing, and no portable OS call does either.
+  The test is two-sided: the count is 0 after `journal.Node.open`, an
+  append and a read at size 1, and still 0 after `ClusterNode.init`, then
+  above 0 once `start()` has run. The size-1 half runs on an `Io` whose
+  async limit is `.nothing`, so a worker cannot be spawned at all.
 - [ ] (G6) A host can reach every library call through one function it
   gates itself - the clanker branch's `ck_state` is the first proof, with
   no filesystem grant and no `network_allow` on the guest side.
