@@ -12,7 +12,7 @@ Resolved - `decodeCatch` (chain.zig) propagates `OutOfMemory` through the
 `applyGenesis` / `applyCreateJournalValidated` / `applyJoin` decode
 catch-sites, `mapSettingsDecodeError` special-cases it before the generic
 mapping, and `onSlot` (node.zig) returns it instead of swallowing it in the
-`else` arm — the member stops serving rather than keep a fold that diverged
+`else` arm - the member stops serving rather than keep a fold that diverged
 on an allocator failure.
 
 ## Symptom and impact

@@ -2,10 +2,10 @@
 
 ## TL;DR
 
-- **What failed:** `zig build test` does not finish — the run hangs inside the
+- **What failed:** `zig build test` does not finish - the run hangs inside the
   TTL e2e test (`e2e (G4)`: three members remove the same set...). The test
   nodes fsync every record (`.fsync = .every`), their data dirs live in
-  `.zig-cache/tmp` under the working tree — on this host, a btrfs volume —
+  `.zig-cache/tmp` under the working tree - on this host, a btrfs volume -
   and the client's blocking `recvMessage` has no deadline, so a delayed or
   stalled fsync blocks the settings call (and the whole suite) forever.
 - **Impact:** A hang wastes the entire test run (the process must be killed).
@@ -29,9 +29,9 @@ fsync stalls.
 
 `zig build test` occasionally never finishes. The last test to print is
 `cluster.node.test.e2e (G4): three members remove the same set at the same
-checkpoint slot, both retain values...` — the test's `ttlTrioInit` calls
+checkpoint slot, both retain values...` - the test's `ttlTrioInit` calls
 `trio.a.client.settings("main", buf)` (node.zig), a blocking request whose
-reply waits on the node's store append — which fsyncs. The client's
+reply waits on the node's store append - which fsyncs. The client's
 `recvMessage` (net/client.zig) blocks with no deadline, so any reply delay
 hangs the whole test binary, and the build with it.
 
@@ -67,7 +67,7 @@ Observed evidence during a hang (Linux, btrfs):
 Two facts compose into the hang:
 
 1. `std.testing.tmpDir` (std/testing.zig) creates test data dirs under
-   `.zig-cache/tmp` **relative to the working directory** — for this repo the
+   `.zig-cache/tmp` **relative to the working directory** - for this repo the
    btrfs volume `/home`. The store's default `fsync = .every` (store.zig)
    then syncs every appended record, every seal, every compaction rewrite.
    The TTL e2e tests append and checkpoint continuously, so the suite issues
@@ -88,7 +88,7 @@ loaded one hangs.
 Fixed: the multi-node e2e harnesses open their stores with
 `fsync = .never` (node.zig `triNodeInit`, `e2e (b)`'s node_a/node_b). The
 `e2e (c)`, G4 and G6 tests all use `triNodeInit`, so the whole cluster-e2e
-suite no longer fsyncs. Nothing under test depends on durability — the
+suite no longer fsyncs. Nothing under test depends on durability - the
 directories are throwaway tmpdirs, and no test simulates a crash mid-write
 (the store's own open-time tests, which do exercise torn tails and seals,
 keep their fsync policy). The single-node wire tests and the CLI remain on
