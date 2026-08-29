@@ -643,9 +643,14 @@ pub const Hub = struct {
 
     /// `isDropped` for a caller that already holds the hub lock; the mutex
     /// is not recursive, so `connectFn` cannot go through the public one.
+    /// The key must match `edgeKey` (the drop side) byte for byte: a fixed
+    /// stack buffer would overflow to "not dropped" for long address pairs,
+    /// silently letting dials through a partitioned edge (bug
+    /// 2026-08-30-hub-dropped-edge-long-address).
     fn isDroppedLocked(self: *Hub, from: []const u8, to: []const u8) bool {
-        var buf: [512]u8 = undefined;
-        const key = std.fmt.bufPrint(&buf, "{s}\x00{s}", .{ from, to }) catch return false;
+        const key = std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ from, to }) catch
+            return false;
+        defer self.allocator.free(key);
         return self.dropped.contains(key);
     }
 };
@@ -843,6 +848,27 @@ test "a dropped edge refuses dials and ends live connections" {
     defer test_alloc.free(reply2);
     try std.testing.expectEqualStrings("pong", reply2);
     try group2.await(tio);
+}
+
+test "a dropped edge with a long address pair still refuses dials" {
+    // Bug 2026-08-30-hub-dropped-edge-long-address: the dial-side drop
+    // check built the edge key in a fixed 512-byte stack buffer, so a pair
+    // whose combined length exceeds it reported "not dropped" and the dial
+    // proceeded through the partition.
+    var hub = Hub.init(test_alloc);
+    defer hub.deinit(tio);
+    const long_a = "a" ** 300;
+    const long_b = "b" ** 300;
+    var listener = try hub.listen(tio, test_alloc, long_a);
+    defer listener.close(tio);
+    var dialer = try hub.dialer(test_alloc, long_b);
+    defer dialer.deinit();
+
+    try hub.drop(test_alloc, tio, long_b, long_a);
+    try std.testing.expectError(
+        error.ConnectionRefused,
+        dialer.connect(tio, test_alloc, long_a),
+    );
 }
 
 test "dropping the same edge twice does not leak the second key" {
