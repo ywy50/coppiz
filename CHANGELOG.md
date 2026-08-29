@@ -43,6 +43,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A `join` that runs out of memory no longer leaves the member in the fold.
+  `applyJoin` added the member and then ran the whole-state rule; the rule's
+  refusal rolled it back but an allocation failure did not, so the fold kept
+  a member its chain has no entry for - a divergence from every peer whose
+  allocation succeeded. The address dupe had the matching hole and was
+  orphaned when the append that was to own it failed. Two smaller leaks on
+  the same shape are gone with it: a seed peer named twice in `[[peers]]`
+  leaked its second retry key, and a `ClusterNode.init` that failed its own
+  setup freed the struct without freeing the tables it had built.
+
 - A TCP connection no longer loses frames the kernel delivered together.
   `recvFrame` built its read buffer per call, so bytes the socket read past
   the current frame were consumed and then discarded - and TCP coalesces

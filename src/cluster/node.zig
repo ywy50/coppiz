@@ -340,7 +340,11 @@ pub const ClusterNode = struct {
             .options = options,
             .mailbox = .{ .allocator = allocator },
         };
-        errdefer allocator.destroy(self);
+        // `deinit` is the only thing that frees the maps these two build
+        // (the members table with its duped addresses, `my_seq`, and the
+        // seed-retry keys `syncMembersFromFold` can schedule), so a failure
+        // here has to run it rather than just destroying the struct.
+        errdefer self.deinit();
         try self.syncMembersFromFold();
         try self.resetMySeq();
         // A member with no chain is a joiner: it syncs before it may lead.
@@ -678,6 +682,12 @@ pub const ClusterNode = struct {
             self.spawnDial(self.allocator.dupe(u8, address) catch return);
             // Retry until a peer at this address is connected; a fresh
             // joiner may start before the admitter is listening.
+            //
+            // `put` keeps the key the map already holds, so a config that
+            // names the same seed twice handed the second dupe to nobody and
+            // leaked it. Probe first, and only allocate a key the map will
+            // actually take.
+            if (self.seed_retry.contains(address)) continue;
             const owned = self.allocator.dupe(u8, address) catch return;
             self.seed_retry.put(self.allocator, owned, 0) catch {
                 self.allocator.free(owned);
@@ -4412,4 +4422,44 @@ test "a deferred leave that refuses leaves no freed payload in the list" {
     // and the first one's payload was already freed, so the `deinit` in this
     // test's teardown double-freed it and the testing allocator aborted.
     try std.testing.expectEqual(@as(usize, 1), cn.merge_pending_leaves.items.len);
+}
+
+test "a seed peer named twice does not leak the second retry key" {
+    // `seed_retry.put` keeps the key the map already holds, so the second
+    // dupe of a repeated address was handed to nobody and never freed. The
+    // testing allocator fails this test on that leak.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    const seeds = [_][]const u8{ "peer-a", "peer-a", "peer-b" };
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+        .seed_peers = &seeds,
+    });
+    defer {
+        cn.cancel();
+        cn.group.await(oio) catch {};
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    cn.bootstrapDial();
+    // Two distinct addresses, one entry each.
+    try std.testing.expectEqual(@as(u32, 2), cn.seed_retry.count());
 }
