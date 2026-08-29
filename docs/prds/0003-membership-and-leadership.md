@@ -15,8 +15,7 @@ membership fold, the election function, and the epoch/merge rules, plus the
 deterministic simulator that drives them ([OQ 27](../open-questions.md)).
 Source of truth: `src/cluster/membership.zig`, `src/cluster/election.zig`,
 `src/cluster/epoch.zig`, the `join`/`leave`/`epoch`/`merge` rules wired into
-`src/journal/chain.zig`, and `src/sim/sim.zig` (the simulator, roadmap item
-5). OQ 58 (concurrent-join ordering) and OQ 33 (settings at merge) resolved
+`src/journal/chain.zig`, and `src/sim/sim.zig` (the deterministic simulator). OQ 58 (concurrent-join ordering) and OQ 33 (settings at merge) resolved
 with the drafted defaults (admitter receipt order; losing-side `settings`
 re-slotted as no-ops).
 
