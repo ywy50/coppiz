@@ -74,6 +74,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   nothing but a connection to the listen port. The earlier narrow-int sweep
   had excluded this decoder on the strength of its outer `usize` cursor.
 
+- A `leadership.authorities` entry written as a member id is no longer
+  matched by a member's advertised address. Each entry was compared against
+  both, and a member's address is self-declared and may be any printable
+  ASCII - hex included - so any admitted member could advertise
+  `<hex of an authority's id>` as its address and be treated as that
+  authority: it could take a term meant for the named member, and could lead
+  an election that `fallback = stall` should have refused. An entry of
+  exactly the id's hex width, all hex digits, is now read as an id only;
+  every other entry is read as an address only.
+
 ### Added
 
 - A fourth example host, `examples/short-process/`: the command-line shape

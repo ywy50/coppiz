@@ -94,14 +94,39 @@ pub fn Election(comptime Id: type) type {
             return if (best) |b| b.id else null;
         }
 
-        /// The index of `member` in the authority list, matched by advertised
-        /// address or by the hex of its id; null when the member is not an
-        /// authority. An authority that matches nobody is skipped by
-        /// construction.
+        /// Whether an `authorities` entry is written in the id form: exactly
+        /// `hex_len` hex digits. The two naming forms share one list, so each
+        /// entry has to belong to exactly one of them - see
+        /// `authorityIndex`.
+        pub fn authorityNamesAnId(authority: []const u8) bool {
+            if (authority.len != Self.hex_len) return false;
+            for (authority) |c| {
+                if (hexNibble(c) == null) return false;
+            }
+            return true;
+        }
+
+        /// The index of `member` in the authority list; null when the member
+        /// is not an authority. An authority that matches nobody is skipped
+        /// by construction.
+        ///
+        /// Each entry is read as *either* an id or an address, never both.
+        /// Matching an entry against both used to let one member occupy
+        /// another's slot: a member's address is self-declared (`onHello`
+        /// copies the dialer's `address` verbatim, and `addressSafe` accepts
+        /// any printable ASCII, hex included), so a member advertising
+        /// `address = <hex of the authority's id>` was reported as that
+        /// authority. It could then lead an election that should have
+        /// stalled, which defeats the id form's whole point - the id is
+        /// derived from the key precisely so it cannot be chosen (PRD 0003
+        /// *Identity*; bug 2026-08-30-authority-address-id-collision).
         pub fn authorityIndex(authorities: []const []const u8, member: Self.View) ?usize {
             for (authorities, 0..) |authority, i| {
+                if (Self.authorityNamesAnId(authority)) {
+                    if (isHexId(authority, &member.id)) return i;
+                    continue;
+                }
                 if (std.mem.eql(u8, authority, member.address)) return i;
-                if (isHexId(authority, &member.id)) return i;
             }
             return null;
         }
@@ -417,6 +442,58 @@ test "a syncing member is never returned in any mode or subset (G5)" {
     // combined: same.
     m = Members.init(&[_]State{ .member, .syncing }, &empty_acks);
     try std.testing.expect(leader(combined_inputs, m.slice(2)) == null);
+}
+
+test "an authority named by id is not matched by a member's advertised address" {
+    // A member's address is self-declared: `onHello` copies the dialer's
+    // `address` into the member map and `admitNewcomer` copies it into the
+    // `join` payload, filtered only by `addressSafe` (printable ASCII, <=
+    // 300 bytes) - which accepts a 32-character hex string. Matching each
+    // authority entry against *both* the address and the id therefore let
+    // any admitted member occupy another member's id-named authority slot,
+    // and the id form is the one PRD 0003 calls unspoofable.
+    const b_hex = idHex(B);
+    const inputs = Inputs{
+        .mode = "configured",
+        .authorities = &[_][]const u8{&b_hex},
+        .tiebreak = "seniority",
+        .fallback = "stall",
+    };
+
+    // A is senior to B and advertises B's id as its address. Only A is live.
+    var m = Members.init(&[_]State{ .member, .lost }, &empty_acks);
+    m.views6[0].address = &b_hex;
+
+    // A is not an authority: the sole authority (B) is down, so `stall`
+    // refuses writes rather than handing the term to the impostor.
+    try std.testing.expect(authorityIndex(inputs.authorities, m.view(0)) == null);
+    try std.testing.expect(leader(inputs, m.slice(2)) == null);
+
+    // B itself still matches its own entry, and still leads when live.
+    try std.testing.expectEqual(@as(?usize, 0), authorityIndex(inputs.authorities, m.view(1)));
+    var both = Members.init(&empty_states, &empty_acks);
+    both.views6[0].address = &b_hex;
+    try std.testing.expectEqualSlices(u8, &B, &leader(inputs, both.slice(2)).?);
+
+    // The address form is untouched: an entry that is not hex of the right
+    // width is still matched against the advertised address only.
+    const by_address = Inputs{
+        .mode = "configured",
+        .authorities = &[_][]const u8{"node-a"},
+        .tiebreak = "seniority",
+        .fallback = "stall",
+    };
+    const plain = Members.init(&empty_states, &empty_acks);
+    try std.testing.expectEqual(
+        @as(?usize, 0),
+        authorityIndex(by_address.authorities, plain.view(0)),
+    );
+
+    // A hex string of the wrong width is an address, not an id.
+    try std.testing.expect(!Member.authorityNamesAnId("abcdef"));
+    try std.testing.expect(Member.authorityNamesAnId(&b_hex));
+    // Non-hex characters at the right length are an address too.
+    try std.testing.expect(!Member.authorityNamesAnId("node-b.example.internal.zzzzzzzz"));
 }
 
 test "compareRank: the merge rule's survivor ranking" {
