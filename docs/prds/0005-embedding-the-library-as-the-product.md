@@ -82,24 +82,35 @@ host and the one whose constraints are best known; its specifics are an
 
 ## Design
 
-**The library API** (sketch; names will move, shape should not):
+**The library API** (sketch, updated 2026-08-29 to the shipped shape; names
+may still move):
 
 ```zig
 const coppiz = @import("coppiz");
 
-var node = try coppiz.Node.open(io, gpa, .{ .data_dir = "data/coppiz" });
-defer node.close();
+var data_dir = try std.Io.Dir.cwd().openDir(io, "data/coppiz", .{ .iterate = true });
+try coppiz.journal.init(gpa, io, data_dir, &.{}, "events", &coppiz.journal.wallClock);
+const node = try coppiz.journal.Node.open(gpa, io, data_dir, .{});
+defer node.deinit();
 
-const journal = try node.journal("events");            // by name; creates if allowed
-const id = try journal.append(payload, .{ .ttl_ms = 0, .ack = .slotted });
-try journal.markStale(id);                            // only our own entries
+const events = node.journalIdByName("events").?;        // name → id (the control fold's registry)
+const id = try node.append(events, "hello coppiz", 0);  // (journal, payload, ttl_ms); blocks until slotted
+try node.markStale(events, id);                         // only our own entries
 
-var it = try journal.read(.{ .from = .{ .epoch = 0, .seq = 0 }, .include_stale = false });
-while (try it.next()) |rec| { _ = rec.entry; _ = rec.slot; }
+var found = false;
+try node.readRange(events, null, null, false, false, &found, struct {
+    fn on(s: *bool, _: *const coppiz.journal.slot.Slot, _: ?*const coppiz.journal.entry.Entry) anyerror!void {
+        s.* = true;
+    }
+}.on);                                                  // slots in chain order; visibility folded
 
-const sub = try journal.follow(cursor, onSlot, ctx);  // called on the host's io
-_ = node.leader(); _ = node.members(); _ = journal.settings();
+try node.follow(events, cursor, ctx, onSlot);           // called on the host's io
+_ = node.leader(); _ = node.settings(); _ = node.journalSettings(events);
 ```
+
+In a cluster, the host writes through its member's loop
+(`cluster.ClusterNode.localAppend`) and reads the same way
+(`cluster.ClusterNode.localReadRange`) — both block until the loop answers.
 
 The API takes a journal by name or id and never assumes the local group owns
 it: when a journal lives in another group ([PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)),
@@ -128,13 +139,13 @@ short-lived ones talk to it", and [OQ 47](../open-questions.md) asks whether
 coppiz should instead support multi-process opens natively.
 
 **The node binary** is `src/main.zig`: the library plus a TOML config, a
-CLI (`init`, `run`, `status`, `members`, `admit`, `deny`, `append`, `read`,
-`follow`, `settings`, `reconfigure`, `migrate`, `doctor`). The service API
+CLI (`init`, `serve`, `append`, `read`, `head`, `status`, `members`,
+`doctor`, `settings`, `admit`; `settings schema` is PRD 0004's). The
+offline `reconfigure` of [OQ 5](../open-questions.md) and the format
+`migrate` named in Failure modes are not commands yet. The service API
 on a listen address is deferred behind the first non-Zig consumer
 ([ADR 0007](../adrs/0007-the-library-is-the-primary-surface.md)); its shape when
 added is below, and the build makes both from one tree either way.
-(`settings schema` is PRD 0004's;
-`migrate` is the explicit on-disk format migration named in Failure modes.)
 
 **Service API shape** (when added): HTTP/1.1 + JSON on a separate port from
 replication, for non-Zig hosts, for short-lived processes beside a

@@ -3,7 +3,7 @@
 ## TL;DR
 
 - **What failed:** The re-slot classification routes every non-epoch control entry whose author is not the current leader into `applyControlReslotted`, whose `.create_journal` case calls `applyCreateJournal` — and that function's first check refuses exactly those entries (`checkAuthorIsLeader`). The two conditions are mutually exclusive, so a reslotted `create_journal` always fails with `error.NotLeader`.
-- **Impact:** The partition-merge feature ([PRD 0003](docs/prds/0003-membership-and-leadership.md) phase 3, shipped) never converges when the losing branch created a journal during the partition: every member refuses identically and the merge stalls.
+- **Impact:** The partition-merge feature ([PRD 0003](../../prds/0003-membership-and-leadership.md) phase 3, shipped) never converges when the losing branch created a journal during the partition: every member refuses identically and the merge stalls.
 - **Resolution:** Still open. Statically validated (the two gates are provably mutually exclusive).
 
 ## Status

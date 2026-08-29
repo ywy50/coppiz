@@ -42,8 +42,8 @@ to land. Update it when a PRD changes status.
   election, mode_change handover), the `merge` entry with the checkpoint
   settle rule, the re-slot path with the OQ 33 no-op semantics, and the
   survivor rule shared with election.
-- **Deterministic simulator** (2026-08-27) — [OQ 27](open-questions.md),
-  roadmap item 5: a seeded, single-threaded world of in-memory nodes driving
+- **Deterministic simulator** (2026-08-27) — [OQ 27](open-questions.md): a
+  seeded, single-threaded world of in-memory nodes driving
   the pure fold/election/merge functions with partitions, crashes, clock
   skew and reordered delivery. Scenarios: partition-heal-merge (G7 core),
   partitioned joins with deterministic seniority (RFC 0002), leader crash,
@@ -70,8 +70,10 @@ to land. Update it when a PRD changes status.
   slot folds back), the `examples/` directory (`embed-single` at size 1,
   `embed-cluster` as three embedded nodes with partition, heal and merge,
   `sidecar` speaking the wire to a node), each built by `zig build examples`
-  and each a test run by `zig build test`. G1/G3/G4 met; G2's standalone
-  binary half and G5/G6 are follow-up.
+  and each a test run by `zig build test`. G1–G4 met: the loop-routed host
+  read path (`cluster.ClusterNode.localReadRange`), `coppiz doctor` and the
+  G2 sidecar↔binary pairing followed 2026-08-28. G5 (a thread-count test)
+  and G6 (the clanker branch's gated single-call proof) are follow-up.
 
 ## Scale tiers
 
@@ -92,41 +94,11 @@ measurement ([OQ 54](open-questions.md)). Detail: [PRD 0006](prds/0006-scaling-t
 In dependency order. Each line names the PRD whose Implementation section has
 the phases.
 
-1. **Journal core, single member** — [PRD 0001](prds/0001-journal-core.md)
-   phases 1–3: codecs, chain validation, segment storage with torn-tail
-   recovery. Gate: acceptance criteria G3–G7 on one member. **RFC 0001**
-   (library/service) is decided — option A, [ADR 0007](adrs/0007-the-library-is-the-primary-surface.md);
-   PRD 0001's phases 1–4 are shipped (see Done).
-2. **Settings in the chain** — [PRD 0004](prds/0004-settings.md): schema as
-   code, validation, fold, `docs/configuration.md` generated and pinned.
-   **Shipped 2026-08-27** (see Done).
-3. **TTL and staleness** — [PRD 0002](prds/0002-ttl-and-staleness.md): pure
-   expiry predicates, `stale` and `checkpoint` rules, payload drop. Testable
-   on one member (it is its own leader). **Shipped 2026-08-27** (see Done).
-4. **RFC 0002** (join order) — decided: option A
-   ([ADR 0005](adrs/0005-join-order-is-slot-position.md)); PRD 0003
-   phases 1–3 shipped with it (see Done).
-5. **Deterministic simulator** — [OQ 27](open-questions.md): seeded
-   multi-node run with partitions, crashes, skew and reorder, over the pure
-   fold/election/merge functions. Placed *before* the node loop so the loop
-   is written to be driven by it. **Shipped 2026-08-27** (`src/sim/sim.zig`)
-   over PRD 0003 phases 1–3.
-6. **Membership and leadership** — [PRD 0003](prds/0003-membership-and-leadership.md):
-   membership fold, election function, epochs and merge (phases 1–3 shipped
-   2026-08-27), then the wire protocol ([OQ 19](open-questions.md)), the node
-   loop (written to be drivable by the simulator), admission, reconfigure
-   handover. Gate: e2e (a)–(e). **Shipped** (see Done).
-7. **Embedding and the node binary** — [PRD 0005](prds/0005-embedding-the-library-as-the-product.md):
-   the embedded-host write API and the example hosts shipped 2026-08-27
-   (steps 1–3); `doctor`, the loop-routed host read path
-   (`cluster.ClusterNode.localReadRange`) and G2's sidecar↔binary pairing
-   followed (2026-08-28); remaining: G5 (a thread-count test) and G6 (the
-   clanker branch's gated single-call proof).
-8. **First host integration (clanker)** — PRD 0005 phase 5: a clanker branch
+1. **First host integration (clanker)** — PRD 0005 phase 5: a clanker branch
    with `ck_state` over coppiz, one stream replicated between two instances,
    measured against its spike note's three journeys. A second, unrelated
    host example follows to keep the API general ([OQ 46](open-questions.md)).
-9. **First public release** — reopened claims ([OQ 40](open-questions.md),
+2. **First public release** — reopened claims ([OQ 40](open-questions.md),
    resolved 2026-08-27), CI ([OQ 45]), rolling-upgrade procedure ([OQ 26]),
    backup runbook ([OQ 39]). The licence is Apache-2.0
    ([ADR 0006](adrs/0006-the-library-is-apache-2-0-licensed.md),

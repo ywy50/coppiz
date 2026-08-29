@@ -7,6 +7,19 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Documentation sweep (2026-08-29): the root README's Status section no
+  longer carries a superseded second "Shipped" paragraph; the full status
+  narrative moved into a combined "Status and where things are" section at
+  the end, with a short Status summary up top; the CLI list in
+  PRD 0005 and the RELEASES version note match the shipped node binary
+  (no `--version` flag exists yet); PRD 0005's API sketch and PRD 0001's
+  write path reflect the shipped library surface (no `write.ack` knob;
+  all write paths return at the slot); the roadmap's Planned section no
+  longer lists shipped phases; the open-questions register records the
+  decisions taken since (OQ 13, 35 resolved; OQ 2, 12, 32, 44 resolved;
+  OQ 3, 36, 55, 56 updated to the shipped defaults, OQ 34 to the open
+  create-journal bypass) and drops `Blocks:` pointers to finished phases;
+  26 broken internal links across the reports and RFC 0003 are fixed.
 - Reads walk a journal in chain order (slot position), including the
   control journal named `__cluster__`. A checkpoint no longer removes
   TTL-reached entries while `ttl.action = mark_stale` and

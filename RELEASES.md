@@ -8,9 +8,9 @@ dated `CHANGELOG.md` section exist for the same commit.
 `build.zig.zon` is the single source of truth for the program version.
 `build.zig` reads it and hands the raw value to the library, which parses it
 into `coppiz.version` (`src/root.zig`) and fails the build for values that are
-not valid Semantic Versioning; the node binary imports the library and prints
-that value in its startup banner (the placeholder in `src/main.zig`; flag
-parsing, including a real `--version`, lands with the CLI).
+not valid Semantic Versioning; the node binary imports the library
+(`src/main.zig`), so the value is reachable from it — there is no startup
+banner and no `--version` flag yet.
 
 ## Compatibility contract
 

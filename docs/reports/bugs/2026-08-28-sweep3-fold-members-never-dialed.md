@@ -3,7 +3,7 @@
 ## TL;DR
 
 - **What failed:** `syncMembersFromFold` adds fold-learned members with `dial_at_ms = 0`, and the `onTick` dial branch requires `dial_at_ms != 0`. `bootstrapDial` covers only members present at startup. So no first dial is ever scheduled for a member that joined after this node started.
-- **Impact:** The topology is a star around each member's configured seeds, not the full mesh [PRD 0006](docs/prds/0006-scaling-to-groups-sharding-and-parity.md) (2–32 members) describes. Pairs that never shared a connection never connect; when the founder dies, the healthy remaining members never see each other's heartbeats, self-elect independently (N divergent branches instead of one agreed leader), and heal only when the founder returns.
+- **Impact:** The topology is a star around each member's configured seeds, not the full mesh [PRD 0006](../../prds/0006-scaling-to-groups-sharding-and-parity.md) (2–32 members) describes. Pairs that never shared a connection never connect; when the founder dies, the healthy remaining members never see each other's heartbeats, self-elect independently (N divergent branches instead of one agreed leader), and heal only when the founder returns.
 - **Resolution:** Still open. Statically validated.
 
 ## Status

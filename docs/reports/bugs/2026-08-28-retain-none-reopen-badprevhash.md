@@ -14,7 +14,7 @@ under `ttl.retain = none` and reopens.
 
 ## Symptom and impact
 
-A member that compacted under `retain = none` and restarts fails to open: the fold rebuild (`Node.open` → `foldAll` → `foldJournal` → `store.scan`) hits a chain-continuity refusal and the node cannot start. `refold()` (the [OQ 44](docs/open-questions.md) heal path) breaks identically. The shipped e2e test exercising `retain = none` (`cluster/node.zig:3118`) never reopens the node, so the gap is uncovered.
+A member that compacted under `retain = none` and restarts fails to open: the fold rebuild (`Node.open` → `foldAll` → `foldJournal` → `store.scan`) hits a chain-continuity refusal and the node cannot start. `refold()` (the [OQ 44](../../open-questions.md) heal path) breaks identically. The shipped e2e test exercising `retain = none` (`cluster/node.zig:3118`) never reopens the node, so the gap is uncovered.
 
 ## Reproduction
 
@@ -31,7 +31,7 @@ The fold, however, folds only records with an entry. `foldJournal`'s callback do
 
 Two pieces combine:
 
-- `store.compact` under `retain = none` rewrites removed entries as slot-only records (`store.zig:437-443`) — by design ([PRD 0002](docs/prds/0002-ttl-and-staleness.md)); the chain still verifies because slots are kept verbatim.
+- `store.compact` under `retain = none` rewrites removed entries as slot-only records (`store.zig:437-443`) — by design ([PRD 0002](../../prds/0002-ttl-and-staleness.md)); the chain still verifies because slots are kept verbatim.
 - `foldJournal` (`journal.zig:682-701`) skips entry-less records with `orelse return` instead of advancing the fold's head/hash over them. There is no `retain = none` handling anywhere in the fold path; the sync path acknowledges the shape (`cluster/node.zig:1771`, "A compacted record cannot be folded") but the open path does not.
 
 Under the default `retain = header` the surviving header-only records still decode to entries and fold fine (the existing reopen test, `journal.zig:1290-1362`, covers only that value).

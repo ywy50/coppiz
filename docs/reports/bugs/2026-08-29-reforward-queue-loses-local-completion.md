@@ -3,7 +3,7 @@
 ## TL;DR
 
 - **What failed:** When a queued local entry is slotted by the newly-elected leader, `reforwardQueue`'s leader branches ack only `pending_clients` and never touch `pending_locals`; `applyReplicated` then trims the queue, so no later site (`onSlot`, `onSyncPage`, `slotQueuedEntries`) ever sees the id again. The host's `completion.sem.wait` never returns.
-- **Impact:** The embedded-host write API ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)) deadlocks permanently when a host appends while this member is a leaderless follower and the member is then elected.
+- **Impact:** The embedded-host write API ([PRD 0005](../../prds/0005-embedding-the-library-as-the-product.md)) deadlocks permanently when a host appends while this member is a leaderless follower and the member is then elected.
 - **Resolution:** Still open. Statically validated (incomplete fix of `2026-08-28-localappend-completion-lost`).
 
 ## Status

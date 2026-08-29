@@ -3,7 +3,7 @@
 ## Status
 
 Shipped (single-member core) — 2026-08-27. Draft 2026-08-21; the
-single-member phases 1–4 are implemented and tested (`zig build test`, 167
+single-member phases 1–4 are implemented and tested (`zig build test`, 261
 tests). Source of truth: `src/journal/` — `entry.zig` and `slot.zig`
 (codecs, hashes, sign/verify), `chain.zig` (fold and validation), `expiry.zig`
 (PRD 0002 predicates), `segment.zig` and `store.zig` (on-disk segments,
@@ -193,6 +193,16 @@ is what lets every member validate who marked ([PRD
 `slot_hash` = SHA-256 over the slot. The chain is over slots, so the chain
 covers order *and* content (via `entry_hash`) *and* who ordered it.
 
+**Clock assumptions.** `slot_ts_ms` is the leader's wall clock and is the
+only time basis PRD 0002's expiry uses; failure detection is the one path
+that runs on monotonic time (the node loop measures suspect/evict windows
+on the monotonic clock). The assumption is an NTP-disciplined clock, with
+skew in seconds, not hours. Outside that assumption the consequences are
+visibility-only, never divergence: a skewed leader makes entries read as
+stale or expired early or late on other members, a backwards jump is
+clamped so expiry is delayed, never advanced, and the folds still agree
+([OQ 32](../open-questions.md), resolved).
+
 **Control entries.** Everything the journal knows about itself is an entry in
 the same chain, so it replicates by the same mechanism, is tamper-evident by
 the same hash, and can be folded deterministically by every member:
@@ -244,7 +254,9 @@ two-phase commit anywhere.
    (`write.ack = local | slotted`): when the local member has durably queued
    it, or when the slot is back. `local` is the AP behaviour (a partitioned
    member keeps working); `slotted` is the CP behaviour (a write is not
-   acknowledged until it has a position). Default is [open question 3](../open-questions.md).
+   acknowledged until it has a position). Default is [open question 3](../open-questions.md);
+   the shipped path has no `write.ack` knob — `node.append`, the wire append
+   and `localAppend` all return at the slot.
 
 **Read path.** Reads are always local — every member has everything. The
 read API exposes: by slot range within an epoch, by entry id, by author, by
