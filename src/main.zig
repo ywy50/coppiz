@@ -246,24 +246,21 @@ fn cmdServe(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void 
     defer allowlist.deinit(gpa);
     var seed_peers = std.ArrayListUnmanaged([]const u8).empty;
     defer seed_peers.deinit(gpa);
-    for (cfg.peers.items) |peer| {
-        if (peer.public_key) |hex| {
-            // A key that does not parse must not be dropped: the peer would
-            // still be dialed as a seed and then refused at hello, with the
-            // allowlist silently one entry short and nothing said about it.
-            const key = hexKeyToBytes(hex) orelse {
-                var stderr_writer = std.Io.File.stderr().writer(io, &stderr_buf);
-                try stderr_writer.interface.print(
-                    "coppiz: peer {s}: public_key must be 64 hex characters\n",
-                    .{peer.address},
-                );
-                try stderr_writer.interface.flush();
-                return error.InvalidPeerPublicKey;
-            };
-            try allowlist.append(gpa, key);
-        }
-        try seed_peers.append(gpa, peer.address);
-    }
+    var bad_peer: usize = 0;
+    splitPeers(gpa, cfg.peers.items, &allowlist, &seed_peers, &bad_peer) catch |err| {
+        const reason = switch (err) {
+            error.InvalidPeerPublicKey => "public_key must be 64 hex characters",
+            error.PeerEntryEmpty => "needs an address, a public_key, or both",
+            else => return err,
+        };
+        var stderr_writer = std.Io.File.stderr().writer(io, &stderr_buf);
+        try stderr_writer.interface.print(
+            "coppiz: [[peers]] entry {d}: {s}\n",
+            .{ bad_peer + 1, reason },
+        );
+        try stderr_writer.interface.flush();
+        return err;
+    };
 
     const tcp = net.transport.TcpTransport{ .allocator = gpa };
     const listener = try net.transport.tcpListen(gpa, io, listen);
@@ -280,6 +277,42 @@ fn cmdServe(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void 
     // Blocks until the loop stops (a fatal error or `stop`), then cancels
     // the remaining tasks and returns.
     cluster_node.waitForStop();
+}
+
+/// Splits the `[[peers]]` entries into the admission allowlist and the
+/// addresses to dial at startup.
+///
+/// The two are not the same list. An entry may carry only a `public_key`:
+/// that is how an admitter authorizes a newcomer it has no address for -
+/// the newcomer dials in, and the admitter matches the key
+/// ([RFC 0016](../../docs/rfcs/0016-allowlist-key-learning.md), PRD 0003
+/// *Admission*). Seeding such an entry's empty address makes the loop dial
+/// `""` forever (bug 2026-08-30-allowlist-only-peer-dialed-forever), so
+/// only an entry that names an address becomes a seed.
+///
+/// An entry with neither is a `[[peers]]` header the operator left empty;
+/// it authorizes nobody and dials nothing, so it is refused rather than
+/// ignored. On any refusal `bad` names the offending entry's index.
+fn splitPeers(
+    gpa: std.mem.Allocator,
+    peers: []const config.Peer,
+    allowlist: *std.ArrayListUnmanaged([32]u8),
+    seeds: *std.ArrayListUnmanaged([]const u8),
+    bad: *usize,
+) error{ OutOfMemory, InvalidPeerPublicKey, PeerEntryEmpty }!void {
+    for (peers, 0..) |peer, i| {
+        bad.* = i;
+        if (peer.address.len == 0 and peer.public_key == null) return error.PeerEntryEmpty;
+        if (peer.public_key) |hex| {
+            // A key that does not parse must not be dropped: the peer would
+            // still be dialed as a seed and then refused at hello, with the
+            // allowlist silently one entry short and nothing said about it
+            // (bug 2026-08-28-cmdserve-silent-allowlist-drop).
+            const key = hexKeyToBytes(hex) orelse return error.InvalidPeerPublicKey;
+            try allowlist.append(gpa, key);
+        }
+        if (peer.address.len > 0) try seeds.append(gpa, peer.address);
+    }
 }
 
 fn hexKeyToBytes(text: []const u8) ?[32]u8 {
@@ -1607,4 +1640,61 @@ test "process-level: the sidecar binary pairs with a serving coppiz over TCP (G2
     const read_out = try a.run(&.{ "read", "--dir", a.dir, "--journal", "main" });
     defer test_alloc.free(read_out);
     try std.testing.expect(std.mem.indexOf(u8, read_out, "via-wire") != null);
+}
+
+test "an allowlist-only [[peers]] entry authorizes without becoming a dial target" {
+    // Bug 2026-08-30-allowlist-only-peer-dialed-forever: every [[peers]]
+    // entry became a seed, and an entry that carries only a public_key has
+    // no address - the documented way an admitter authorizes a newcomer it
+    // cannot dial (RFC 0016). The loop then re-dialed the empty address for
+    // the life of the process.
+    const key_hex = "a" ** 64;
+    const peers = [_]config.Peer{
+        .{ .address = "127.0.0.1:6401", .public_key = null },
+        .{ .address = "", .public_key = key_hex },
+        .{ .address = "127.0.0.1:6402", .public_key = key_hex },
+    };
+    var allowlist = std.ArrayListUnmanaged([32]u8).empty;
+    defer allowlist.deinit(test_alloc);
+    var seeds = std.ArrayListUnmanaged([]const u8).empty;
+    defer seeds.deinit(test_alloc);
+    var bad: usize = 0;
+    try splitPeers(test_alloc, &peers, &allowlist, &seeds, &bad);
+
+    // Two keys authorized, two addresses to dial, and no empty one.
+    try std.testing.expectEqual(@as(usize, 2), allowlist.items.len);
+    try std.testing.expectEqual(@as(usize, 2), seeds.items.len);
+    for (seeds.items) |addr| try std.testing.expect(addr.len > 0);
+    try std.testing.expectEqualStrings("127.0.0.1:6401", seeds.items[0]);
+    try std.testing.expectEqualStrings("127.0.0.1:6402", seeds.items[1]);
+}
+
+test "a [[peers]] entry with neither address nor key is refused, and a bad key names its entry" {
+    var allowlist = std.ArrayListUnmanaged([32]u8).empty;
+    defer allowlist.deinit(test_alloc);
+    var seeds = std.ArrayListUnmanaged([]const u8).empty;
+    defer seeds.deinit(test_alloc);
+
+    const empty = [_]config.Peer{
+        .{ .address = "127.0.0.1:6401", .public_key = null },
+        .{ .address = "", .public_key = null },
+    };
+    var bad: usize = 0;
+    try std.testing.expectError(
+        error.PeerEntryEmpty,
+        splitPeers(test_alloc, &empty, &allowlist, &seeds, &bad),
+    );
+    try std.testing.expectEqual(@as(usize, 1), bad);
+
+    allowlist.clearRetainingCapacity();
+    seeds.clearRetainingCapacity();
+    const short_key = [_]config.Peer{
+        .{ .address = "127.0.0.1:6401", .public_key = null },
+        .{ .address = "127.0.0.1:6402", .public_key = "abcd" },
+    };
+    try std.testing.expectError(
+        error.InvalidPeerPublicKey,
+        splitPeers(test_alloc, &short_key, &allowlist, &seeds, &bad),
+    );
+    try std.testing.expectEqual(@as(usize, 1), bad);
 }
