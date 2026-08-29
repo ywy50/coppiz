@@ -7,6 +7,20 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A data directory holding a segment whose header names a different
+  journal now refuses to open with `journal_id_mismatch` instead of
+  aborting the process. The branch that raises the refusal closed the
+  segment file while the error handler that owns it was still live, so the
+  descriptor was closed twice on the way out.
+
+- A node that crashed while creating a segment file can reopen its data
+  directory again. Every segment writer creates the file and writes its
+  header as two calls, and the open-time scan subtracted the header length
+  from the file length before checking the file was that long, so the
+  leftover short file aborted the open with an integer overflow. Such a
+  file holds no header and no records, so the open now drops it and
+  continues.
+
 - A member catching up no longer loses the newest record on a journal. A
   broadcast arriving while it was still backfilling was dropped, and once the
   backfill had passed that journal nothing ever asked for the record again,

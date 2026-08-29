@@ -726,6 +726,13 @@ pub const Store = struct {
         return buf;
     }
 
+    /// The byte length of one segment file, without adopting it.
+    fn segmentFileLen(self: *Store, sub: std.Io.Dir, seg_name: []const u8) !u64 {
+        const file = try sub.openFile(self.io, seg_name, .{ .mode = .read_only });
+        defer file.close(self.io);
+        return file.length(self.io);
+    }
+
     fn readSegmentHeader(self: *const Store, seg: *const Segment) !segment.Header {
         var buf: [segment.header_len]u8 = undefined;
         const n = try seg.file.readPositionalAll(self.io, &buf, 0);
@@ -774,6 +781,17 @@ pub const Store = struct {
         while (try it.next(self.io)) |f| {
             if (f.kind != .file) continue;
             if (!std.mem.startsWith(u8, f.name, "seg-")) continue;
+            // A crash between `createFile` and the header write — the
+            // window every segment writer has (createJournal, sealHead,
+            // compact, truncate) — leaves a file shorter than one header.
+            // It carries no header and no records, so there is nothing to
+            // load and nothing to lose: drop it, and let the ordinal be
+            // reused. Loading it instead refuses the open with `Truncated`
+            // for a file that provably holds no data.
+            if (try self.segmentFileLen(sub, f.name) < segment.header_len) {
+                sub.deleteFile(self.io, f.name) catch {};
+                continue;
+            }
             try names.append(self.allocator, try self.allocator.dupe(u8, f.name));
         }
         std.mem.sort([]u8, names.items, {}, struct {
@@ -812,8 +830,9 @@ pub const Store = struct {
                 .records_len = 0,
                 .sealed = false,
             });
+            // The errdefer above owns the close; closing here too would
+            // close the same descriptor twice on the way out.
             if (!std.mem.eql(u8, &header.journal_id, &journal_id)) {
-                file.close(self.io);
                 return error.JournalIdMismatch;
             }
 
@@ -905,6 +924,10 @@ pub const Store = struct {
         const file = try sub.openFile(self.io, seg_name, .{ .mode = .read_write });
         defer file.close(self.io);
         const len = try file.length(self.io);
+        // Shorter than a header: no records, and `records_len` below would
+        // underflow. loadJournal drops such a file before it gets here; the
+        // guard keeps the function total for any other caller.
+        if (len < segment.header_len) return false;
         const seal = try self.sealStatus(file, len);
         if (seal == .corrupt) return false;
         const sealed = seal == .valid;
@@ -1394,6 +1417,98 @@ test "open recovers a crashed compaction: the newer generation wins, stale files
         if (std.mem.startsWith(u8, f.name, "seg-")) file_count += 1;
     }
     try std.testing.expectEqual(jd.segments.items.len, file_count);
+}
+
+test "open drops a segment file left shorter than its header by a crashed create" {
+    // A crash between createFile and the header write leaves a segment
+    // file with fewer than segment.header_len bytes. fileStartsChain
+    // computed `len - segment.header_len` before looking at the length, so
+    // the open trapped on the unsigned underflow instead of recovering —
+    // and even without the trap, loading the file refuses the open with
+    // Truncated for a file that holds nothing.
+    for ([_]usize{ 0, 20 }) |partial| {
+        var env = TestEnv.init();
+        defer env.deinit();
+        const journal_id = "0123456789abcdef".*;
+
+        var next_ordinal: u64 = undefined;
+        {
+            const data_dir = try env.dataDir();
+            const store = try Store.open(test_alloc, tio, data_dir, .{ .seal_threshold = 200 });
+            defer store.deinit();
+            try store.createJournal(journal_id, [_]u8{0} ** 32);
+            try appendN(store, journal_id, 5);
+            next_ordinal = store.journals.get(journal_id).?.next_ordinal;
+        }
+
+        const path = try std.fmt.allocPrint(
+            test_alloc,
+            "data/{x}/seg-{d:0>8}",
+            .{ journal_id, next_ordinal },
+        );
+        defer test_alloc.free(path);
+        {
+            const file = try env.tmp.dir.createFile(tio, path, .{
+                .read = true,
+                .truncate = true,
+                .permissions = data_file_perm,
+            });
+            defer file.close(tio);
+            // `partial` bytes of a header that never finished being written.
+            var header_buf: [segment.header_len]u8 = undefined;
+            segment.encodeHeader(
+                .{ .journal_id = journal_id, .group_id = [_]u8{0} ** 32 },
+                &header_buf,
+            );
+            if (partial > 0) try file.writePositionalAll(tio, header_buf[0..partial], 0);
+        }
+
+        const store = try env.openStore();
+        defer store.deinit();
+        var count: usize = 0;
+        try store.scan(journal_id, &count, struct {
+            fn cb(c: *usize, _: *const slot.Slot, _: ?*const entry.Entry) anyerror!void {
+                c.* += 1;
+            }
+        }.cb);
+        try std.testing.expectEqual(@as(usize, 5), count);
+        // The unusable file is gone, so its ordinal is free again.
+        try std.testing.expectError(
+            error.FileNotFound,
+            env.tmp.dir.openFile(tio, path, .{ .mode = .read_only }),
+        );
+    }
+}
+
+test "a segment header naming another journal refuses the open once" {
+    // The mismatch branch closed the segment file by hand while the
+    // errdefer that owns it was still live, so the descriptor was closed
+    // twice on the way out - an EBADF the Io layer reports as a
+    // non-recoverable OS bug (a panic in debug builds), instead of the
+    // JournalIdMismatch the caller should see.
+    var env = TestEnv.init();
+    defer env.deinit();
+    const journal_id = "0123456789abcdef".*;
+    {
+        const data_dir = try env.dataDir();
+        const store = try Store.open(test_alloc, tio, data_dir, .{ .seal_threshold = 200 });
+        defer store.deinit();
+        try store.createJournal(journal_id, [_]u8{0} ** 32);
+        try appendN(store, journal_id, 2);
+    }
+
+    // Rewrite the header's journal id (bytes 6..22) to a different one, as
+    // a directory renamed by hand or a segment copied from another journal
+    // would look.
+    const path = try std.fmt.allocPrint(test_alloc, "data/{x}/seg-00000001", .{journal_id});
+    defer test_alloc.free(path);
+    {
+        const file = try env.tmp.dir.openFile(tio, path, .{ .mode = .read_write });
+        defer file.close(tio);
+        try file.writePositionalAll(tio, "fedcba9876543210", 6);
+    }
+
+    try std.testing.expectError(error.JournalIdMismatch, env.openStore());
 }
 
 test "open keeps the older generation when the newer one is still being written" {
