@@ -260,11 +260,16 @@ fn scanRecord(bytes: []const u8) error{ Truncated, BadCrc }!usize {
     if (bytes.len < record_prefix_len) return error.Truncated;
     const body_len = std.mem.readInt(u32, bytes[0..4], .little);
     if (body_len < entry.header_len) return error.BadCrc;
-    if (record_prefix_len + body_len > bytes.len) return error.Truncated;
-    const body = bytes[record_prefix_len .. record_prefix_len + body_len];
+    // usize arithmetic: `record_prefix_len` is a comptime_int, so a bare
+    // `record_prefix_len + body_len` computes in u32 and a body_len near max
+    // u32 overflows the sum (bug 2026-08-29-entry-decode-payload-len-overflow,
+    // the same shape as 2026-08-28-sweep3-record-length-overflow).
+    const total = @as(usize, body_len) + record_prefix_len;
+    if (total > bytes.len) return error.Truncated;
+    const body = bytes[record_prefix_len..total];
     const want_crc = std.mem.readInt(u32, bytes[4..8], .little);
     if (std.hash.crc.Crc32.hash(body) != want_crc) return error.BadCrc;
-    return record_prefix_len + body_len;
+    return total;
 }
 
 // ---------------------------------------------------------------------------
@@ -521,4 +526,29 @@ test "queue honors the fsync knob: append and clear work under .never" {
         }.cb);
         try std.testing.expectEqual(@as(usize, 0), count);
     }
+}
+
+test "a queue record length near max u32 is Truncated, not a wrap-around slice" {
+    // Bug 2026-08-29-entry-decode-payload-len-overflow: `record_prefix_len` is
+    // a comptime_int, so the bounds check computed in u32 and a body_len near
+    // max u32 wrapped past it. A corrupt queue file must be refused.
+    var env = TestEnv.init();
+    defer env.deinit();
+    {
+        var q = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .every);
+        const one = testEntry("one");
+        try q.append(&one);
+        q.deinit();
+    }
+    const file = try env.tmp.dir.openFile(tio, "unslotted.queue", .{ .mode = .read_write });
+    defer file.close(tio);
+    var len_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &len_buf, 0xFFFF_FFF8, .little);
+    try file.writePositionalAll(tio, &len_buf, header_len);
+
+    // The single record is now a torn tail: the queue truncates it away
+    // instead of panicking on the overflowing sum.
+    var q = try Queue.open(test_alloc, tio, env.tmp.dir, 1 << 20, .every);
+    defer q.deinit();
+    try std.testing.expectEqual(@as(u64, 0), q.queued_bytes);
 }

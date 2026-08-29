@@ -912,7 +912,11 @@ pub const Node = struct {
 
 /// The size a store record for this entry occupies after any compaction.
 fn storeRecordSizeFor(info: chain.EntryInfo) usize {
-    return 8 + slot.encoded_len + entry.header_len + info.payload_len;
+    // usize arithmetic: the literals are comptime_ints, so a bare sum computes
+    // in u32 (`EntryInfo.payload_len`'s type) and a header claiming a
+    // payload_len near max u32 overflows it (bug
+    // 2026-08-29-entry-decode-payload-len-overflow).
+    return @as(usize, info.payload_len) + 8 + slot.encoded_len + entry.header_len;
 }
 
 pub fn visible(
