@@ -1158,12 +1158,18 @@ pub const ClusterNode = struct {
 
     fn sendHeartbeat(self: *ClusterNode, ms: *MemberState) !void {
         const conn_id = ms.conn_id orelse return;
-        try self.sendMessage(conn_id, .{ .heartbeat = .{
+        const cs = self.conns.get(conn_id) orelse return error.NoConn;
+        // The heartbeat body is fixed-size; a stack buffer avoids a heap
+        // allocation per member per heartbeat interval (the most frequent
+        // steady-state message in a cluster).
+        var body: [2 + message.heartbeat_len]u8 = undefined;
+        message.encode(.{ .heartbeat = .{
             .member_id = self.node.member_id,
             .epoch = self.epochNumber(),
             .head = self.node.control.head orelse .{ .epoch = 0, .seq = 0 },
             .last_ack = self.node.control.head orelse .{ .epoch = 0, .seq = 0 },
-        } });
+        } }, &body);
+        try cs.conn.send(self.io, &body);
     }
 
     /// Closes a connection, marking its member lost and scheduling a redial.
