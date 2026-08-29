@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -35,7 +35,7 @@ The per-member `last_ack` plumbing exists (view field, wire field, sender side) 
 
 ## Resolution
 
-Not yet fixed. Suggested direction: track each member's head from heartbeats (`onHeartbeat` should store `hb.last_ack` on the member state) and use it in `viewsFor`/`viewOf`. A regression test should run `combined`+`freshest` with a lagging authority and assert the fresher one leads, and that the node's survivor matches the simulator's for the same branch pair.
+Fixed: `viewsFor`/`viewOf` use each member's own advertised head as the freshness input, so the `freshest` tiebreak is live and the node's merge survivor matches the simulator's.
 
 ## Verification
 

@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -36,7 +36,7 @@ The errdefer remains armed past the point the file's ownership moved into `jd.se
 
 ## Resolution
 
-Not yet fixed. Suggested fix: set an `adopted` flag before the swap and gate the errdefer on it, mirroring `compact`. A regression test should fail `rebuildIndex` and assert the store still deinits cleanly.
+Fixed: `Store.truncate` disarms its errdefer once the fresh head file is adopted into `jd.segments`, so a `rebuildIndex` failure cannot double-close it.
 
 ## Verification
 

@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -24,7 +24,7 @@ The unknown-journal case was given an empty success response instead of the name
 
 ## Resolution
 
-Not yet fixed. Suggested fix: return a refusal (`unknown_journal`) from `onReadReq` for an unknown name, matching `onAppend`. A regression test should read a bogus journal over the wire and expect the error.
+Fixed: a read of an unknown journal refuses with a named refusal — `read_page` gained a `refusal` field and the client maps it to `error.UnknownJournal`, matching the local read.
 
 ## Verification
 

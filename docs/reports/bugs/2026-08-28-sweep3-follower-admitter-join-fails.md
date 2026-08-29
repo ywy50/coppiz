@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -39,7 +39,13 @@ The join is authored and slotted locally instead of being forwarded to (or signe
 
 ## Resolution
 
-Not yet fixed. Suggested direction: a follower admitter should forward the hello/join to the leader (or the join entry should be leader-signed), and the `hello_ack` should only claim admission once the join actually folds. A regression test should admit a joiner through a follower (leader temporarily down) and assert the join eventually lands via the leader.
+Fixed: a follower admitter now forwards the join entry to the leader, whose
+slot the fold's re-slot inference applies as the validated join; it refuses
+when no leader is reachable so the joiner retries, and `onForward` allows
+the `.join` kind alongside `.data` (the other control kinds stay refused).
+A failed admit no longer leaves a phantom member entry that blocks every
+later re-admission (the phantom-member follow-up below is fixed by the same
+change: the newcomer's member entry is removed on failure).
 
 ## Follow-up
 

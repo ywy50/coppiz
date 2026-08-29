@@ -8,7 +8,7 @@
 
 ## Status
 
-Open. Introduced by `f401606` (`applyCreateJournalReslotted`).
+Resolved. Introduced by `f401606` (`applyCreateJournalReslotted`).
 
 ## Symptom and impact
 
@@ -44,7 +44,7 @@ The reslotted path's precondition ("this is a merge re-slot") is inferred from a
 
 ## Resolution
 
-Not yet fixed. Suggested direction: carry an explicit `reslotted` flag through the apply path (the node already knows whether it is merging - `applyReplicated`'s caller does), or re-check the kind/author on the live path (`onForward` should refuse non-`.data`/non-leader-authored entries). A regression test should forward a member-signed `create_journal` and expect a refusal, while a merge re-slot of the same kind still succeeds.
+Fixed: `onForward` refuses non-data entries (joins excepted for the follower-admitter path), closing the re-slot-inference bypass that let a member create journals or no-op past settings.
 
 ## Verification
 

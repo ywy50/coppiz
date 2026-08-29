@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -29,7 +29,7 @@ Not dynamically reproduced (needs a joiner over a compacted chain); statically c
 
 ## Resolution
 
-Not yet fixed. Suggested direction: advance `next` past skipped slot-only records (and surface the gap once), or serve the slot-only record itself (the fold has `advanceHead` for exactly this, `journal.zig:671-679`). A regression test should backfill a journal with a `retain = none` compaction and assert the joiner reaches head.
+Fixed: sync pages carry slot-only records, the client's `onSyncPage` advances the fold head over them via `advanceHead`, and the merge re-slot skips them — backfill over a `retain = none` chain terminates.
 
 ## Verification
 

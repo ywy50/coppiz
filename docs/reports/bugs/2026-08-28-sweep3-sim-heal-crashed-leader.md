@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -36,7 +36,7 @@ The survivor/branch selection reads the first-listed node's state without an `al
 
 ## Resolution
 
-Not yet fixed. Suggested direction: pick the side's *live* node (fall back to the first alive, or refuse to heal a side whose leader crashed) and build the branch from a live node's chain. A regression test should run the crash-leader scenario and assert the merged chain contains the side's post-crash entries.
+Fixed: `sideLeader`/`tailOf` use the first live node of a side, so a crashed leader's frozen chain no longer names the survivor or builds the merged branch; regression test added.
 
 ## Verification
 

@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -29,7 +29,7 @@ Quote-state tracking that ignores escapes, plus no end-of-parse validation (bala
 
 ## Resolution
 
-Not yet fixed. Suggested direction: track the previous character for `\"`, and refuse unbalanced quotes/malformed items (`InvalidValue`) instead of emitting them. A regression test should cover `\"` inside quoted values and the two malformed-array shapes.
+Fixed: `stripComment`/`parseStringArray` track backslash parity so an escaped quote does not toggle the string state, and malformed array items (unterminated quotes, mis-nested pairs) are refused; regression tests cover `\"` and the malformed shapes.
 
 ## Verification
 

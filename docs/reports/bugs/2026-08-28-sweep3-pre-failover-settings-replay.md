@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -24,7 +24,7 @@ The pre-failover replay rule (past-term data folds) was implemented for `.data` 
 
 ## Resolution
 
-Not yet fixed. Suggested direction: fold pre-failover journal `settings`/`checkpoint`/`stale` records with the re-slot semantics (survivor-wins no-op for settings, checkpoint as its own fold) rather than the live author check - or treat them like the merge path. A regression test should write a journal-scoped settings entry, fail over, restart the follower, and expect a clean open.
+Fixed: `applyData` routes past-term journal `settings`/`checkpoint` records with a pre_failover flag — the author is checked against the record's own slot leader and the settle rule is skipped for the historical checkpoint — so a follower with pre-failover data reopens; regression test added.
 
 ## Verification
 

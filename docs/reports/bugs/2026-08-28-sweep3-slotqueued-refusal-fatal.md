@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -24,7 +24,7 @@ The two queue-drain paths disagree on error handling: one acks-and-continues, th
 
 ## Resolution
 
-Not yet fixed. Suggested fix: mirror `reforwardQueue` - catch the refusal, ack the client, remove the entry, continue. A regression test should queue an entry that refuses at slot time and assert the node keeps running.
+Fixed: `slotQueuedEntries` acks waiters and continues on a per-entry slot refusal instead of propagating it to `fatal()`.
 
 ## Verification
 

@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -24,7 +24,7 @@ The waits observe loop-owned state without the synchronization every other obser
 
 ## Resolution
 
-Not yet fixed. Suggested direction: observe via the wire (`client.hello()`/`status`) or via a fold hash captured after synchronization, or add an explicit sync point (a completion the loop posts when the entry folds). A regression check is the suite under ThreadSanitizer.
+Fixed: `syncing` is an atomic and the settings-landing poll observes through the loop's own `local_read`, removing the test-thread data races.
 
 ## Verification
 

@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -24,7 +24,7 @@ Not dynamically reproduced (needs a built binary and a key-only dir); statically
 
 ## Resolution
 
-Not yet fixed. Suggested fix: make `node.leader()` return `?` (or have `cmdAdmit` check `control.epoch == null` and print a "not a member yet / no chain" diagnostic). A regression test should run `admit` on a key-only dir and expect a clean error, not a panic.
+Fixed: `Node.leader()` returns null before any epoch folds and `coppiz admit` maps it to `NotLeader` instead of unwrapping a null epoch on a chainless directory.
 
 ## Verification
 

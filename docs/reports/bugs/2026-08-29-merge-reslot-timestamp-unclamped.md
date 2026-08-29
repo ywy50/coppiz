@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -24,7 +24,7 @@ The re-slot path was written without the clamp the live path has. The clamp's pu
 
 ## Resolution
 
-Not yet fixed. Suggested fix: clamp in `reslot` (`slot_ts_ms = @max(self.nowMs(), prev fold.last_slot_ts_ms)` - the caller has `fold` in scope). A regression test should heal with a regressed clock and expect the merge to complete.
+Fixed: `reslot` clamps the slot timestamp to the target fold's `last_slot_ts_ms`, like the live slot path, so a regressed clock cannot stall the heal with `BadTimestamp`.
 
 ## Verification
 

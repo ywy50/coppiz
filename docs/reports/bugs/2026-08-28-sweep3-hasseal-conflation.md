@@ -8,7 +8,7 @@
 
 ## Status
 
-Open.
+Resolved.
 
 ## Symptom and impact
 
@@ -29,7 +29,7 @@ Not dynamically reproduced (bit-rot injection needed); statically certain from t
 
 ## Resolution
 
-Not yet fixed. Suggested direction: make the sealed-tail check tri-state (absent / valid / invalid-hash) and refuse on invalid, mirroring the G3 test. A regression test should corrupt a sealed segment's final record (and separately its trailer) and expect `error.Corrupt`, not a silent truncation.
+Fixed: a present-but-invalid seal trailer refuses the open with `Corrupt` (tri-state `sealStatus`), instead of being scanned as records and silently truncating the sealed prefix; regression test damages a sealed trailer.
 
 ## Verification
 
