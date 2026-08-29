@@ -75,28 +75,15 @@ detail.
 
 ## Status
 
-**Shipped (2026-08-27): the single-member core, the pure cluster core, the
-cluster node loop, TTL cleanup end to end, and the embedded-host write
-path.** One process is a complete journal — append, read, follow, restart —
-with settings, TTL and checkpoint cleanup in the chain. On top of that sits
-the cluster core of [PRD 0003](docs/prds/0003-membership-and-leadership.md):
-the pure membership fold, election and epoch/merge rules (driven by the
-deterministic simulator, [OQ 27](docs/open-questions.md)), and the node
-loop over the wire — failure detection, election → epoch, admission
-(allowlist/open/prompt), and forward/broadcast/backfill, so real processes
-replicate: `coppiz serve` runs a node, members join live, appends through a
-follower replicate to the leader and back, and a healed partition merges
-deterministically. The leader's checkpoint cadence ([PRD
-0002](docs/prds/0002-ttl-and-staleness.md) phases 4–5) keeps every member's
-payloads dropping at the same chain position. A host embeds the library and
-writes through its member's loop (`cluster.ClusterNode.localAppend`), and
-`examples/` — `embed-single`, `embed-cluster`, `sidecar` — builds and tests
-each host shape ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)).
-`coppiz append`/`read`/`head` talk to a serving node over the wire when the
-data directory is locked ([OQ 47](docs/open-questions.md)); `coppiz status`,
-`coppiz members`, `coppiz doctor`, `coppiz settings set` and `coppiz admit`
-round out the CLI. The product is named `coppiz`
-([ADR 0004](docs/adrs/0004-the-product-is-named-coppiz.md)).
+Working today: a single process is a complete journal (append, read, follow,
+restart), and a cluster replicates for real — the pure membership fold,
+election and epoch/merge rules, the node loop over the wire, and settings,
+TTL and checkpoint cleanup all in the chain. A host embeds the library and
+writes through its member's loop. Not yet: federation
+([PRD 0006](docs/prds/0006-scaling-to-groups-sharding-and-parity.md)), the
+first host integration, and the service API. The full narrative is in
+*[Status and where things are](#status-and-where-things-are)* below, and
+what ships in what order in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Overview
 
@@ -205,7 +192,30 @@ Run the analysis gates alone:
 zig build lint
 ```
 
-## Where things are
+## Status and where things are
+
+**Shipped (2026-08-27): the single-member core, the pure cluster core, the
+cluster node loop, TTL cleanup end to end, and the embedded-host write
+path.** One process is a complete journal — append, read, follow, restart —
+with settings, TTL and checkpoint cleanup in the chain. On top of that sits
+the cluster core of [PRD 0003](docs/prds/0003-membership-and-leadership.md):
+the pure membership fold, election and epoch/merge rules (driven by the
+deterministic simulator, [OQ 27](docs/open-questions.md)), and the node
+loop over the wire — failure detection, election → epoch, admission
+(allowlist/open/prompt), and forward/broadcast/backfill, so real processes
+replicate: `coppiz serve` runs a node, members join live, appends through a
+follower replicate to the leader and back, and a healed partition merges
+deterministically. The leader's checkpoint cadence ([PRD
+0002](docs/prds/0002-ttl-and-staleness.md) phases 4–5) keeps every member's
+payloads dropping at the same chain position. A host embeds the library and
+writes through its member's loop (`cluster.ClusterNode.localAppend`), and
+`examples/` — `embed-single`, `embed-cluster`, `sidecar` — builds and tests
+each host shape ([PRD 0005](docs/prds/0005-embedding-the-library-as-the-product.md)).
+`coppiz append`/`read`/`head` talk to a serving node over the wire when the
+data directory is locked ([OQ 47](docs/open-questions.md)); `coppiz status`,
+`coppiz members`, `coppiz doctor`, `coppiz settings set` and `coppiz admit`
+round out the CLI. The product is named `coppiz`
+([ADR 0004](docs/adrs/0004-the-product-is-named-coppiz.md)).
 
 The full design lives in `docs/` — this table is the map; the detail is in
 the records, not here.

@@ -8,7 +8,9 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 ### Fixed
 
 - Documentation sweep (2026-08-29): the root README's Status section no
-  longer carries a superseded second "Shipped" paragraph; the CLI list in
+  longer carries a superseded second "Shipped" paragraph; the full status
+  narrative moved into a combined "Status and where things are" section at
+  the end, with a short Status summary up top; the CLI list in
   PRD 0005 and the RELEASES version note match the shipped node binary
   (no `--version` flag exists yet); PRD 0005's API sketch and PRD 0001's
   write path reflect the shipped library surface (no `write.ack` knob;
