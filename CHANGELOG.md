@@ -114,6 +114,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   folded a single record. The guard now lives in `survivorVs`, whose callers
   already close the connection on `null`.
 
+- The survivor of a healed partition now broadcasts its data re-slots as
+  re-slots. It applied them locally with the re-slot rule and put the
+  opposite flag on the wire, so every other member folded them through the
+  live rule and refused any journal-scoped `settings`, `checkpoint` or
+  `stale` from the losing branch with `NotLeader` - their author is the
+  losing leader. The survivor's fold advanced and nobody else's did. Unlike
+  the control chain, a data journal cannot infer the re-slot from
+  authorship, so the flag on the wire is its only signal.
+
 ### Added
 
 - A fourth example host, `examples/short-process/`: the command-line shape
