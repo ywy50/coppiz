@@ -43,6 +43,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A TCP connection no longer loses frames the kernel delivered together.
+  `recvFrame` built its read buffer per call, so bytes the socket read past
+  the current frame were consumed and then discarded - and TCP coalesces
+  freely, so those bytes are routinely the next frame. Losing a whole frame
+  was silent replication loss; losing part of one desynchronized the
+  connection. The buffer and its reader belong to the connection now.
+
 - A merge whose deferred `leave` re-slots refuse part way through no longer
   leaves freed payloads in the pending list. `reSlotDeferredLeaves` freed each
   payload in its loop but cleared the list only at the end, so an error left
