@@ -107,7 +107,7 @@ the clarification of the same day) and from RFC 0019's drivers:
    a version it does not know rather than misreading it.
 6. Entry size, journal count, and per-process memory are bounded by settings,
    not by what the host happens to allow. (The memory bound has no key in the
-   drafted schema and no criterion below - [OQ 61](../open-questions.md#oq-61).)
+   drafted schema and no criterion below - [OQ 61](../research/0009-memory-bound.md).)
 
 ## Non-goals
 
@@ -123,9 +123,9 @@ the clarification of the same day) and from RFC 0019's drivers:
   but a correct majority is not defended against a malicious minority that
   follows the protocol. The trust model is "one operator, authenticated
   members, defective-not-malicious writers". Whether that is the right model
-  is [open question 1](../open-questions.md#oq-1).
+  is [open question 1](../rfcs/0009-trust-model.md).
 - **No encryption at rest.** The host's disk is trusted. Wire encryption is
-  [open question 23](../open-questions.md#oq-23).
+  [open question 23](../rfcs/0008-wire-encryption.md).
 - **No multi-cluster federation in v1.** One cluster, its members, its
   journals; growing past one group is [PRD 0006](0006-scaling-to-groups-sharding-and-parity.md)'s
   later overlay, which rests on the format choices this PRD already makes
@@ -206,7 +206,7 @@ skew in seconds, not hours. Outside that assumption the consequences are
 visibility-only, never divergence: a skewed leader makes entries read as
 stale or expired early or late on other members, a backwards jump is
 clamped so expiry is delayed, never advanced, and the folds still agree
-([OQ 32](../open-questions.md#oq-32), resolved).
+(OQ 32, resolved).
 
 **Control entries.** Everything the journal knows about itself is an entry in
 the same chain, so it replicates by the same mechanism, is tamper-evident by
@@ -259,7 +259,7 @@ two-phase commit anywhere.
    (`write.ack = local | slotted`): when the local member has durably queued
    it, or when the slot is back. `local` is the AP behaviour (a partitioned
    member keeps working); `slotted` is the CP behaviour (a write is not
-   acknowledged until it has a position). Default is [open question 3](../open-questions.md#oq-3);
+   acknowledged until it has a position). Default is [open question 3](../rfcs/0037-write-ack-layer.md);
    the shipped path has no `write.ack` knob - `node.append`, the wire append
    and `localAppend` all return at the slot.
 
@@ -272,7 +272,7 @@ are still physically present (PRD 0002).
 
 **Backfill.** A member that was down, or has just joined, asks any member for
 slots after its last known `(epoch, seq)`; pages are bounded by
-`sync.page_bytes` (layer and value [OQ 56](../open-questions.md#oq-56)). The chain
+`sync.page_bytes` (layer and value [OQ 56](../rfcs/0038-sync-knobs-layer.md)). The chain
 lets it verify each page against the previous
 slot hash without trusting the peer. A member is `syncing` until it has
 reached the leader's head, and a `syncing` member is never leader-eligible
@@ -301,7 +301,7 @@ transfer or parity reconstruction, PRD 0006); a **sealed** segment - one
 behind the head that will never be appended to - has a recorded hash and is
 the unit parity works on. The unslotted queue is its own
 small append file, bounded by `sync.unslotted_max_bytes` (value and overflow
-behaviour [OQ 55](../open-questions.md#oq-55)).
+behaviour OQ 55).
 
 Everything else - membership,
 settings, leader, stale/expired sets - is folded from the log at open,
@@ -310,17 +310,17 @@ time.
 `fsync` policy is local config, not a chain setting
 (`storage.fsync = every | batched | never`; PRD 0004's layer rule); the
 default is `every` on the leader and `batched` on followers
-([open question 14](../open-questions.md#oq-14)).
+([open question 14](../research/0003-fsync-default-measurement.md)).
 
 **Multiple journals per cluster.** A cluster holds many journals; each has its
 own id, name, chain, and PRD 0002 settings ("schema"). Membership and
 leadership are cluster-level (one leader sequences all journals) in v1, to
-keep one fold; per-journal leadership is [open question 8](../open-questions.md#oq-8).
+keep one fold; per-journal leadership is [open question 8](../rfcs/0010-per-journal-leadership.md).
 The chain is per journal, not per cluster, because a journal is the unit
 PRD 0006 assigns to one group and encodes with parity - a cluster-wide chain
-could not be split ([open question 7](../open-questions.md#oq-7) leans that way
+could not be split (open question 7 leans that way
 for this reason). The count of journals is itself bounded by settings
-(`cluster.max_journals`; value unset, [OQ 55](../open-questions.md#oq-55)).
+(`cluster.max_journals`; value unset, OQ 55).
 
 **Dependencies.**
 
@@ -357,7 +357,7 @@ creates them is the source of truth):
 | Torn write at the segment tail | truncated at open, logged; the entries lost were never acknowledged past `local` |
 | Payload larger than `journal.max_entry_bytes` | refused at `append` with `too_large` before anything is written |
 | Unknown entry or slot `version` | refused with `unsupported_version`; the member keeps running on what it can read |
-| Author's `author_seq` has a gap | the slot is held, the leader requests the missing entries from the author; a gap that never fills is [open question 11](../open-questions.md#oq-11) |
+| Author's `author_seq` has a gap | the slot is held, the leader requests the missing entries from the author; a gap that never fills is open question 11 |
 | Disk full | `append` fails with the OS error; the member stops accepting writes but keeps serving reads and backfill |
 | Clock on the leader jumps backwards | `slot_ts_ms` is clamped to the previous slot's value; expiry is delayed, never advanced |
 
@@ -374,8 +374,8 @@ creates them is the source of truth):
 - [ ] (G5) A store or frame with `version + 1` is refused with
   `unsupported_version`, not misread.
 - [ ] (G6) `journal.max_entry_bytes`
-  ([OQ 36](../open-questions.md#oq-36); default unset there, like the other two's
-  values at [OQ 55](../open-questions.md#oq-55)), `cluster.max_journals`, and the
+  ([OQ 36](../research/0006-max-entry-size.md)); default unset there, like the other two's
+  values at OQ 55), `cluster.max_journals`, and the
   `sync.unslotted_max_bytes` queue bound are enforced and each has a test
   that trips it.
 - [ ] (G7) A member cannot produce a valid entry attributed to another member
@@ -383,14 +383,13 @@ creates them is the source of truth):
 
 ## Open questions / future work
 
-The cross-cutting register is [docs/open-questions.md](../open-questions.md);
-the ones that belong to the core specifically:
+Unresolved questions live with the record that will settle them - decisions
+in [the RFCs](../rfcs/), measurements in [the research notes](../research/).
+The ones that belong to the core specifically:
 
-- Whether the chain should be one per journal (as drafted) or one per
-  cluster spanning all journals. Per-journal keeps journals independently
-  prunable; per-cluster gives one seq for everything. (OQ 7)
-- Whether `author_ts_ms` belongs in the signed header at all, given it is
-  never used for ordering or expiry - it is there for consumers, and
-  removing it is cheaper before the format freezes than after. (OQ 13)
 - Snapshot format and when a member may serve a snapshot instead of slots
-  to a joining peer. (OQ 17)
+  to a joining peer ([RFC 0022](../rfcs/0022-snapshot-format.md), OQ 17).
+- Archival checkpoints, so slot count can be bounded under `retain = none`
+  ([RFC 0032](../rfcs/0032-archival-checkpoint.md), OQ 24).
+- The `journal.max_entry_bytes` default and the large-payload shape
+  ([research 0006](../research/0006-max-entry-size.md), OQ 36).

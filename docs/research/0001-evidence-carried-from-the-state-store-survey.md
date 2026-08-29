@@ -8,7 +8,7 @@ Scope and method, all read there on 2026-08-21; the evidence log gives the
 finer-grained source and date where one row covers it. The rows the public
 README cites - etcd, rqlite, dqlite, TigerBeetle, and the Zig-store-gap
 search - were reopened at their sources in this repo on 2026-08-27 and are
-marked **reopened** in the evidence log ([OQ 40](../open-questions.md#oq-40)); the
+marked **reopened** in the evidence log (OQ 40); the
 rest remain carried - reopen a source before quoting it as current.
 
 Research is evidence, not a decision: it records what exists, how good it is,
@@ -42,7 +42,7 @@ inherit as requirements?
   already had a prefix silently rewritten - `high` on the reasoning, resting
   on the single-operator premise (research option R, 2026-08-19). coppiz
   adopts the chain and signatures and declines BFT; the premise is
-  [OQ 1](../open-questions.md#oq-1).
+  [OQ 1](../rfcs/0009-trust-model.md).
 - **Quorum stores cannot serve n = 2 and stall a minority partition;
   gossip/CRDT stores converge but "converge ≠ correct".** etcd/Consul/
   rqlite/dqlite need a majority; Corrosion/Marmot accept writes everywhere and
@@ -128,7 +128,7 @@ clanker-specific and must not leak into the library's API.
 | `networkAllowed` ignores port | clanker `src/sandbox/host.zig` per RFC 0019 | 2026-08-19 | high |
 | Improve ledger prefix rewritten | clanker bug report 2026-08-17 | 2026-08-17 | high |
 | Spike journeys and 1 MiB page bound | clanker spike note | 2026-08-19 | high |
-| Survey scope: 17 candidates at Draft 4, plus R/S/T at Draft 5; option T *Packaging* names the standalone public project and "which leads is the new project's first design decision"; the stage-1 spike still unrun; `networkAllowed` port blind; improve-ledger rewrite named at open question 14 | clanker `docs/rfcs/0019-shared-state-store.md`, reopened at source (README and PRD 0001 cite the survey; [OQ 40](../open-questions.md#oq-40)) | 2026-08-24 (this repo) | high |
+| Survey scope: 17 candidates at Draft 4, plus R/S/T at Draft 5; option T *Packaging* names the standalone public project and "which leads is the new project's first design decision"; the stage-1 spike still unrun; `networkAllowed` port blind; improve-ledger rewrite named at open question 14 | clanker `docs/rfcs/0019-shared-state-store.md`, reopened at source (README and PRD 0001 cite the survey; OQ 40) | 2026-08-24 (this repo) | high |
 | etcd: majority quorum (n/2)+1, odd member counts recommended, the majority side survives a partition | [etcd FAQ](https://etcd.io/docs/v3.5/faq/) | 2026-08-27 (this repo, reopened) | high |
 | rqlite: Raft consensus, one leader, CP; writes forward to the leader; quorum required for progress | [rqlite FAQ](https://rqlite.io/docs/faq/) | 2026-08-27 (this repo, reopened) | high |
 | dqlite: embeddable C library, replication based on Raft | [canonical/dqlite README](https://github.com/canonical/dqlite) | 2026-08-27 (this repo, reopened) | high |
@@ -138,10 +138,10 @@ clanker-specific and must not leak into the library's API.
 ## Open questions
 
 - The README-facing external claims are reopened in this repo (2026-08-27,
-  marked in the evidence log; [OQ 40](../open-questions.md#oq-40) resolved); the
+  marked in the evidence log; OQ 40 resolved); the
   remaining carried rows stay flagged and are not cited by the README.
 - Whether clanker's stage-1 spike runs before or after coppiz's core exists,
-  and which code survives ([OQ 30](../open-questions.md#oq-30)).
+  and which code survives ([OQ 30](../rfcs/0033-clanker-integration-path.md)).
 
 ## What would change the answer
 

@@ -92,7 +92,7 @@ is a new set of keys, not a schema break.
 
 A `settings` entry names its scope and, for
 journal scope, the journal. Cluster-scoped settings live in the cluster's
-control journal - see [open question 7](../open-questions.md#oq-7) on whether that
+control journal - see [open question 7](0001-journal-core.md) on whether that
 is a separate chain or the first journal.
 
 **Bootstrap.** The founder's local config carries `[genesis]` with the initial
@@ -156,7 +156,7 @@ mechanism that PRD 0002 and PRD 0003 populate.
 4. `src/config/local.zig` - `coppiz.toml` parsing with a closed key set
    (unknown key = error naming the key and, when it matches a journal
    setting, saying which layer it belongs to). TOML parser is [open
-   question 35](../open-questions.md) (vendor clanker's, or hand-roll the
+   question 35] (vendor clanker's, or hand-roll the
    subset).
 5. `zig build docs` → `docs/configuration.md`, pinned by a test.
 
@@ -170,7 +170,7 @@ mechanism that PRD 0002 and PRD 0003 populate.
 | Valid keys, invalid combination | refused, naming the cross-key rule |
 | Journal setting found in local config | startup error naming the key and the layer it belongs to |
 | Local `[genesis]` differs from the chain after init | ignored; `coppiz doctor` warns |
-| Two leaders append conflicting `settings` during a partition | both slotted on their branches; after merge the surviving branch's value wins for the merged chain *and* the losing branch's `settings` entries are re-slotted as no-ops - re-applying them is [open question 33](../open-questions.md#oq-33) |
+| Two leaders append conflicting `settings` during a partition | both slotted on their branches; after merge the surviving branch's value wins for the merged chain *and* the losing branch's `settings` entries are re-slotted as no-ops - re-applying them is [open question 33](0003-membership-and-leadership.md) |
 
 ## Acceptance criteria
 
@@ -190,9 +190,9 @@ mechanism that PRD 0002 and PRD 0003 populate.
 
 ## Open questions / future work
 
-- Where cluster-scoped settings live ([OQ 7](../open-questions.md#oq-7)).
-- Merge semantics for conflicting `settings` on two branches ([OQ 33]).
-- TOML parser choice ([OQ 35]).
+- Where cluster-scoped settings live ([OQ 7](0001-journal-core.md)).
+- Merge semantics for conflicting `settings` on two branches (OQ 33).
+- TOML parser choice (OQ 35).
 - Whether settings should be signed by an operator key distinct from member
   keys, so a compromised member cannot reconfigure the cluster even as
-  leader ([OQ 22]).
+  leader (OQ 22).

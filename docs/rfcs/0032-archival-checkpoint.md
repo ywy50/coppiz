@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 24](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 24 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -140,8 +140,8 @@ the door open.
 
 ## References
 
-- [OQ 24](../open-questions.md) - the register entry this RFC addresses.
+- OQ 24 (historical) - the question this RFC addresses.
 - [PRD 0002](../prds/0002-ttl-and-staleness.md) / ADR 0002 - the growth
   consequence.
 - [RFC 0022](0022-snapshot-format.md) - the sibling (snapshot) mechanism.
-- [OQ 54](../open-questions.md) - the measurement list.
+- [OQ 54](../research/0007-tier-number-measurements.md) - the measurement list.

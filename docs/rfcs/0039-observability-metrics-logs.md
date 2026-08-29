@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 29](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 29 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -145,7 +145,7 @@ A exactly.
 
 ## References
 
-- [OQ 29](../open-questions.md) - the register entry this RFC addresses.
+- OQ 29 (historical) - the question this RFC addresses.
 - [ADR 0003](../adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md) -
   the no-HTTP constraint the exposition format respects.
 - [RFC 0007](0007-service-api-auth.md) - the auth question a new verb raises.

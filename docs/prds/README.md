@@ -3,8 +3,9 @@
 Product requirement docs for coppiz. Schema and quality bar:
 [`TEMPLATE.md`](TEMPLATE.md). Roadmap narrative and Done/Planned index:
 [`../ROADMAP.md`](../ROADMAP.md). Architecture decisions that constrain
-PRDs: [`../adrs/`](../adrs/). Unknowns every PRD points into:
-[`../open-questions.md`](../open-questions.md).
+PRDs: [`../adrs/`](../adrs/). Unresolved questions a PRD points into live
+with the record that will settle them: decisions in
+[`../rfcs/`](../rfcs/), measurements in [`../research/`](../research/).
 
 ## Quick start
 

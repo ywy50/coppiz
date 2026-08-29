@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 17](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 17 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -134,8 +134,8 @@ adding serve later is additive.
 
 ## References
 
-- [OQ 17](../open-questions.md) - the register entry this RFC addresses.
+- OQ 17 (historical) - the question this RFC addresses.
 - [PRD 0001](../prds/0001-journal-core.md) - the fold and the deferral.
-- [OQ 54](../open-questions.md) - the join/backfill measurement.
-- [OQ 24](../open-questions.md#oq-24) - the sibling chain-level
+- [OQ 54](../research/0007-tier-number-measurements.md) - the join/backfill measurement.
+- [OQ 24](0032-archival-checkpoint.md) - the sibling chain-level
   mechanism (archival checkpoint, to become an RFC).

@@ -107,6 +107,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Changed
 
+- The open-questions register (`docs/open-questions.md`) is gone. Every
+  decision-shaped open question migrated into an [RFC](docs/rfcs/README.md)
+  (0001–0039); the measurement questions moved to
+  [research](docs/research/README.md) notes (0004–0009); the CPU-spin
+  investigation lives in its [report](docs/reports/investigations/2026-08-29-oq62-index-rebuild-hardening.md).
+  `OQ n` in older records is a historical ID - the glossary defines it, and
+  citations now link to the record that settled the question.
 - `storage.fsync` now governs the whole write path: the unslotted queue
   honors the knob like the store does, and the queue's drain barriers
   (`remove`/`clear`) no longer sync (a lost trim replays idempotently).
@@ -176,7 +183,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the same set at the same checkpoint slot under both `ttl.retain` values
   (G4), and a follower skewed ±1 h shows, not stores, differently (G6).
 - The replication wire (PRD 0003 phase 4, [OQ
-  19](docs/open-questions.md) decided - own binary framing over one TCP
+  19](docs/prds/0003-membership-and-leadership.md) decided - own binary framing over one TCP
   connection): `src/net/` - length-prefixed frames with a versioned body,
   the typed message set (hello/hello_ack, append/ack, forward, slot,
   sync_req/sync_page, heartbeat, read_req/read_page, settings,
@@ -240,7 +247,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the survivor rule shared with election. The four control kinds fold in
   `chain.zig` instead of being refused as unimplemented, and the fold hash
   now covers the epoch, the last merge and member addresses.
-- The deterministic simulator ([OQ 27](docs/open-questions.md#oq-27)): a seeded,
+- The deterministic simulator ([OQ 27](docs/prds/0003-membership-and-leadership.md)): a seeded,
   single-threaded world of in-memory nodes driving the pure
   fold/election/merge functions with injected partitions, crashes, clock
   skew and reordered delivery. Scenarios: partition-heal-merge (G7 core),
@@ -248,10 +255,10 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   reorder, `configured` + `stall` (G4 core), and clock skew. It pins the
   merge discipline - on heal every node re-folds from the last common slot.
 - The Apache-2.0 licence ([ADR 0006](docs/adrs/0006-the-library-is-apache-2-0-licensed.md),
-  [OQ 18](docs/open-questions.md#oq-18) resolved): the `LICENSE` file and the
+  [OQ 18](docs/adrs/0006-the-library-is-apache-2-0-licensed.md) resolved): the `LICENSE` file and the
   `license` field in `build.zig.zon`, with `LICENSE` carried in the
   package's `.paths`. The external claims the README cites were reopened at
-  their sources ([OQ 40](docs/open-questions.md#oq-40) resolved), recorded in
+  their sources ([OQ 40](docs/research/0001-evidence-carried-from-the-state-store-survey.md)) resolved), recorded in
   [research 0001](docs/research/0001-evidence-carried-from-the-state-store-survey.md)'s
   evidence log with this repo's read dates.
 
@@ -438,7 +445,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   test pins a directory link through the helper beside the file-link one.
 
 - PRD 0001's acceptance criterion G6 now cites [OQ
-  36](docs/open-questions.md) for `journal.max_entry_bytes`, whose default is
+  36](docs/research/0006-max-entry-size.md) for `journal.max_entry_bytes`, whose default is
   unset there: the criterion demands the bound be enforced with a trip test,
   but its open question was reachable only from the register and the roadmap,
   while the criterion's other two bounds both cited OQ 55 from the same PRD.
@@ -891,7 +898,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   where checkouts and commits are made.
 
 - PRD 0002's open-questions list now cites [OQ
-  57](docs/open-questions.md), which concerns that PRD's own schema - whether
+  57](docs/prds/0002-ttl-and-staleness.md), which concerns that PRD's own schema - whether
   the `stale` cause is switchable per journal as ADR 0002 records - but was
   reachable only from the ADR and the register, not from the schema it is
   about.
@@ -974,7 +981,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   extends it with `ownership_transfer`, which the PRD used without noting the
   extension; and the failure-detector defaults (`cluster.heartbeat_ms` 1 s,
   `cluster.suspect_after_ms` 5 s) now carry their inline citation to
-  [OQ 37](docs/open-questions.md#oq-37), where they are registered as placeholders -
+  [OQ 37](docs/rfcs/0034-leader-lease.md), where they are registered as placeholders -
   every other placeholder default in the PRDs already named its open question.
 
 - Spec-currency pass: PRD 0004's acceptance criteria now cover the second
@@ -985,7 +992,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   indent that broke its bullet's continuation alignment.
 
 - Documentation-currency pass: the slot-growth mechanism parked at [OQ
-  24](docs/open-questions.md) was named three ways across records - *chain
+  24](docs/rfcs/0032-archival-checkpoint.md) was named three ways across records - *chain
   checkpoint* (PRD 0002), *archival chain checkpoint* (ADR 0002, the
   roadmap) and *archival checkpoint* (the register). Every mention now says
   *archival checkpoint*, and the glossary defines it: four records used the
@@ -1060,7 +1067,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   `networkAllowed`, and the improve-ledger rewrite. Research 0001's evidence
   log now carries that row with its read date, so the "seventeen stores"
   figure is traceable in-repo instead of resting on the carried note alone
-  ([OQ 40](docs/open-questions.md#oq-40) stays open for the remaining rows); the
+  ([OQ 40](docs/research/0001-evidence-carried-from-the-state-store-survey.md)) stays open for the remaining rows); the
   glossary defines `genesis` and `segment`, which every record used and only
   their derivatives (`founder`, `sealed segment`) defined.
 

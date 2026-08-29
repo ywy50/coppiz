@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 28](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 28 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -154,10 +154,10 @@ that bounds memory, keeps writers fast, and reuses an existing path.
 
 ## References
 
-- [OQ 28](../open-questions.md) - the register entry this RFC addresses.
+- OQ 28 (historical) - the question this RFC addresses.
 - [PRD 0003](../prds/0003-membership-and-leadership.md) - the broadcast,
   sync and failure-detector paths the policy uses.
-- [OQ 61](../open-questions.md) - the per-process memory bound the window
+- [OQ 61](../research/0009-memory-bound.md) - the per-process memory bound the window
   must respect.
 - [RFC 0011](0011-topology-past-32.md) - the star topology the policy
   will run under past 32 members.

@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 5](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 5 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -148,8 +148,8 @@ for the rare, deliberate change.
 
 ## References
 
-- [OQ 5](../open-questions.md) - the register entry this RFC addresses.
+- OQ 5 (historical) - the question this RFC addresses.
 - [PRD 0003](../prds/0003-membership-and-leadership.md) - the frozen rule
   and the drafted offline procedure.
-- [OQ 22](../open-questions.md) / RFC 0017 - the operator key this
+- [OQ 22](0017-key-rotation-operator-key.md) / RFC 0017 - the operator key this
   decision interacts with.

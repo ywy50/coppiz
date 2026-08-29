@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 25](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 25 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -154,7 +154,7 @@ change.
 
 ## References
 
-- [OQ 25](../open-questions.md) - the register entry this RFC addresses.
+- OQ 25 (historical) - the question this RFC addresses.
 - [PRD 0003](../prds/0003-membership-and-leadership.md) - the failure
   detector, the full mesh, and the 32 cap.
 - [PRD 0006](../prds/0006-scaling-to-groups-sharding-and-parity.md) - the

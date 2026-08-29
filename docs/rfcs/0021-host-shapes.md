@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 46](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 46 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -139,7 +139,7 @@ problem".
 
 ## References
 
-- [OQ 46](../open-questions.md) - the register entry this RFC addresses.
+- OQ 46 (historical) - the question this RFC addresses.
 - [PRD 0005](../prds/0005-embedding-the-library-as-the-product.md) - the
   examples and the host-agnostic rule.
 - [ADR 0003](../adrs/0003-batteries-included-no-external-infrastructure-at-any-size.md) -

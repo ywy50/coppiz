@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 26](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 26 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -137,7 +137,7 @@ untouched.
 
 ## References
 
-- [OQ 26](../open-questions.md) - the register entry this RFC addresses.
+- OQ 26 (historical) - the question this RFC addresses.
 - [PRD 0001](../prds/0001-journal-core.md) - the version rule.
 - [RELEASES.md](../../RELEASES.md) - the release policy that names this
   procedure.

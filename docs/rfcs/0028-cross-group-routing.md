@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 51](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 51 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -130,8 +130,8 @@ default, lag as an explicit choice.
 
 ## References
 
-- [OQ 51](../open-questions.md) - the register entry this RFC addresses.
+- OQ 51 (historical) - the question this RFC addresses.
 - [PRD 0006](../prds/0006-scaling-to-groups-sharding-and-parity.md) - the
   routing draft.
 - [RFC 0018](0018-read-consistency.md) - the read promise this extends.
-- [OQ 3](../open-questions.md) - the ack thread this inherits.
+- [OQ 3](0037-write-ack-layer.md) - the ack thread this inherits.

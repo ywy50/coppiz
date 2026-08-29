@@ -3,8 +3,7 @@
 coppiz is a replicated, append-only store in **Zig 0.16.0**, standard
 library only ([ADR 0001](docs/adrs/0001-zig-0-16-standard-library-only-for-the-core.md)).
 It is in the design phase: read [docs/README.md](docs/README.md) before
-touching anything, and [docs/open-questions.md](docs/open-questions.md)
-before deciding anything.
+touching anything, and the open [RFCs](docs/rfcs/) before deciding anything.
 
 coppiz is general-purpose. clanker is the first host and the origin, and its
 constraints (static musl binary, sandboxed guests, no second daemon) are kept
@@ -70,13 +69,18 @@ recommendation with confidence 0–10); an ADR is a decision made (title is the
 choice, never edited to reverse - supersede and link forward); research is
 evidence with read dates. Neither RFC nor research requires the other.
 
-- Every unknown goes in [docs/open-questions.md](docs/open-questions.md) with
-  a stable number; PRDs and RFCs cite `OQ n`. Resolving one adds a
-  **Resolved** line; it is never deleted.
+There is no open-questions register: an unresolved question goes to the
+record that will settle it - a decision-shaped question (candidates and a
+recommendation) becomes an [RFC](docs/rfcs/), a measurement question ("what
+does the data say?") becomes a [research](docs/research/) note, an observed
+failure becomes a [report](docs/reports/README.md). `OQ n` in older records
+is a historical ID; the record that settled it names it.
+
 - Every term is defined once in [docs/glossary.md](docs/glossary.md); a new
   term lands there in the same commit that introduces it.
 - Inventories (`docs/*/README.md`) are hand-maintained until tooling exists
-  (OQ 41): creating a record means adding its row.
+  ([RFC 0035](docs/rfcs/0035-record-store-tooling.md)): creating a record
+  means adding its row.
 - **Write only what you checked.** A record is read as fact by someone who
   cannot tell verified from inferred. Give the mechanism and the command;
   mark unverified as unverified, or omit it. Claims carried from clanker's

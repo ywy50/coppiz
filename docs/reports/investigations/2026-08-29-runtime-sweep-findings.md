@@ -94,5 +94,5 @@ fixed before merge).
   [queue and wire](2026-08-29-runtime-sweep-queue-wire.md),
   [sim and micro](2026-08-29-runtime-sweep-sim-micro.md)
 - [RFC 0003 - what does `storage.fsync` govern?](../../rfcs/0003-append-durability-fsync-policy.md)
-- [OQ 62 - the cluster e2e CPU spin](../../open-questions.md)
+- [OQ 62 - the cluster e2e CPU spin](2026-08-29-oq62-index-rebuild-hardening.md)
 - Prior art: [2026-08-28 - making `zig build test` faster without dropping tests](2026-08-28-test-suite-quick-wins.md)

@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 39](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 39 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -140,7 +140,7 @@ failure (lost member, not lost cluster).
 
 ## References
 
-- [OQ 39](../open-questions.md) - the register entry this RFC addresses.
+- OQ 39 (historical) - the question this RFC addresses.
 - [PRD 0001](../prds/0001-journal-core.md) - torn-tail recovery and the
   chain's arbitration.
 - [RELEASES.md](../../RELEASES.md) - the first-release list that names the

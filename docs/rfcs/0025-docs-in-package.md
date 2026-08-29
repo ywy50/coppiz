@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 59](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 59 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -42,8 +42,8 @@ a specific version; docs ride it either way).
 The `.paths` list excludes `docs/` entirely. The README links the design
 records, but the links point at a repository the host may not have
 fetched (a fetched package's README links to `docs/...` that are absent
-from the package). The glossary, the register and the PRDs are all under
-`docs/`.
+from the package). The glossary, the PRDs, the ADRs, the RFCs and the
+research notes are all under `docs/`.
 
 ## Options considered
 
@@ -126,7 +126,7 @@ a host pins the list.
 
 - Does the design/operations boundary hold for the reports a consumer
   might genuinely need (e.g. a known-bug report)? (the docs taxonomy;
-  the register already points at open bugs)
+  the bug reports already name their open follow-ups)
 
 ## Next steps / action items
 
@@ -136,9 +136,9 @@ a host pins the list.
 
 ## References
 
-- [OQ 59](../open-questions.md) - the register entry this RFC addresses.
+- OQ 59 (historical) - the question this RFC addresses.
 - [PRD 0001](../prds/0001-journal-core.md) - the "a document is the spec"
   rule.
 - [docs/README.md](../README.md) - the taxonomy the boundary uses.
-- [OQ 41](../open-questions.md) - the inventory tooling that would
+- [OQ 41](0035-record-store-tooling.md) - the inventory tooling that would
   maintain the list.

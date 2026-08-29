@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 31](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 31 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -138,5 +138,5 @@ asks for it, without taxing the common case; C would tax everything.
 
 ## References
 
-- [OQ 31](../open-questions.md) - the register entry this RFC addresses.
+- OQ 31 (historical) - the question this RFC addresses.
 - [PRD 0001](../prds/0001-journal-core.md) - the local read path.

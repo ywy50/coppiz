@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 6](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 6 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -122,7 +122,7 @@ change and a trust-model revision.
 
 ## References
 
-- [OQ 6](../open-questions.md) - the register entry this RFC addresses.
+- OQ 6 (historical) - the question this RFC addresses.
 - [PRD 0002](../prds/0002-ttl-and-staleness.md) - the `stale.who` key.
 - [RFC 0009](0009-trust-model.md) - the boundary B would cross.
 - [RFC 0015](0015-eviction.md) - the cleanup path for dead members.

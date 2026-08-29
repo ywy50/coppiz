@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 52](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 52 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -129,7 +129,7 @@ without a side channel) is met by the shipped chain exchange.
 
 ## References
 
-- [OQ 52](../open-questions.md) - the register entry this RFC addresses.
+- OQ 52 (historical) - the question this RFC addresses.
 - [PRD 0001](../prds/0001-journal-core.md) - the headers and the freeze.
 - [PRD 0003](../prds/0003-membership-and-leadership.md) - member-id
   uniqueness.

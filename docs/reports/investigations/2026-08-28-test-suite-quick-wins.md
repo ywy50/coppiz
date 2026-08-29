@@ -13,7 +13,7 @@
 - **Resolution:** implemented and measured - the test step now installs only
   the `coppiz` binary; the suite's remaining wall clock is e2e runtime, which
   the measured profile confirms is inherent to what the tests verify. One
-  follow-up risk (an intermittent CPU spin) is [OQ 62](../../open-questions.md#oq-62).
+  follow-up risk (an intermittent CPU spin) is [OQ 62](2026-08-29-oq62-index-rebuild-hardening.md).
 
 ## Status
 
@@ -171,7 +171,7 @@ worker threads: twice at `e2e (G4)` and once at the journal member-key test.
 The gate (`zig build test`) did not reproduce it in three full runs, and
 stacks could not be captured (ptrace blocked). The loop, mailbox and hub
 transport are all semaphore-based (no busy-poll found by reading). Tracked
-as [OQ 62](../../open-questions.md#oq-62) - before it is resolved, a direct
+as [OQ 62](2026-08-29-oq62-index-rebuild-hardening.md) - before it is resolved, a direct
 `test`-binary run can peg a core indefinitely and a `zig build test` run
 could hit it intermittently.
 
@@ -261,7 +261,7 @@ cause is still unknown.
   [2026-08-28 - PR #19's install-only-coppiz wiring broke the G2 sidecar test](../bugs/2026-08-28-g2-sidecar-needs-install.md),
   [2026-08-28 - `ServingProc.stop` burns 5 s per killed serve](../bugs/2026-08-28-servingproc-stop-zombie-poll.md)
   (all Resolved by this work)
-- Follow-up: [OQ 62](../../open-questions.md#oq-62) - the intermittent CPU spin
+- Follow-up: [OQ 62](2026-08-29-oq62-index-rebuild-hardening.md) - the intermittent CPU spin
 - Code: `build.zig` (addChecks at build.zig:160-233; examples at
   build.zig:65-74; lint steps at build.zig:207-232)
 - Tests that spawn the binary: `src/main.zig` (`BinTest.run`/`spawn`,

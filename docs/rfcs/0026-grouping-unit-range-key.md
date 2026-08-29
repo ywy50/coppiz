@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 48](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 48 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -122,7 +122,7 @@ author-prefix is the right granularity without a payload contract.
 
 ## References
 
-- [OQ 48](../open-questions.md) - the register entry this RFC addresses.
+- OQ 48 (historical) - the question this RFC addresses.
 - [PRD 0006](../prds/0006-scaling-to-groups-sharding-and-parity.md) - the
   ownership and split-key draft.
 - [RFC 0021](0021-host-shapes.md) - the host shapes this depends on.

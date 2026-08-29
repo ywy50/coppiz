@@ -2,7 +2,7 @@
 
 ## Status
 
-Discussion - opened 2026-08-29. Addresses [OQ 22](../open-questions.md) (the
+Discussion - opened 2026-08-29. Addresses OQ 22 (the
 register keeps the stable pointer).
 
 An RFC is a *request for comment*: it presents the options and a recommendation
@@ -153,7 +153,7 @@ change. C is additive.
 
 ## References
 
-- [OQ 22](../open-questions.md) - the register entry this RFC addresses.
+- OQ 22 (historical) - the question this RFC addresses.
 - [PRD 0003](../prds/0003-membership-and-leadership.md) - member identity
   and the `join` payload.
 - [RFC 0009](0009-trust-model.md) - the trust model the operator key

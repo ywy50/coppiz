@@ -25,7 +25,7 @@ inside; make a group the leader for a specific part of the journal
 (sharding); and, to save space, break the journal down across groups with
 **data parity** instead of full copies. Groups use the same leadership
 modes and concurrency model as members do, so no particular group count is
-required - confirmed 2026-08-21, [OQ 49](../open-questions.md#oq-49) resolved.
+required - confirmed 2026-08-21, OQ 49 resolved.
 
 The risk this PRD exists to prevent: a core that quietly assumes "one
 cluster, one chain, every member has everything" in a place that is
@@ -70,7 +70,7 @@ prohibitive after the on-disk and wire formats freeze.
 The same binary and the same settings schema at every tier; what changes is
 which mechanisms are switched on. Numbers are the *design intent* - where a
 mechanism is expected to be needed - not measurements; the first
-measurements replace them ([OQ 54](../open-questions.md#oq-54)).
+measurements replace them ([OQ 54](../research/0007-tier-number-measurements.md)).
 
 | Tier | Instances | Topology | What is new at this tier | PRD |
 |---|---|---|---|---|
@@ -127,7 +127,7 @@ healthy group is marked unreachable every time its leader rotates.
 ### Ownership: a group is leader for part of the journal space
 
 The unit of ownership is a **journal** (the chain-per-journal choice in
-[OQ 7](../open-questions.md#oq-7) is what makes this clean: a journal is a
+[OQ 7](0001-journal-core.md) is what makes this clean: a journal is a
 self-contained chain that can live in one group). The federation's control
 journal maps `journal id → owning group`. Inside the owning group, nothing is
 different from tier 1: that group's leader sequences, its members hold the
@@ -174,7 +174,7 @@ sealed segments older than `storage.parity_after`; the live tail is always
 fully replicated in the owning group. Reed–Solomon over GF(2⁸) is the
 obvious code and is implementable with the standard library ([ADR
 0001](../adrs/0001-zig-0-16-standard-library-only-for-the-core.md)); whether
-it is the right choice is [OQ 50](../open-questions.md#oq-50).
+it is the right choice is [OQ 50](../rfcs/0027-parity-code.md).
 
 ### What the core must get right now
 
@@ -234,7 +234,7 @@ roadmap):
 
 - [ ] (G1) Size-1 append latency is measured as local disk write cost with
   no socket opened; reported with the first measurement set ([OQ
-  54](../open-questions.md)).
+  54](../research/0007-tier-number-measurements.md)).
 - [ ] (G2) PRD 0003's acceptance criteria pass unchanged when the cluster
   is a member of a federation.
 - [ ] (G3) Federation membership and election are the same source files as
@@ -252,10 +252,19 @@ roadmap):
 
 ## Open questions / future work
 
-All in [the register](../open-questions.md): grouping unit and range key
-(OQ 48), the parity code and
-its reconstruction cost (OQ 50), cross-group routing and read semantics
-(OQ 51), what group identity the core headers must carry now (OQ 52),
-membership and discovery at 10⁵ instances (OQ 53), and the measurements that
-replace the tier numbers (OQ 54). OQ 49 (uneven group count) is resolved -
-see *A group is the system* above.
+Each is explored in its RFC:
+
+- Grouping unit and range key - [RFC 0026](../rfcs/0026-grouping-unit-range-key.md)
+  (OQ 48).
+- The parity code and its reconstruction cost -
+  [RFC 0027](../rfcs/0027-parity-code.md) (OQ 50).
+- Cross-group routing and read semantics -
+  [RFC 0028](../rfcs/0028-cross-group-routing.md) (OQ 51).
+- What group identity the core headers must carry now -
+  [RFC 0029](../rfcs/0029-group-identity-in-headers.md) (OQ 52).
+- Membership and discovery at 10⁵ instances -
+  [RFC 0030](../rfcs/0030-membership-discovery.md) (OQ 53).
+
+The tier numbers wait on measurement
+([research 0007](../research/0007-tier-number-measurements.md), OQ 54). OQ 49
+(uneven group count) is resolved - see *A group is the system* above.
