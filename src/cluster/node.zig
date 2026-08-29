@@ -430,6 +430,85 @@ pub const ClusterNode = struct {
         }
     }
 
+    // -- the simulator seam (OQ 27's second half) ----------------------------
+    //
+    // `sim.LoopWorld` drives this loop deterministically: no `start()`, so
+    // no loop task, no timer task, no reader task and no sockets. It owns
+    // the wire, connectivity and liveness, and needs exactly these eight
+    // entry points to do it. They are `pub` only because the simulator is
+    // another module; each is a thin call onto the same handler the running
+    // loop uses, so a scenario exercises the shipped state machine and not
+    // a copy of it.
+    //
+    // Nothing outside `src/sim/` may call these: they assume the caller is
+    // the only thread touching this node.
+
+    /// Registers a connection the world made, in place of a dial or an
+    /// accept, and returns its id. Unlike `onConnReady` it spawns no reader
+    /// - the world delivers frames itself.
+    pub fn simRegisterConn(self: *ClusterNode, conn: transport.Conn, outbound: bool) !u64 {
+        const conn_id = self.next_conn_id;
+        self.next_conn_id += 1;
+        try self.conns.put(self.allocator, conn_id, .{ .conn = conn, .outbound = outbound });
+        return conn_id;
+    }
+
+    /// Sends this member's `hello`, the first frame of a dial.
+    pub fn simSendHello(self: *ClusterNode, conn_id: u64) !void {
+        const hello = try self.buildHello();
+        defer self.allocator.free(hello);
+        const cs = self.conns.get(conn_id) orelse return error.NoConn;
+        try cs.conn.send(self.io, hello);
+    }
+
+    /// Delivers one frame, exactly as the loop does for a `.frame` event.
+    pub fn simDeliver(self: *ClusterNode, conn_id: u64, body: []const u8) void {
+        self.onFrame(conn_id, body) catch self.closeConn(conn_id);
+    }
+
+    /// One periodic pass: heartbeats, failure detection, election, the
+    /// checkpoint cadence, backfill.
+    pub fn simTick(self: *ClusterNode) !void {
+        try self.onTick();
+    }
+
+    /// Clears every pending redial. The world owns connectivity, so
+    /// `onTick` must never reach `spawnDial` - a dial would spawn a task
+    /// and take the run off the driving thread.
+    pub fn simClearRedials(self: *ClusterNode) void {
+        var it = self.members.valueIterator();
+        while (it.next()) |ms| ms.dial_at_ms = 0;
+        var sit = self.seed_retry.valueIterator();
+        while (sit.next()) |at| at.* = std.math.maxInt(u64);
+    }
+
+    /// Whether the loop has shut this connection down and is waiting for
+    /// the reader's peer-gone notice to destroy it.
+    pub fn simConnClosing(self: *ClusterNode, conn_id: u64) bool {
+        const cs = self.conns.get(conn_id) orelse return false;
+        return cs.closing;
+    }
+
+    /// The reader's peer-gone notice, which is what destroys a connection.
+    pub fn simPeerGone(self: *ClusterNode, conn_id: u64) void {
+        self.onPeerGone(conn_id);
+    }
+
+    /// A cluster-scoped settings change, the write `coppiz settings set`
+    /// makes. The ack goes out on `conn_id` like any other.
+    pub fn simSettings(self: *ClusterNode, conn_id: u64, changes: []const u8) !void {
+        try self.onSettings(conn_id, .{ .journal = "__cluster__", .changes = changes });
+    }
+
+    /// Backdates the last heartbeat heard from `member_id`, which is what a
+    /// severed link does. `elapsedMs` reads the real monotonic clock and has
+    /// no seam, so this is how the simulator reaches the suspect branch
+    /// without waiting `cluster.suspect_after_ms` in real time.
+    pub fn simExpireHeartbeat(self: *ClusterNode, member_id: [16]u8) void {
+        const ms = self.members.getPtr(member_id) orelse return;
+        ms.last_heard_ms = 1;
+    }
+
     /// Requests a clean shutdown: the loop exits on the next event.
     pub fn stop(self: *ClusterNode) void {
         self.stopped.store(true, .release);
