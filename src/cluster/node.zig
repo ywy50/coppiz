@@ -306,6 +306,13 @@ pub const ClusterNode = struct {
     merging_from: ?u64 = null,
     merge_buffers: std.AutoHashMapUnmanaged([16]u8, std.ArrayListUnmanaged(u8)) = .empty,
     merge_pending: std.ArrayListUnmanaged([16]u8) = .empty,
+    /// Control `leave` entries deferred by doMergeControl: a re-slotted
+    /// leave removes its target from the member table, and a data branch
+    /// whose author it removes would then fail applyData's author lookup —
+    /// so the leaves re-slot only after every data branch has folded (bug
+    /// 2026-08-29-merge-data-reslot-refusals). The entries own their
+    /// payloads.
+    merge_pending_leaves: std.ArrayListUnmanaged(entry.Entry) = .empty,
 
     /// Seed addresses not yet connected to any member, with the next
     /// retry time (the admitter may not be listening when a joiner starts).
@@ -356,6 +363,8 @@ pub const ClusterNode = struct {
         while (bit.next()) |buf| buf.deinit(self.allocator);
         self.merge_buffers.deinit(self.allocator);
         self.merge_pending.deinit(self.allocator);
+        for (self.merge_pending_leaves.items) |en| self.allocator.free(en.payload);
+        self.merge_pending_leaves.deinit(self.allocator);
         var sit = self.seed_retry.keyIterator();
         while (sit.next()) |addr| self.allocator.free(addr.*);
         self.seed_retry.deinit(self.allocator);
@@ -777,6 +786,8 @@ pub const ClusterNode = struct {
             while (bit.next()) |buf| buf.deinit(self.allocator);
             self.merge_buffers.clearRetainingCapacity();
             self.merge_pending.clearRetainingCapacity();
+            for (self.merge_pending_leaves.items) |en| self.allocator.free(en.payload);
+            self.merge_pending_leaves.clearRetainingCapacity();
         }
         const cs = self.conns.get(conn_id) orelse return;
         if (cs.member_id) |id| {
@@ -2412,10 +2423,24 @@ pub const ClusterNode = struct {
             &merge_buf,
         );
         const authored = try self.authorControl(.merge, &merge_buf);
-        // Re-slot in branch order, chained after the merge entry.
+        // Re-slot in branch order, chained after the merge entry — except
+        // the `leave`s: a re-slotted leave removes its target from the
+        // member table, and a data branch whose author it removes would
+        // then fail applyData's author lookup, aborting the heal with the
+        // merge entry already on the chain (bug
+        // 2026-08-29-merge-data-reslot-refusals). The leaves re-slot after
+        // every data branch has folded.
+        for (self.merge_pending_leaves.items) |en| self.allocator.free(en.payload);
+        self.merge_pending_leaves.clearRetainingCapacity();
         var prev_hash = slot.slotHash(&authored.sl);
         var seq = authored.sl.seq + 1;
         for (decoded.items) |*d| {
+            if (d.en.kind == .leave) {
+                var copy = d.en;
+                copy.payload = try self.allocator.dupe(u8, d.en.payload);
+                try self.merge_pending_leaves.append(self.allocator, copy);
+                continue;
+            }
             const en = d.en;
             const sl = try self.reslot(&en, prev_hash, seq, self.node.control.last_slot_ts_ms);
             try self.node.applyReplicated(control_id, &sl, &en, true, null);
@@ -2455,7 +2480,11 @@ pub const ClusterNode = struct {
                 return error.CorruptMergeBranch;
             const e = rec.entry orelse return error.CorruptMergeBranch;
             const sl = try self.reslot(&e, prev_hash, seq, fold.last_slot_ts_ms);
-            try self.node.applyReplicated(jid, &sl, &e, false, null);
+            // reslotted = true: `data` folds normally, while journal-scoped
+            // settings/checkpoint/stale re-slot as no-ops (OQ 33) instead
+            // of refusing on the author check (bug
+            // 2026-08-29-merge-data-reslot-refusals).
+            try self.node.applyReplicated(jid, &sl, &e, true, null);
             self.broadcastToMembers(.{ .slot = .{
                 .reslotted = false,
                 .record = &.{},
@@ -2471,6 +2500,10 @@ pub const ClusterNode = struct {
     /// Fetches the next pending data branch, or completes the merge.
     fn mergeNextData(self: *ClusterNode, conn_id: u64) !void {
         if (self.merge_pending.items.len == 0) {
+            // Every data branch folded; re-slot the deferred control leaves
+            // last, so no leave removes a member whose losing-branch data
+            // is still ahead of it (bug 2026-08-29-merge-data-reslot-refusals).
+            try self.reSlotDeferredLeaves();
             self.merging_from = null;
             // The loser may truncate and re-sync its data now.
             self.sendMessage(conn_id, .merge_ack) catch {};
@@ -2489,6 +2522,35 @@ pub const ClusterNode = struct {
             self.node.control.epoch.?.number;
         const from: slot.Position = .{ .epoch = common_epoch + 1, .seq = 1 };
         try self.requestSync(conn_id, jid, from);
+    }
+
+    /// Re-slots the control `leave` entries deferred by doMergeControl,
+    /// chained after the data branches — the merge's last act, so a leave
+    /// never removes a member whose losing-branch data is still ahead of it
+    /// (bug 2026-08-29-merge-data-reslot-refusals).
+    fn reSlotDeferredLeaves(self: *ClusterNode) !void {
+        if (self.merge_pending_leaves.items.len == 0) return;
+        const control_id = self.node.control.journal_id;
+        const fold = &self.node.control;
+        var prev_hash = fold.head_slot_hash;
+        var seq: u64 = if (fold.head) |h|
+            if (h.epoch == self.node.control.epoch.?.number) h.seq + 1 else 1
+        else
+            1;
+        for (self.merge_pending_leaves.items) |en| {
+            const sl = try self.reslot(&en, prev_hash, seq, self.node.control.last_slot_ts_ms);
+            try self.node.applyReplicated(control_id, &sl, &en, true, null);
+            self.broadcastToMembers(.{ .slot = .{
+                .reslotted = true,
+                .record = &.{},
+                .sl = sl,
+                .en = en,
+            } });
+            prev_hash = slot.slotHash(&sl);
+            seq += 1;
+            self.allocator.free(en.payload);
+        }
+        self.merge_pending_leaves.clearRetainingCapacity();
     }
 
     /// A merge re-slot: the losing entry's unchanged bytes in a new slot

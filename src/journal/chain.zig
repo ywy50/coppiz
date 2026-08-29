@@ -416,6 +416,36 @@ pub const FoldState = struct {
         sl: *const slot.Slot,
         en: *const entry.Entry,
     ) ApplyError!void {
+        try self.applyDataChecked(cluster, sl, en, false);
+    }
+
+    /// The merge re-slot rule for data journals (PRD 0003 *Partition and
+    /// merge*; OQ 33): `data` folds normally — the entries-table dedup makes
+    /// a redelivered re-slot idempotent (OQ 11) — while journal-scoped
+    /// `settings`, `checkpoint` and `stale` re-slot as no-ops, mirroring
+    /// `applyControlReslotted`: the survivor's journal settings win, and the
+    /// losing branch's cleanup records already served their purpose on the
+    /// losing side. The author checks cannot hold (the author is the losing
+    /// branch's leader), so they are skipped, but the slot signature, entry
+    /// signature and bytes are still validated — a re-slot cannot smuggle
+    /// anything a normal entry could not (bug
+    /// 2026-08-29-merge-data-reslot-refusals).
+    pub fn applyDataReslotted(
+        self: *FoldState,
+        cluster: *const FoldState,
+        sl: *const slot.Slot,
+        en: *const entry.Entry,
+    ) ApplyError!void {
+        try self.applyDataChecked(cluster, sl, en, true);
+    }
+
+    fn applyDataChecked(
+        self: *FoldState,
+        cluster: *const FoldState,
+        sl: *const slot.Slot,
+        en: *const entry.Entry,
+        reslotted: bool,
+    ) ApplyError!void {
         try self.checkChainContinuity(sl);
         // A journal's first record is written in the term that created it.
         // A future term's record (the losing branch of a partition) is
@@ -436,13 +466,22 @@ pub const FoldState = struct {
         try self.checkAuthorSeq(en);
         const max_bytes = self.settings.getU64(schema.keyIndex("journal.max_entry_bytes").?);
         if (en.payload.len > max_bytes) return error.TooLarge;
-        switch (en.kind) {
-            .data => {},
-            .settings => try self.applyJournalSettings(sl, en, cluster),
-            .stale => try self.applyStale(sl, en),
-            .checkpoint => try self.applyCheckpoint(sl, en, cluster),
-            .genesis, .create_journal => return error.WrongJournalType,
-            .join, .leave, .epoch, .merge => return error.WrongJournalType,
+        if (reslotted) {
+            switch (en.kind) {
+                // Journal-scoped settings, checkpoints and stale marks from
+                // the losing branch re-slot as no-ops (OQ 33).
+                .data, .settings, .stale, .checkpoint => {},
+                else => return error.WrongJournalType,
+            }
+        } else {
+            switch (en.kind) {
+                .data => {},
+                .settings => try self.applyJournalSettings(sl, en, cluster),
+                .stale => try self.applyStale(sl, en),
+                .checkpoint => try self.applyCheckpoint(sl, en, cluster),
+                .genesis, .create_journal => return error.WrongJournalType,
+                .join, .leave, .epoch, .merge => return error.WrongJournalType,
+            }
         }
         try self.registerEntry(sl, en);
     }
@@ -1963,6 +2002,95 @@ test "a non-leader is refused when the fold names a different leader" {
     const en = try fix.entryFor(.settings, fix.control_id, 2, 0, payload);
     const sl = try fix.slotFor(1, 2, entry.entryHash(&en), fold.head_slot_hash, 1002);
     try std.testing.expectError(error.NotLeader, fold.applyControl(&sl, &en));
+}
+
+test "a re-slotted data entry folds journal settings/checkpoint/stale as no-ops" {
+    // Bug 2026-08-29-merge-data-reslot-refusals: doMergeData re-slotted
+    // every record of the losing data branch through applyData, which had
+    // no re-slotted variant — a journal-scoped settings or checkpoint
+    // entry refused on checkAuthorIsLeader (the author is the losing
+    // branch's leader) and a stale entry under a differing enforce refused
+    // too, so the heal never converged. The re-slot rule mirrors
+    // applyControlReslotted: `data` folds normally, the rest re-slot as
+    // no-ops (the survivor's value wins; OQ 33).
+    var fix = Fix.init();
+    var cluster = try clusterWithDataJournal(&fix);
+    defer {
+        cluster.control.deinit();
+        cluster.data.deinit();
+    }
+
+    // Make the founder a non-leader (a losing branch's author is never the
+    // survivor's leader), so the live rule refuses and only the re-slot
+    // rule can fold the entry.
+    var io_state = std.Io.Threaded.init(test_alloc, .{});
+    const second = crypto.sign.Ed25519.KeyPair.generate(io_state.io());
+    const second_id = deriveMemberId(second.public_key.toBytes());
+    try cluster.control.members.append(test_alloc, .{
+        .id = second_id,
+        .public_key = second.public_key.toBytes(),
+        .seniority = .{ .epoch = 1, .seq = 2 },
+        .address = try test_alloc.dupe(u8, ""),
+    });
+    cluster.control.epoch = .{ .number = 2, .leader = second_id, .reason = "test" };
+
+    // A slot chained from the data fold's current head (built at apply
+    // time, like `appendControl`).
+    const next_data_slot = struct {
+        fn of(f: *const Fix, data: *const FoldState, en: *const entry.Entry, ts: u64) !slot.Slot {
+            return f.slotFor(
+                1,
+                (data.head orelse slot.Position{ .epoch = 1, .seq = 0 }).seq + 1,
+                entry.entryHash(en),
+                data.head_slot_hash,
+                ts,
+            );
+        }
+    }.of;
+
+    // Journal-scoped settings: the live rule refuses NotLeader; the
+    // re-slot is a no-op — the survivor's value stays.
+    const ttl = schema.keyIndex("ttl.default_ms").?;
+    const ttl_before = cluster.data.settings.getU64(ttl);
+    const changes = [_]validate.Change{.{ .key = ttl, .value = .{ .u64 = 2000 } }};
+    const pl = SettingsPayload{ .scope = .journal, .journal_id = fix.data_id, .changes = &changes };
+    const pl_buf = try test_alloc.alloc(u8, settings_fold.payloadLen(pl));
+    defer test_alloc.free(pl_buf);
+    try settings_fold.encodePayload(pl, pl_buf);
+    const settings_en = try fix.entryFor(.settings, fix.data_id, 2, 0, pl_buf);
+    const settings_sl = try next_data_slot(&fix, &cluster.data, &settings_en, 1002);
+    try std.testing.expectError(
+        error.NotLeader,
+        cluster.data.applyData(&cluster.control, &settings_sl, &settings_en),
+    );
+    try cluster.data.applyDataReslotted(&cluster.control, &settings_sl, &settings_en);
+    try std.testing.expectEqual(ttl_before, cluster.data.settings.getU64(ttl));
+
+    // A stale mark: the re-slot is a no-op (no target lookup at all).
+    var stale_buf: [24]u8 = undefined;
+    encodeStalePayload(.{ .target = .{ .author = [_]u8{1} ** 16, .author_seq = 99 } }, &stale_buf);
+    const stale_en = try fix.entryFor(.stale, fix.data_id, 3, 0, &stale_buf);
+    const stale_sl = try next_data_slot(&fix, &cluster.data, &stale_en, 1003);
+    try cluster.data.applyDataReslotted(&cluster.control, &stale_sl, &stale_en);
+
+    // A checkpoint: the re-slot is a no-op (no range validation at all).
+    var cp_buf: [16]u8 = undefined;
+    encodeCheckpointPayload(.{ .expire_through = .{ .epoch = 1, .seq = 99 } }, &cp_buf);
+    const cp_en = try fix.entryFor(.checkpoint, fix.data_id, 4, 0, &cp_buf);
+    const cp_sl = try next_data_slot(&fix, &cluster.data, &cp_en, 1004);
+    try cluster.data.applyDataReslotted(&cluster.control, &cp_sl, &cp_en);
+
+    // A data entry re-slots normally.
+    const data_en = try fix.entryFor(.data, fix.data_id, 5, 0, "payload");
+    const data_sl = try next_data_slot(&fix, &cluster.data, &data_en, 1005);
+    try cluster.data.applyDataReslotted(&cluster.control, &data_sl, &data_en);
+    const data_id = entry.Id{ .author = fix.founder_id, .author_seq = 5 };
+    // The four re-slots chained at seqs 1..4 (the data fold was empty, so
+    // the first re-slot starts the chain, as in doMergeData).
+    try std.testing.expectEqual(
+        slot.Position{ .epoch = 1, .seq = 4 },
+        cluster.data.entries.get(data_id).?.position,
+    );
 }
 
 test "fold hash is deterministic over the same chain and changes with it" {

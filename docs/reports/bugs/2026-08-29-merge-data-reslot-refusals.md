@@ -4,11 +4,19 @@
 
 - **What failed:** `doMergeData` re-slots *every* record of the losing data branch through `applyData`, which has no re-slotted variant: a journal-scoped `settings` or `checkpoint` entry is refused (`checkAuthorIsLeader` - the author is the losing leader), and a `stale` entry can refuse under a differing `stale.enforce`. The refusal propagates and aborts the merge; every retry fails identically. A re-slotted `leave` that removed a data author makes that branch's data fail `UnknownAuthor` - the branch is silently dropped instead.
 - **Impact:** The partition-merge feature ([PRD 0003](../../prds/0003-membership-and-leadership.md) phase 3) never converges when the losing branch contains such records, or converges without the losing side's data (silent data loss).
-- **Resolution:** Still open. Statically validated.
+- **Resolution:** Resolved - `applyData` gained its re-slotted variant (`applyDataReslotted`, mirroring `applyControlReslotted`: journal `settings`/`checkpoint`/`stale` re-slot as no-ops, `data` folds normally), and `doMergeControl` defers the control `leave`s until every data branch has folded, so a leave can never remove a member whose losing-branch data is still ahead of it.
 
 ## Status
 
-Open. The control chain got its re-slotted variants (OQ 33: `settings` re-slots as no-op, `join`/`leave`/`create_journal` variants); the data chain was never mirrored.
+Resolved - `applyDataReslotted` (chain.zig, threaded through
+`applyReplicated` with the merge's `reslotted` flag) folds journal-scoped
+`settings`/`checkpoint`/`stale` from the losing branch as no-ops per OQ 33
+(the survivor's value wins; cleanup already served) while `data` folds
+normally, and a re-slotted checkpoint no longer triggers a compaction.
+`doMergeControl` now defers the control `leave` entries and
+`reSlotDeferredLeaves` re-slots them after every data branch has folded —
+the "data before the leaves that remove its authors" ordering the report
+asked for, with join-vs-join seniority and join-before-data preserved.
 
 ## Symptom and impact
 
@@ -42,7 +50,29 @@ The OQ 33 no-op/relaxed-authorization rules were implemented for the control cha
 
 ## Resolution
 
-Not yet fixed. Suggested direction: give `applyData` a reslotted path (or re-slot data records as `.data`-only), mirroring `applyControlReslotted`: journal `settings`/`checkpoint`/`stale` from a losing branch fold per OQ 33 instead of refusing; re-order `doMergeControl`/`doMergeData` so a branch's data folds before the leaves that remove its authors. A regression test should partition with enforcement-enabled journals (and with an eviction + data on the losing side) and assert the heal converges with every entry resolving.
+Fixed. The first manifestation needed a re-slotted *data* path, so
+`applyData` was split into `applyDataChecked` with a `reslotted` flag and a
+public `applyDataReslotted`: it runs the same checks (chain continuity,
+slot signature, entry signature, author seq, size) but routes
+journal-scoped `settings`/`checkpoint`/`stale` as no-ops instead of through
+`applyJournalSettings`/`applyCheckpoint`/`applyStale` — whose
+`checkAuthorIsLeader` cannot hold (the author is the losing branch's
+leader) and whose `stale.enforce` gate may differ. `applyReplicated`
+threads the merge's `reslotted` flag to the data fold and skips the
+checkpoint-triggered compaction for re-slots. The second manifestation is
+fixed by ordering: `doMergeControl` defers the control `leave` entries into
+`merge_pending_leaves` and `reSlotDeferredLeaves` re-slots them after every
+data branch has folded — the report's "data re-slots before the leaves that
+remove their authors", while join-vs-join seniority and join-before-data
+order are preserved.
+
+Regression test: "a re-slotted data entry folds journal
+settings/checkpoint/stale as no-ops" (chain.zig) — a non-leader-authored
+settings entry that the live rule refuses `NotLeader` folds as a no-op
+through the re-slot, a stale mark and an out-of-range checkpoint fold as
+no-ops, and a `data` entry re-slots normally. The merge e2e still writes
+only `.data` during the partition; an enforcement-enabled partition e2e
+remains a follow-up.
 
 ## Verification
 
