@@ -551,9 +551,18 @@ pub const Hub = struct {
         from: []const u8,
         to: []const u8,
     ) !void {
-        const key = try edgeKey(allocator, from, to);
-        // The map owns the key (freed at deinit); it is never freed here.
-        try self.dropped.put(allocator, key, {});
+        // `put` keeps the key the map already holds, so a second drop of the
+        // same edge would hand its fresh key to nobody and leak it. Probe
+        // first with a borrowed key, and only allocate an owned one when the
+        // edge is not already dropped. The owned key is the hub's, since
+        // `heal` and `deinit` are what free it.
+        const probe = try edgeKey(allocator, from, to);
+        defer allocator.free(probe);
+        if (!self.dropped.contains(probe)) {
+            const key = try self.allocator.dupe(u8, probe);
+            errdefer self.allocator.free(key);
+            try self.dropped.put(self.allocator, key, {});
+        }
         for (self.pipes.items) |pipe| {
             // A pipe's `out` carries dialer -> endpoint; `in` the reverse.
             // The named sender decides which direction closes.
@@ -755,6 +764,19 @@ test "a dropped edge refuses dials and ends live connections" {
     defer test_alloc.free(reply2);
     try std.testing.expectEqualStrings("pong", reply2);
     try group2.await(tio);
+}
+
+test "dropping the same edge twice does not leak the second key" {
+    var hub = Hub.init(test_alloc);
+    defer hub.deinit(tio);
+    // The testing allocator fails the test on a leak: before the fix the
+    // second `drop` allocated a key the map's `put` then discarded (it keeps
+    // the key it already holds), so nothing ever freed it.
+    try hub.drop(test_alloc, tio, "node-a", "node-b");
+    try hub.drop(test_alloc, tio, "node-a", "node-b");
+    try std.testing.expect(hub.isDropped("node-a", "node-b"));
+    try hub.heal(test_alloc, "node-a", "node-b");
+    try std.testing.expect(!hub.isDropped("node-a", "node-b"));
 }
 
 test "hub send refuses an oversized frame" {

@@ -186,7 +186,12 @@ pub const Client = struct {
                 off += rec.next_offset;
             }
             if (page.next.epoch == 0 and page.next.seq == 0) return; // done
-            std.debug.assert(slot.Position.order(page.next, position) == .gt);
+            // The cursor comes from the peer, so it is checked, not
+            // asserted: a `next` that does not advance is an unbounded
+            // request loop in a release build and a panic in a safe one.
+            if (slot.Position.order(page.next, position) != .gt) {
+                return error.ProtocolError;
+            }
             position = page.next;
         }
     }
@@ -229,4 +234,82 @@ pub fn memberIdentity(
         .member_id = chain.deriveMemberId(keypair.public_key.toBytes()),
         .public_key = keypair.public_key.toBytes(),
     };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const test_alloc = std.testing.allocator;
+const tio = std.testing.io;
+
+fn sendTestMessage(conn: *const transport.Conn, m: message.Message) !void {
+    const body = try test_alloc.alloc(u8, message.encodedLen(m));
+    defer test_alloc.free(body);
+    message.encode(m, body);
+    try conn.send(tio, body);
+}
+
+/// A server that answers every `read_req` with the same non-zero cursor: the
+/// second page does not advance past the first, which is what the client has
+/// to refuse rather than request forever.
+fn stuckReadServer(listener: *transport.Listener) error{Canceled}!void {
+    var conn = listener.accept(tio) catch return;
+    defer conn.close(tio);
+    const hello = conn.recv(tio, test_alloc) catch return;
+    test_alloc.free(hello);
+    sendTestMessage(&conn, .{ .hello_ack = .{
+        .admitted = true,
+        .refusal = .none,
+        .member_id = [_]u8{9} ** 16,
+        .address = "server",
+        .genesis_hash = [_]u8{0} ** 32,
+        .epoch = 1,
+        .leader = [_]u8{9} ** 16,
+    } }) catch return;
+    var i: usize = 0;
+    while (i < 2) : (i += 1) {
+        const req = conn.recv(tio, test_alloc) catch return;
+        test_alloc.free(req);
+        sendTestMessage(&conn, .{ .read_page = .{
+            .next = .{ .epoch = 1, .seq = 1 },
+            .records = &.{},
+            .refusal = "",
+        } }) catch return;
+    }
+}
+
+fn ignoreRecord(_: *usize, _: *const slot.Slot, _: ?*const entry.Entry) anyerror!void {}
+
+test "a read page whose cursor does not advance is refused, not looped" {
+    var hub = transport.Hub.init(test_alloc);
+    defer hub.deinit(tio);
+    var listener = try hub.listen(test_alloc, "server");
+    defer listener.close(tio);
+    var dialer = try hub.dialer(test_alloc, "client");
+    defer dialer.deinit();
+
+    var group: std.Io.Group = .init;
+    group.async(tio, stuckReadServer, .{&listener});
+
+    var client = try Client.connectTransport(
+        test_alloc,
+        tio,
+        dialer,
+        "server",
+        [_]u8{1} ** 16,
+        [_]u8{2} ** 32,
+        [_]u8{0} ** 32,
+        "client",
+    );
+    defer client.deinit();
+    _ = try client.helloAck();
+
+    var seen: usize = 0;
+    try std.testing.expectError(
+        error.ProtocolError,
+        client.read("events", null, false, false, &seen, ignoreRecord),
+    );
+    try std.testing.expectEqual(@as(usize, 0), seen);
+    try group.await(tio);
 }
