@@ -500,10 +500,18 @@ pub const ClusterNode = struct {
                     ms.address = updated;
                 }
             } else {
-                try self.members.put(self.allocator, member.id, .{
+                var ms = MemberState{
                     .address = try self.allocator.dupe(u8, member.address),
                     .public_key = member.public_key,
-                });
+                };
+                // A member learned from the fold after startup must be
+                // dialed too — the tick's dial branch requires a non-zero
+                // dial_at_ms, so schedule the first dial now (bug
+                // 2026-08-28-sweep3-fold-members-never-dialed).
+                if (self.shouldDial(member.id)) {
+                    ms.dial_at_ms = self.elapsedMs() + ms.backoff_ms;
+                }
+                try self.members.put(self.allocator, member.id, ms);
             }
         }
     }
