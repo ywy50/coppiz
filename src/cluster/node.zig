@@ -2365,12 +2365,20 @@ pub const ClusterNode = struct {
     fn viewOf(self: *ClusterNode, id: [16]u8) ?election.View {
         for (self.node.control.members.items) |m| {
             if (std.mem.eql(u8, &m.id, &id)) {
+                // The target's own advertised head, like viewsFor (bug
+                // 2026-08-28-sweep3-freshest-tiebreak-dead).
+                const last_ack = if (std.mem.eql(u8, &id, &self.node.member_id))
+                    self.node.control.head orelse slot.Position{ .epoch = 0, .seq = 0 }
+                else if (self.members.get(id)) |ms|
+                    ms.head
+                else
+                    slot.Position{ .epoch = 0, .seq = 0 };
                 return .{
                     .id = m.id,
                     .seniority = m.seniority,
                     .address = m.address,
                     .state = .member,
-                    .last_ack = self.node.control.head orelse .{ .epoch = 0, .seq = 0 },
+                    .last_ack = last_ack,
                 };
             }
         }
@@ -2781,12 +2789,21 @@ pub const ClusterNode = struct {
                 ms.state
             else
                 .lost;
+            // The freshness input: the peer's own advertised head, not
+            // mine — a uniform last_ack made the freshest tiebreak dead
+            // (bug 2026-08-28-sweep3-freshest-tiebreak-dead).
+            const last_ack = if (is_me)
+                self.node.control.head orelse slot.Position{ .epoch = 0, .seq = 0 }
+            else if (self.members.get(member.id)) |ms|
+                ms.head
+            else
+                slot.Position{ .epoch = 0, .seq = 0 };
             views[i] = .{
                 .id = member.id,
                 .seniority = member.seniority,
                 .address = member.address,
                 .state = state,
-                .last_ack = self.node.control.head orelse .{ .epoch = 0, .seq = 0 },
+                .last_ack = last_ack,
             };
         }
         return views;
