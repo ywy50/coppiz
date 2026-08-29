@@ -7,6 +7,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A journal whose TTL enforcement is turned off again now still removes the
+  entries that were stamped for deletion while it was on. The fast path
+  that skips computing a checkpoint's removal set read the current
+  `ttl.enforce`, while the removal set itself decides from the expiry
+  instant and action stamped on each entry when it was slotted. Those
+  entries stayed hidden as expired, their bytes were never reclaimed, and
+  the journal emitted no checkpoint at all.
+
 - A data directory holding a segment whose header names a different
   journal now refuses to open with `journal_id_mismatch` instead of
   aborting the process. The branch that raises the refusal closed the

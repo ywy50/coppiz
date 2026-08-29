@@ -236,6 +236,18 @@ pub const FoldState = struct {
 
     // journal scope (data journals only):
     checkpoints: std.ArrayListUnmanaged(slot.Position),
+    /// Whether any entry this fold has seen carries frozen facts a
+    /// checkpoint could act on. `removalSet` decides per entry from the
+    /// `expires_at`/`ttl_action` stamped at slot time, so the "nothing can
+    /// be removed" fast path has to be answered from those stamps and not
+    /// from the current settings (bug
+    /// 2026-08-30-removal-guard-reads-live-settings). Both are monotone:
+    /// once true they stay true, which costs a redundant candidates pass
+    /// on a journal whose removable entries are all already removed, and
+    /// never skips a pass that would find something. They are derived from
+    /// the entries table, so they are not part of `hash`.
+    may_expire_delete: bool,
+    may_remove_stale: bool,
 
     pub const MergeFact = struct {
         position: slot.Position,
@@ -258,6 +270,8 @@ pub const FoldState = struct {
             .journals = std.AutoHashMap([16]u8, JournalMeta).init(allocator),
             .last_merge = null,
             .checkpoints = .empty,
+            .may_expire_delete = false,
+            .may_remove_stale = false,
         };
     }
 
@@ -589,6 +603,8 @@ pub const FoldState = struct {
         else
             null;
         const ttl_action = if (en.kind == .data) expiry.action(&self.settings) else .mark_stale;
+        if (expiry.stampCanExpireDelete(expires_at, ttl_action)) self.may_expire_delete = true;
+        if (expiry.stampCanBecomeStale(expires_at, ttl_action)) self.may_remove_stale = true;
         const previous = self.entries.getPtr(en.id());
         const stale_marked = if (previous) |p| p.stale_marked else false;
         const stale_position = if (previous) |p| p.stale_position else null;
@@ -761,6 +777,7 @@ pub const FoldState = struct {
         if (!info.removed and !info.stale_marked) {
             info.stale_marked = true;
             info.stale_position = sl.position();
+            self.may_remove_stale = true;
         }
         try self.registerEntry(sl, en);
     }
@@ -792,7 +809,11 @@ pub const FoldState = struct {
         // stale.cleanup = keep): skip the O(entries) candidates pass, which
         // would otherwise materialize the whole entries table for an empty
         // set on every checkpoint of every journal.
-        if (!expiry.canRemoveAnything(&self.settings)) {
+        if (!expiry.canRemoveAnything(
+            &self.settings,
+            self.may_expire_delete,
+            self.may_remove_stale,
+        )) {
             try self.checkpoints.append(self.allocator, sl.position());
             try self.registerEntry(sl, en);
             return;

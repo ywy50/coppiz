@@ -145,14 +145,47 @@ pub const SlottedEntry = struct {
     stale_position: ?slot.Position,
 };
 
-/// Whether any removal is possible at all under `settings`. With
-/// `stale.cleanup = keep` only TTL expiry can remove, and with
-/// `ttl.enforce = off` nothing ever expires, so the removal set is always
-/// empty and callers can skip the O(entries) `expiryCandidates` +
-/// `removalSet` computation entirely (the common default configuration).
-pub fn canRemoveAnything(settings: *const schema.SettingsState) bool {
-    if (std.mem.eql(u8, settings.getEnum(k_stale_cleanup), "delete")) return true;
-    return !std.mem.eql(u8, settings.getEnum(k_ttl_enforce), "off");
+/// Whether any removal is possible at all, so callers can skip the
+/// O(entries) `expiryCandidates` + `removalSet` computation entirely (the
+/// common default configuration, where nothing can ever be removed).
+///
+/// The two flags come from the fold and summarise the *frozen* facts
+/// `removalSet` decides on: an entry's `expires_at` and `ttl_action` are
+/// stamped when it is slotted and never revised. Reading `ttl.enforce`
+/// here instead was wrong for exactly that reason - a journal switched
+/// back to `ttl.enforce = off` still holds entries stamped `.delete` with
+/// an expiry instant, and the skip made them permanently unremovable
+/// (bug 2026-08-30-removal-guard-reads-live-settings).
+///
+/// - `expiry_deletes`: some entry is stamped `ttl_action = delete` with an
+///   expiry instant. Such an entry is removable whatever the settings say
+///   now, so this alone answers yes.
+/// - `stale_removable`: some entry is author-marked stale, or is stamped
+///   `mark_stale` with an expiry instant. Those are removable only while
+///   `stale.cleanup = delete`, which is a live setting the removal set
+///   itself reads, so it is read here too.
+pub fn canRemoveAnything(
+    settings: *const schema.SettingsState,
+    expiry_deletes: bool,
+    stale_removable: bool,
+) bool {
+    if (expiry_deletes) return true;
+    return stale_removable and
+        std.mem.eql(u8, settings.getEnum(k_stale_cleanup), "delete");
+}
+
+/// Whether an entry stamped with these frozen facts feeds
+/// `canRemoveAnything`'s first flag: a `delete` action with an instant to
+/// reach. Kept beside `removalSet` so the two cannot drift.
+pub fn stampCanExpireDelete(expires_at: ?u64, ttl_action: TtlAction) bool {
+    return expires_at != null and ttl_action == .delete;
+}
+
+/// Whether an entry stamped with these frozen facts feeds
+/// `canRemoveAnything`'s second flag: anything `removalSet` collects only
+/// under `stale.cleanup = delete`.
+pub fn stampCanBecomeStale(expires_at: ?u64, ttl_action: TtlAction) bool {
+    return expires_at != null and ttl_action == .mark_stale;
 }
 
 /// The deterministic removal set a checkpoint names (PRD 0002): every entry
@@ -191,6 +224,36 @@ pub fn removalSet(
 // ---------------------------------------------------------------------------
 
 const test_alloc = std.testing.allocator;
+
+test "canRemoveAnything answers from the entries' frozen stamps, not the live settings" {
+    var settings = try schema.SettingsState.initDefaults(test_alloc);
+    defer settings.deinit();
+    const cleanup = schema.keyIndex("stale.cleanup").?;
+
+    // Nothing stamped: nothing can be removed, whatever the settings say.
+    try std.testing.expect(!canRemoveAnything(&settings, false, false));
+    try settings.set(cleanup, .{ .enum_value = schema.enumValue(cleanup, "delete").? });
+    try std.testing.expect(!canRemoveAnything(&settings, false, false));
+
+    // A stamp of delete + an instant is removable regardless of the
+    // settings in force now - this is the case the old settings-only guard
+    // got wrong after ttl.enforce went back to off.
+    try settings.set(cleanup, .{ .enum_value = schema.enumValue(cleanup, "keep").? });
+    try std.testing.expect(canRemoveAnything(&settings, true, false));
+
+    // A stale-only stamp needs stale.cleanup = delete, which removalSet
+    // reads live too.
+    try std.testing.expect(!canRemoveAnything(&settings, false, true));
+    try settings.set(cleanup, .{ .enum_value = schema.enumValue(cleanup, "delete").? });
+    try std.testing.expect(canRemoveAnything(&settings, false, true));
+
+    // The stamp predicates agree with removalSet's own tests.
+    try std.testing.expect(stampCanExpireDelete(3000, .delete));
+    try std.testing.expect(!stampCanExpireDelete(null, .delete));
+    try std.testing.expect(!stampCanExpireDelete(3000, .mark_stale));
+    try std.testing.expect(stampCanBecomeStale(3000, .mark_stale));
+    try std.testing.expect(!stampCanBecomeStale(null, .mark_stale));
+}
 
 test "effectiveTtl matrix: enforce x entry ttl (PRD 0002 G1/G2)" {
     var settings = try schema.SettingsState.initDefaults(test_alloc);
