@@ -1005,7 +1005,18 @@ pub const ClusterNode = struct {
                     c.self.completePendingFor(en);
                     return;
                 }
-                _ = try c.self.slotAndBroadcast(en, false);
+                _ = c.self.slotAndBroadcast(en, false) catch |err| {
+                    // A per-entry refusal must not kill the loop: ack the
+                    // waiters and move on, like reforwardQueue (bug
+                    // 2026-08-28-sweep3-slotqueued-refusal-fatal).
+                    if (c.self.pending_clients.fetchRemove(en.id())) |kv| {
+                        c.self.ackClient(kv.value, en.id(), clientRefusalName(err)) catch {};
+                    }
+                    if (c.self.pending_locals.fetchRemove(en.id())) |kv| {
+                        completeLocal(kv.value, c.self.io, undefined, clientRefusalName(err));
+                    }
+                    return;
+                };
                 if (c.self.pending_clients.fetchRemove(en.id())) |kv| {
                     c.self.ackClient(kv.value, en.id(), "") catch {};
                 }
