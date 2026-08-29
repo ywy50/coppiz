@@ -18,15 +18,9 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
 
 <a id="oq-1"></a>
 1. **What is the trust model - crash faults only, or misbehaving members?** [OPEN]
-   The brief requires join order to be unspoofable "by any member", which is
-   a partial-distrust requirement, while clanker's research rejected BFT on a
-   single-operator premise. The design as drafted authenticates every member
-   (signatures, chain) and defends against a member lying about *others* or
-   about *history*, but not against a member that follows the protocol and
-   writes garbage, nor against a coalition. Is that the line? If a stronger
-   guarantee is wanted, what is the threat: a compromised host, a buggy
-   build, a second operator? *Blocks:* nothing yet; shapes PRD 0003 merge and
-   any future `quorum` mode. *Answer from:* the operator.
+    The decision is explored in
+    [RFC 9](rfcs/0009-trust-model.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* nothing yet; the merge rule and any future `quorum` mode read against it.
 <a id="oq-2"></a>
 2. **At n = 2 under `seniority`, is AP-with-merge the right default?** [RESOLVED] Two
    leaders during a partition, healed by deterministic re-slotting (PRD
@@ -88,12 +82,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
    `genesis`, `create_journal`, cluster-scoped `settings`, and (with PRD
    0003) membership and epochs. Recorded in PRD 0001's status.
 <a id="oq-8"></a>
-8. **Per-journal or cluster-level leadership?** [OPEN] Drafted cluster-level (one
-   leader sequences all journals). Per-journal leadership spreads load and
-   isolates a hot journal, at the cost of N elections and N failure detectors.
-   *Blocks:* none - v1 shipped cluster-level leadership; measurement decides
-   whether per-journal leadership is ever needed. *Answer from:* measurement,
-   after a single leader is shown to saturate.
+8. **Per-journal or cluster-level leadership?** [OPEN]
+    The decision is explored in
+    [RFC 10](rfcs/0010-per-journal-leadership.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* none - v1 shipped cluster-level leadership; the reopen trigger is a measured single-leader saturation.
 <a id="oq-11"></a>
 11. **An `author_seq` gap that never fills; refused entries consume a seq.** [RESOLVED]
     A member that crashes after assigning `author_seq = n` locally but before
@@ -191,11 +183,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     *Blocks:* nothing in v1; must be decided before 1.0 because it changes
     the `join` payload.
 <a id="oq-25"></a>
-25. **Topology past 32 members.** [OPEN] Full mesh is O(n²) connections. Options:
-    leader-star (followers connect only to the leader; backfill from any),
-    gossip (SWIM-style membership with fan-out trees). clanker's research
-    named 32 as the point where "the surveyed products earn their weight".
-    *Blocks:* nothing until a cluster approaches it.
+25. **Topology past 32 members.** [OPEN]
+    The decision is explored in
+    [RFC 11](rfcs/0011-topology-past-32.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* nothing until a cluster approaches the cap.
 <a id="oq-58"></a>
 58. **Ordering of concurrent `join`s within one batch.** [RESOLVED] The admitter decides
     *when* to write a `join`, so it can order concurrent admissions - never
@@ -477,13 +468,10 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     (Discussion); this entry is the stable pointer. *Blocks:* any
     non-private deployment.
 <a id="oq-28"></a>
-28. **Backpressure.** [OPEN] A slow follower under a fast leader: does the leader
-    buffer (bounded by what?), drop to backfill mode for that follower, or
-    slow every writer? Drafted nowhere yet. *Blocks:* none - the transport
-    shipped; a slow follower's effect on the leader stays unmeasured.
-
-## G. Embedding, API and clanker
-
+28. **Backpressure.** [OPEN]
+    The decision is explored in
+    [RFC 12](rfcs/0012-backpressure.md) (Discussion); this entry is the
+    stable pointer. *Blocks:* none - the transport shipped; the slow-follower policy is this RFC's answer.
 <a id="oq-15"></a>
 15. **Library-first or service-first.** [RESOLVED] [RFC 0001](rfcs/0001-library-first-or-service-first.md).
     *Blocks:* PRD 0005 phases 1 and 3.
