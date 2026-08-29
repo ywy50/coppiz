@@ -63,6 +63,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A replicated `slot` frame is refused when its record does not fill the
+  frame. `decodeSlot` checked the payload's own length prefix but not that
+  the record inside it ended where the payload ends, and `decodeRecord`
+  ignores whatever follows the record it decodes - so a valid record with
+  bytes appended decoded as a valid slot. Those bytes are what the follower
+  hands to the store verbatim, which refuses them with `BadRecord` after the
+  fold has already advanced, leaving the fold one slot ahead of the segment
+  file (bug 2026-08-29-slot-record-trailing-bytes).
 - A `join` that runs out of memory no longer leaves the member in the fold.
   `applyJoin` added the member and then ran the whole-state rule; the rule's
   refusal rolled it back but an allocation failure did not, so the fold kept
