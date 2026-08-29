@@ -10,7 +10,7 @@ out of it in an [ADR](../adrs/).
 Open a new note from the template, numbered after the last in the inventory:
 
 ```bash
-cp docs/research/TEMPLATE.md "docs/research/0002-<slug>.md"
+cp docs/research/TEMPLATE.md "docs/research/0004-<slug>.md"
 ```
 
 Every claim traces to an evidence-log row with the date it was read. Internet
@@ -23,3 +23,4 @@ project's research says so and keeps that project's read date.
 |---|---|---|
 | [0001](0001-evidence-carried-from-the-state-store-survey.md) | Draft | What clanker's state-store survey established that coppiz inherits |
 | [0002](0002-comparison-benchmarks.md) | Draft (re-read 2026-08-29) | Which stores to benchmark coppiz against, which workloads and metrics make it fair, and the current state of each candidate |
+| [0003](0003-fsync-default-measurement.md) | Resolved (OQ 14) | Is `storage.fsync = every` on the leader acceptable at clanker's write rates? |

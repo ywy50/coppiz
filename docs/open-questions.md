@@ -282,14 +282,19 @@ and tagged `OPEN`, `RESOLVED` (with the record that settled it) or
     signed entry header - the codec, fold and PRD 0001 all carry it; removing
     it now is a format break, not the cheap change the draft called it.
 <a id="oq-14"></a>
-14. **`fsync` defaults.** [OPEN] `every` on the leader and `batched` on followers as
+14. **`fsync` defaults.** [RESOLVED] `every` on the leader and `batched` on followers as
     drafted. A follower that loses its tail re-backfills, so `batched` is
     safe for it; is `every` on the leader acceptable at the write rates
     clanker needs (tens per second, not thousands)? *Blocks:* none - phase 3
     shipped with `storage.fsync = every` as the local-config default
-    (followers may set `batched`); whether that default is right at clanker's
-    write rates stays open, and RFC 0003 is the open thread on what the knob
-    governs. *Answer from:* measurement.
+    (followers may set `batched`). *Answer from:* measurement.
+
+    **Resolved 2026-08-29** (measurement): yes - per-append write+fsync
+    measured ~5-10 ms p50-p99 on btrfs/NVMe, so the leader's serial write
+    path sustains ~100-200 durable appends/s and clanker's tens-per-second
+    rate uses a fraction of it. `every` on the leader stands
+    ([research 0003](research/0003-fsync-default-measurement.md)). What the
+    knob governs is [ADR 0008](adrs/0008-storage-fsync-governs-the-queue.md).
 <a id="oq-17"></a>
 17. **Snapshot format.** [OPEN] A verified fold at a slot, so restart and join do
     not replay from genesis. Is it a serialized fold state (versioned
