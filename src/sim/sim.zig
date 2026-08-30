@@ -1603,7 +1603,13 @@ test "LoopWorld: a three-member partition elects a second leader and heals" {
     // 2026-08-30-loopworld-convergence-window) - poll with a bound.
     try world.settingsWrite(1, settingsEntryChanges(&buf, max_journals, .{ .u32 = 99 }));
     var merged = false;
-    for (0..1000) |_| {
+    // The stall this scenario can hit (a lost sync response) self-heals via
+    // the sync watchdog, which needs sync_response_timeout_ms of *real*
+    // time - the sim's ticks are driven as fast as possible, so the poll
+    // must span that many ticks' worth of real time to let it fire. The
+    // common (non-stall) case converges in a handful of ticks and exits
+    // early.
+    for (0..6000) |_| {
         try world.tick();
         if (try world.convergedAmong(&.{ 0, 1, 2 })) {
             merged = true;
@@ -1614,14 +1620,14 @@ test "LoopWorld: a three-member partition elects a second leader and heals" {
         for (0..3) |i| {
             const n = world.nodes.items[i].cn;
             std.debug.print(
-                "SIMDBG node={} epoch={} head={any} leader={any} syncing={} merging={}\n",
+                "SIMDBG node={} epoch={} head={any} syncing={} merging={} sync_in_flight={}\n",
                 .{
                     i,
                     if (n.node.control.epoch) |e| e.number else 0,
                     n.node.control.head,
-                    if (n.node.control.epoch) |e| e.leader else [_]u8{0} ** 16,
                     n.syncing,
                     n.merging_from != null,
+                    n.sync_in_flight,
                 },
             );
         }
