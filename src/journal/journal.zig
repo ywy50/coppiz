@@ -142,6 +142,16 @@ pub const Node = struct {
             .followers = .empty,
         };
         errdefer {
+            // `foldAll` allocates one JournalState per data journal (each
+            // holding a FoldState); an open failure after it — a store read
+            // error in `replayQueue`, a failed group lookup — must not leak
+            // them (bug 2026-08-30-node-open-leaks-folded-journals).
+            var it = node.journals.valueIterator();
+            while (it.next()) |js_ptr| {
+                const js = js_ptr.*;
+                js.fold.deinit();
+                allocator.destroy(js);
+            }
             node.control.deinit();
             node.journals.deinit();
             node.followers.deinit(allocator);
