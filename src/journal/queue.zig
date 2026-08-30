@@ -83,8 +83,19 @@ pub const Queue = struct {
             var header: [header_len]u8 = undefined;
             const n = try file.readPositionalAll(io, &header, 0);
             if (n != header.len) return error.Truncated;
-            if (!std.mem.eql(u8, header[0..4], &magic)) return error.BadMagic;
-            if (std.mem.readInt(u16, header[4..6], .little) != version) {
+            if (!std.mem.eql(u8, header[0..4], &magic)) {
+                // A file of exactly one header whose magic is wrong is the
+                // crash window between `setLength` and the header write
+                // below (a fresh file's first-ever open): rewrite it as
+                // empty, as the store does for a sub-header segment (bug
+                // 2026-08-30-queue-fresh-header-window). Anything larger
+                // with a bad magic is genuine corruption.
+                if (len > header_len) return error.BadMagic;
+                try file.setLength(io, header_len);
+                var fresh: [header_len]u8 = undefined;
+                writeHeader(&fresh);
+                try file.writePositionalAll(io, &fresh, 0);
+            } else if (std.mem.readInt(u16, header[4..6], .little) != version) {
                 return error.UnsupportedVersion;
             }
         }
