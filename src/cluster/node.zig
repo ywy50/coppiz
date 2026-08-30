@@ -54,6 +54,11 @@ pub const provisional_page_bytes: u32 = 64 * 1024;
 /// the moment a connection to that member is established again.
 pub const initial_redial_backoff_ms: u64 = 250;
 pub const max_redial_backoff_ms: u64 = 8000;
+/// How long an in-flight sync request may go without a response before the
+/// flag is released and the request retried (bug
+/// 2026-08-30-sync-in-flight-stuck). A page round trip within a cluster is
+/// milliseconds; this is generous for a busy leader.
+pub const sync_response_timeout_ms: u64 = 5000;
 
 // ---------------------------------------------------------------------------
 // Mailbox
@@ -293,6 +298,11 @@ pub const ClusterNode = struct {
     sync_cursors: std.AutoHashMapUnmanaged([16]u8, slot.Position) = .empty,
     /// Whether a sync request is in flight (one at a time).
     sync_in_flight: bool = false,
+    /// When the in-flight sync was sent, for the response watchdog: a
+    /// dropped response used to strand the member's catch-up forever, since
+    /// requestSync is a silent no-op while the flag is set (bug
+    /// 2026-08-30-sync-in-flight-stuck).
+    sync_started_at_ms: u64 = 0,
     /// Whether this member is backfilling (never leader-eligible).
     syncing: bool = false,
 
@@ -1084,6 +1094,16 @@ pub const ClusterNode = struct {
         const heartbeat_ms = self.settingU64("cluster.heartbeat_ms", 1000);
         const suspect_after = self.settingU64("cluster.suspect_after_ms", 5000);
         const evict_after = self.settingU64("membership.evict_after_ms", 0);
+
+        // Sync response watchdog: a sync page can be lost to a conn race,
+        // and `sync_in_flight` gates every later request - a dropped
+        // response used to strand the member's catch-up forever (bug
+        // 2026-08-30-sync-in-flight-stuck). Release it after a generous
+        // window; the next request (or the heartbeat gap catch-up) retries,
+        // and overlapping pages are idempotent.
+        if (self.sync_in_flight and now -| self.sync_started_at_ms > sync_response_timeout_ms) {
+            self.sync_in_flight = false;
+        }
 
         // Reconcile membership (joins folded), heartbeats, failure detection.
         try self.syncMembersFromFold();
@@ -2318,6 +2338,7 @@ pub const ClusterNode = struct {
     ) !bool {
         if (self.sync_in_flight) return false;
         self.sync_in_flight = true;
+        self.sync_started_at_ms = self.elapsedMs();
         self.sendMessage(conn_id, .{ .sync_req = .{
             .journal_id = journal_id,
             .from = from,
@@ -5232,6 +5253,53 @@ test "beginMerge commits nothing when the branch request never goes out" {
     // The request goes out: now the merge is begun.
     try cn.beginMerge(9, 2);
     try std.testing.expectEqual(@as(?u64, 9), cn.merging_from);
+    try std.testing.expect(cn.sync_in_flight);
+}
+
+test "a timed-out sync response releases the in-flight flag" {
+    // Bug 2026-08-30-sync-in-flight-stuck: a sync page lost to a conn race
+    // left `sync_in_flight` set forever, silently blocking every later sync
+    // request (requestSync is a no-op while it is set) and the heartbeat
+    // gap catch-up - the member's catch-up was stranded. The tick's
+    // watchdog releases it after `sync_response_timeout_ms`, so the next
+    // request retries.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    // A sync sent long ago whose response never came.
+    cn.sync_in_flight = true;
+    cn.sync_started_at_ms = cn.elapsedMs() -| (sync_response_timeout_ms + 1000);
+    try cn.onTick();
+    try std.testing.expect(!cn.sync_in_flight);
+
+    // A recent sync stays in flight.
+    cn.sync_in_flight = true;
+    cn.sync_started_at_ms = cn.elapsedMs();
+    try cn.onTick();
     try std.testing.expect(cn.sync_in_flight);
 }
 
