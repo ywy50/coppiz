@@ -826,18 +826,58 @@ pub const Store = struct {
         // ahead of the newer one — compact writes the new generation at the
         // next monotone ordinals, contiguous with the old, so the two are
         // indistinguishable by name alone (bug
-        // 2026-08-29-compact-not-crash-atomic). Keep the last such file
-        // onward and delete the stale files before it. The common
-        // single-generation case never pays for the recovery.
-        var gen_start: usize = 0;
-        for (names.items, 0..) |n, i| {
-            if (i == 0) continue;
-            if (try self.fileStartsChain(sub, n)) gen_start = i;
+        // 2026-08-29-compact-not-crash-atomic). Keep the newest generation
+        // that is *complete* and delete the stale files before it; the
+        // common single-generation case never pays for the recovery.
+        //
+        // Completeness is the crash window's discriminator: compact writes
+        // one new segment per old one and fsyncs each before the next, so a
+        // new generation is complete only when its file count matches the
+        // previous generation's and its head segment is not torn. A crash
+        // after the first new segment (which always starts the chain) used
+        // to make the recovery keep that single segment and delete the
+        // complete old generation — every acknowledged slot in the later
+        // segments silently gone (bug
+        // 2026-08-30-generation-recovery-partial-new).
+        var winner_start: usize = 0;
+        var winner_end: usize = names.items.len;
+        {
+            var starts = std.ArrayListUnmanaged(usize).empty;
+            defer starts.deinit(self.allocator);
+            for (names.items, 0..) |n, i| {
+                if (i == 0 or try self.fileStartsChain(sub, n)) {
+                    try starts.append(self.allocator, i);
+                }
+            }
+            // When no newer generation is complete, the first generation
+            // wins and the partial newer ones are deleted with the stale
+            // files below.
+            if (starts.items.len > 1) winner_end = starts.items[1];
+            var w = starts.items.len;
+            while (w > 1) {
+                w -= 1;
+                const start = starts.items[w];
+                const end = if (w + 1 < starts.items.len) starts.items[w + 1] else names.items.len;
+                if (end - start != start - starts.items[w - 1]) continue; // partial
+                if (!try self.fileDecodesFully(sub, names.items[end - 1])) continue; // torn head
+                winner_start = start;
+                winner_end = end;
+                break;
+            }
         }
-        if (gen_start > 0) {
-            for (names.items[0..gen_start]) |n| sub.deleteFile(self.io, n) catch {};
-            for (names.items[0..gen_start]) |n| self.allocator.free(n);
-            names.items = names.items[gen_start..];
+        // Everything outside the winner's generation is stale — both the
+        // older generations and any newer one that failed the completeness
+        // check (a partial new generation left in place would fold on top
+        // of the winner and refuse the open).
+        if (winner_start > 0 or winner_end < names.items.len) {
+            for (names.items, 0..) |n, i| {
+                if (i < winner_start or i >= winner_end) {
+                    sub.deleteFile(self.io, n) catch {};
+                }
+            }
+            for (names.items[0..winner_start]) |n| self.allocator.free(n);
+            for (names.items[winner_end..]) |n| self.allocator.free(n);
+            names.items = names.items[winner_start..winner_end];
         }
 
         for (names.items, 0..) |seg_name, i| {
@@ -900,6 +940,7 @@ pub const Store = struct {
         }
 
         // Fresh segment names start one past the highest loaded ordinal.
+
         const last_name = names.items[names.items.len - 1];
         jd.next_ordinal =
             (try std.fmt.parseUnsigned(u64, last_name["seg-".len..], 10)) + 1;
@@ -959,6 +1000,36 @@ pub const Store = struct {
         if (n != records.len) return false;
         const rec = segment.decodeRecord(records) catch return false;
         return std.mem.eql(u8, &rec.slot.prev_slot_hash, &slot.genesis_prev);
+    }
+
+    /// Whether the segment file's records all decode — no torn tail — the
+    /// completeness check for a candidate generation's head segment (bug
+    /// 2026-08-30-generation-recovery-partial-new).
+    fn fileDecodesFully(
+        self: *Store,
+        sub: std.Io.Dir,
+        seg_name: []const u8,
+    ) !bool {
+        const file = try sub.openFile(self.io, seg_name, .{ .mode = .read_write });
+        defer file.close(self.io);
+        const len = try file.length(self.io);
+        if (len < segment.header_len) return false;
+        const seal = try self.sealStatus(file, len);
+        if (seal == .corrupt) return false;
+        const sealed = seal == .valid;
+        const records_len = len - segment.header_len -
+            if (sealed) @as(u64, segment.seal_len) else 0;
+        if (records_len == 0) return true; // an empty head: nothing to lose
+        const records = try self.allocator.alloc(u8, @intCast(records_len));
+        defer self.allocator.free(records);
+        const n = try file.readPositionalAll(self.io, records, segment.header_len);
+        if (n != records.len) return false;
+        var off: usize = 0;
+        while (off < records.len) {
+            const rec = segment.decodeRecord(records[off..]) catch return false;
+            off += rec.next_offset;
+        }
+        return true;
     }
 };
 
@@ -1620,6 +1691,109 @@ test "open keeps the older generation when the newer one is still being written"
         }
     }.cb);
     try std.testing.expectEqual(@as(usize, 5), count);
+}
+
+test "open keeps the complete old generation when a crash left only the new one's first segment" {
+    // Bug 2026-08-30-generation-recovery-partial-new: the recovery kept the
+    // last file that started the chain, so a crash after the new
+    // generation's first segment (which always starts the chain) was
+    // written but before the rest made it delete the complete old
+    // generation and keep a one-segment chain — every acknowledged slot in
+    // the later segments silently gone. A new generation is kept only when
+    // it is complete: same segment count as the old, untorn head.
+    var env = TestEnv.init();
+    defer env.deinit();
+    const journal_id = "0123456789abcdef".*;
+
+    var old_names: [8][]const u8 = undefined;
+    var old_bytes: [8][]u8 = undefined;
+    var old_count: usize = 0;
+    var first_new_name: ?[]const u8 = null;
+    var first_new_bytes: ?[]u8 = null;
+    defer for (old_names[0..old_count]) |n| test_alloc.free(n);
+    defer for (old_bytes[0..old_count]) |b| test_alloc.free(b);
+    defer if (first_new_bytes) |b| test_alloc.free(b);
+    defer if (first_new_name) |n| test_alloc.free(n);
+    {
+        const data_dir = try env.dataDir();
+        const store = try Store.open(test_alloc, tio, data_dir, .{ .seal_threshold = 200 });
+        defer store.deinit();
+        try store.createJournal(journal_id, [_]u8{0} ** 32);
+        try appendN(store, journal_id, 5);
+        const jd = store.journals.get(journal_id).?;
+        // Snapshot the old generation (ordinals 1..k).
+        for (jd.segments.items, 0..) |seg, i| {
+            const len = try seg.file.length(tio);
+            const buf = try test_alloc.alloc(u8, @intCast(len));
+            const n = try seg.file.readPositionalAll(tio, buf, 0);
+            try std.testing.expectEqual(@as(usize, @intCast(len)), n);
+            old_bytes[i] = buf;
+            old_names[i] = try std.fmt.allocPrint(
+                test_alloc,
+                "data/{x}/seg-{d:0>8}",
+                .{ journal_id, i + 1 },
+            );
+            old_count = i + 1;
+        }
+        // The compacted generation: snapshot only its first segment, which
+        // is what a crash after the first write leaves behind.
+        try store.compact(journal_id, &.{}, .none);
+        const new_first = store.journals.get(journal_id).?.segments.items[0];
+        const len = try new_first.file.length(tio);
+        first_new_bytes = try test_alloc.alloc(u8, @intCast(len));
+        const n = try new_first.file.readPositionalAll(tio, first_new_bytes.?, 0);
+        try std.testing.expectEqual(@as(usize, @intCast(len)), n);
+        first_new_name = try std.fmt.allocPrint(
+            test_alloc,
+            "data/{x}/seg-{d:0>8}",
+            .{ journal_id, old_count + 1 },
+        );
+    }
+    // The crash state: the complete old generation plus the new
+    // generation's first segment.
+    for (old_bytes[0..old_count], 0..) |bytes, i| {
+        const file = try env.tmp.dir.createFile(tio, old_names[i], .{
+            .read = true,
+            .truncate = true,
+            .permissions = data_file_perm,
+        });
+        defer file.close(tio);
+        try file.writePositionalAll(tio, bytes, 0);
+    }
+    {
+        const file = try env.tmp.dir.createFile(tio, first_new_name.?, .{
+            .read = true,
+            .truncate = true,
+            .permissions = data_file_perm,
+        });
+        defer file.close(tio);
+        try file.writePositionalAll(tio, first_new_bytes.?, 0);
+    }
+
+    const store = try env.openStore();
+    defer store.deinit();
+    var seen = std.ArrayListUnmanaged(u64).empty;
+    defer seen.deinit(test_alloc);
+    try store.scan(journal_id, &seen, struct {
+        fn cb(
+            list: *std.ArrayListUnmanaged(u64),
+            sl: *const slot.Slot,
+            en: ?*const entry.Entry,
+        ) anyerror!void {
+            if (en != null) try list.append(test_alloc, sl.seq);
+        }
+    }.cb);
+    // Every slot of the old generation survives; the partial new segment
+    // was deleted.
+    try std.testing.expectEqualSlices(u64, &.{ 1, 2, 3, 4, 5 }, seen.items);
+    const jd = store.journals.get(journal_id).?;
+    var file_count: usize = 0;
+    var it = jd.dir.iterate();
+    while (try it.next(tio)) |f| {
+        if (f.kind != .file) continue;
+        if (std.mem.startsWith(u8, f.name, "seg-")) file_count += 1;
+    }
+    try std.testing.expectEqual(jd.segments.items.len, file_count);
 }
 
 test "journal dir names are lowercase hex and round-trip" {
