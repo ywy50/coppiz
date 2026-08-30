@@ -66,6 +66,8 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-30 - a `Node.open` failure after the fold leaks every folded journal](bugs/2026-08-30-node-open-leaks-folded-journals.md)
 - [2026-08-30 - the sidecar example deadlocks on 1-CPU hosts](bugs/2026-08-30-sidecar-async-limit.md)
 - [2026-08-30 - a lost sync response strands the member's catch-up forever](bugs/2026-08-30-sync-in-flight-stuck.md)
+- [2026-08-30 - the merge settle rule bricks the reopen for a pre-merge checkpoint](bugs/2026-08-30-merge-settle-bricks-reopen.md)
+- [2026-08-30 - the queue's `remove` rewrite is not atomic: a crash mid-write bricks the file](bugs/2026-08-30-queue-remove-not-atomic.md)
 - [2026-08-30 - the wire encoders cast a journal name's length to u16 unchecked: a 64 KiB name panics the CLI](bugs/2026-08-30-wire-name-len-unchecked.md)
 - [2026-08-29 - a chainless member panics on a peer's control record: the fold unwraps a null epoch](bugs/2026-08-29-chainless-member-null-epoch-panic.md)
 - [2026-08-29 - `zig build test` is red on main: a crashed-compaction test builds its path out of an undefined buffer tail](bugs/2026-08-29-store-recovery-test-undefined-path.md)
