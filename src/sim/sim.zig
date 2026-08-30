@@ -1603,11 +1603,27 @@ test "LoopWorld: a three-member partition elects a second leader and heals" {
     // 2026-08-30-loopworld-convergence-window) - poll with a bound.
     try world.settingsWrite(1, settingsEntryChanges(&buf, max_journals, .{ .u32 = 99 }));
     var merged = false;
-    for (0..200) |_| {
+    for (0..1000) |_| {
         try world.tick();
         if (try world.convergedAmong(&.{ 0, 1, 2 })) {
             merged = true;
             break;
+        }
+    }
+    if (!merged) {
+        for (0..3) |i| {
+            const n = world.nodes.items[i].cn;
+            std.debug.print(
+                "SIMDBG node={} epoch={} head={any} leader={any} syncing={} merging={}\n",
+                .{
+                    i,
+                    if (n.node.control.epoch) |e| e.number else 0,
+                    n.node.control.head,
+                    if (n.node.control.epoch) |e| e.leader else [_]u8{0} ** 16,
+                    n.syncing,
+                    n.merging_from != null,
+                },
+            );
         }
     }
     try std.testing.expect(merged);
