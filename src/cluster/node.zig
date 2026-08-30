@@ -1096,11 +1096,22 @@ pub const ClusterNode = struct {
             // the election — that window is exactly when a spurious
             // self-election would happen. The check runs for conn-less
             // members too, so a member whose conn died still gets suspected.
-            if (ms.last_heard_ms != 0 and now -| ms.last_heard_ms >= suspect_after) {
+            //
+            // The transition fires once — on the member->lost change — so a
+            // lost member's redial (the dial branch below) stays reachable.
+            // Firing every tick re-stamped `dial_at_ms = now + backoff` and
+            // shadowed the dial branch: a member partitioned longer than
+            // `suspect_after` was never redialed, and the two halves of a
+            // split cluster elected their own leaders with no way back (bug
+            // 2026-08-30-lost-member-never-redialed).
+            if (ms.state != .lost and
+                ms.last_heard_ms != 0 and
+                now -| ms.last_heard_ms >= suspect_after)
+            {
                 if (ms.conn_id) |cid| self.closeConn(cid);
                 ms.conn_id = null;
                 ms.state = .lost;
-                ms.dial_at_ms = now + ms.backoff_ms;
+                if (ms.dial_at_ms == 0) ms.dial_at_ms = now + ms.backoff_ms;
             } else if (ms.conn_id != null) {
                 if (now >= ms.next_heartbeat_ms) {
                     self.sendHeartbeat(ms) catch {};
@@ -5465,6 +5476,69 @@ test "a member's redial backoff resets when its connection comes back" {
     try std.testing.expectEqual(initial_redial_backoff_ms, after.backoff_ms);
     try std.testing.expectEqual(@as(u64, 0), after.dial_at_ms);
     try std.testing.expect(after.backoff_ms < 5000);
+}
+
+test "a suspected member's scheduled redial is not pushed out by the suspect branch" {
+    // Bug 2026-08-30-lost-member-never-redialed: the suspect branch fired
+    // every tick for a lost member (its `last_heard_ms` is frozen), and each
+    // fire re-stamped `dial_at_ms = now + backoff` — shadowing the dial
+    // branch below it, so a member partitioned longer than `suspect_after`
+    // was never redialed and the cluster stayed split. The transition now
+    // fires once and leaves a scheduled dial alone.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+    // Suspect after 1 ms without a heartbeat.
+    try cn.node.control.settings.set(
+        schema.keyIndex("cluster.suspect_after_ms").?,
+        .{ .u64 = 1 },
+    );
+
+    const peer_id = [_]u8{7} ** 16;
+    try cn.members.put(test_alloc, peer_id, .{
+        .address = try test_alloc.dupe(u8, "peer"),
+        .public_key = [_]u8{0} ** 32,
+    });
+    const now = cn.elapsedMs();
+    const ms = cn.members.getPtr(peer_id).?;
+    ms.last_heard_ms = now -| 100; // stale: the suspect condition holds
+    ms.dial_at_ms = now + 1000; // a redial scheduled 1 s out
+    ms.state = .member;
+
+    // First tick: the member->lost transition; second: the dial branch is
+    // reachable again. The scheduled redial must survive both untouched —
+    // before the fix the suspect branch re-stamped it to `now + backoff`
+    // on every tick, so it never fired.
+    try cn.onTick();
+    try cn.onTick();
+    try std.testing.expectEqual(
+        now + 1000,
+        cn.members.get(peer_id).?.dial_at_ms,
+    );
+    try std.testing.expectEqual(election.State.lost, cn.members.get(peer_id).?.state);
 }
 
 test "a chainless member drops a peer's merge_offer instead of aborting" {
