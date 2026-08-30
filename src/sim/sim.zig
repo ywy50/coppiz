@@ -1444,15 +1444,26 @@ pub const LoopWorld = struct {
     /// The same, over a subset - for a scenario in which part of the
     /// cluster is known not to have converged yet.
     pub fn assertConvergedAmong(self: *LoopWorld, indices: []const usize) !void {
+        try std.testing.expect(try self.convergedAmong(indices));
+    }
+
+    /// Whether every listed node's control fold hashes identically. The
+    /// loop sim drives the nodes through a threaded io, so the completion
+    /// ordering - and therefore the tick at which a merge finishes - is not
+    /// fixed; scenarios that assert convergence poll this with a bound
+    /// instead of assuming a tick count (the fixed-count version flaked,
+    /// bug 2026-08-30-loopworld-convergence-window).
+    pub fn convergedAmong(self: *LoopWorld, indices: []const usize) !bool {
         var reference: ?[32]u8 = null;
         for (indices) |i| {
             const h = try self.nodes.items[i].cn.node.control.hash(self.allocator);
             if (reference) |r| {
-                try std.testing.expectEqualSlices(u8, &r, &h);
+                if (!std.mem.eql(u8, &r, &h)) return false;
             } else {
                 reference = h;
             }
         }
+        return true;
     }
 
     pub fn leaderOf(self: *LoopWorld, i: usize) ?[16]u8 {
@@ -1586,9 +1597,20 @@ test "LoopWorld: a three-member partition elects a second leader and heals" {
         world.nodes.items[1].cn.node.control.epoch.?.number,
     );
 
-    // A write after the heal is what starts the merge.
+    // A write after the heal is what starts the merge. Convergence takes a
+    // variable number of ticks - the threaded io's completion ordering is
+    // not fixed, so a fixed 30-tick window flaked (bug
+    // 2026-08-30-loopworld-convergence-window) - poll with a bound.
     try world.settingsWrite(1, settingsEntryChanges(&buf, max_journals, .{ .u32 = 99 }));
-    for (0..30) |_| try world.tick();
+    var merged = false;
+    for (0..200) |_| {
+        try world.tick();
+        if (try world.convergedAmong(&.{ 0, 1, 2 })) {
+            merged = true;
+            break;
+        }
+    }
+    try std.testing.expect(merged);
 
     // The survivor and the losing branch's *leader* converge: node 1
     // discarded its branch, re-folded node 0's chain, and both hold node 0
