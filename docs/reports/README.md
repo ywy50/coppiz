@@ -60,6 +60,8 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-30 - `tcpListen` leaks the listening socket when the listener allocation fails](bugs/2026-08-30-tcp-listen-fd-leak-on-oom.md)
 - [2026-08-30 - the hub's dropped-edge check overflows its fixed buffer for long address pairs](bugs/2026-08-30-hub-dropped-edge-long-address.md)
 - [2026-08-30 - the loop sim's fixed convergence window flakes: the threaded io's completion ordering is not fixed](bugs/2026-08-30-loopworld-convergence-window.md)
+- [2026-08-30 - a suspected member is never redialed: the suspect branch shadows the dial branch](bugs/2026-08-30-lost-member-never-redialed.md)
+- [2026-08-30 - the open-time generation recovery deletes the complete old generation for a partial new one](bugs/2026-08-30-generation-recovery-partial-new.md)
 - [2026-08-30 - the wire encoders cast a journal name's length to u16 unchecked: a 64 KiB name panics the CLI](bugs/2026-08-30-wire-name-len-unchecked.md)
 - [2026-08-29 - a chainless member panics on a peer's control record: the fold unwraps a null epoch](bugs/2026-08-29-chainless-member-null-epoch-panic.md)
 - [2026-08-29 - `zig build test` is red on main: a crashed-compaction test builds its path out of an undefined buffer tail](bugs/2026-08-29-store-recovery-test-undefined-path.md)
