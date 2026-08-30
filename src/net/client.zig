@@ -134,6 +134,7 @@ pub const Client = struct {
         payload: []const u8,
         ttl_ms: u64,
     ) !message.Ack {
+        try checkJournalName(journal_name);
         try self.send(.{ .append = .{
             .journal = journal_name,
             .payload = payload,
@@ -161,6 +162,7 @@ pub const Client = struct {
             ?*const entry.Entry,
         ) anyerror!void,
     ) !void {
+        try checkJournalName(journal_name);
         var position: slot.Position = from orelse .{ .epoch = 0, .seq = 0 };
         while (true) {
             try self.send(.{ .read_req = .{
@@ -210,6 +212,7 @@ pub const Client = struct {
 
     /// A settings change request (the change-list bytes the chain encodes).
     pub fn settings(self: *Client, journal_name: []const u8, changes: []const u8) !message.Ack {
+        try checkJournalName(journal_name);
         try self.send(.{ .settings = .{
             .journal = journal_name,
             .changes = changes,
@@ -221,6 +224,15 @@ pub const Client = struct {
         };
     }
 };
+
+/// The wire's journal-name field is a u16 length, and the encoders cast it
+/// unchecked: a name past the cap panics in a safe build and wraps in a
+/// release one (bug 2026-08-30-wire-name-len-unchecked). The store's own
+/// name bound is far smaller (max_journal_name), so no real name can reach
+/// the cap - refuse before the encoder does.
+fn checkJournalName(journal_name: []const u8) error{JournalNameTooLong}!void {
+    if (journal_name.len > std.math.maxInt(u16)) return error.JournalNameTooLong;
+}
 
 /// Loads a member key from a data dir (readable while the node holds the
 /// lock) and derives the member id.
@@ -312,4 +324,13 @@ test "a read page whose cursor does not advance is refused, not looped" {
     );
     try std.testing.expectEqual(@as(usize, 0), seen);
     try group.await(tio);
+}
+
+test "a journal name past the wire's u16 length cap is refused before encoding" {
+    // Bug 2026-08-30-wire-name-len-unchecked: the encoders cast the name
+    // length to u16 unchecked, so a name past the cap panicked in a safe
+    // build and wrapped in a release one. The client refuses it cleanly.
+    const long = "j" ** 65536;
+    try std.testing.expectError(error.JournalNameTooLong, checkJournalName(long));
+    try checkJournalName("main");
 }
