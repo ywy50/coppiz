@@ -48,6 +48,9 @@ pub const Queue = struct {
     /// `.every` (queue + store), 1 under `.batched` (queue only, until a
     /// flush point exists), 0 under `.never`.
     fsync: store.Fsync,
+    /// The queue file's directory, for the atomic temp-file rename in
+    /// `remove` (bug 2026-08-30-queue-remove-not-atomic). Not owned.
+    dir: std.Io.Dir,
 
     /// Opens (or creates) the queue file and recovers a torn tail.
     pub fn open(
@@ -134,6 +137,7 @@ pub const Queue = struct {
             .queued_bytes = good,
             .max_bytes = max_bytes,
             .fsync = fsync,
+            .dir = dir,
         };
     }
 
@@ -213,13 +217,36 @@ pub const Queue = struct {
             off += rec_len;
         }
         if (kept.items.len == @as(usize, @intCast(self.queued_bytes))) return; // nothing to trim
-        try self.file.writePositionalAll(self.io, kept.items, header_len);
-        try self.file.setLength(self.io, header_len + kept.items.len);
+        // Rewrite atomically: write the kept bytes to a temp file and rename
+        // it over the queue file. An in-place rewrite left a crash mid-write
+        // with a partial kept prefix followed by intact old records, which
+        // the next open refused as mid-file corruption (bug
+        // 2026-08-30-queue-remove-not-atomic). No sync, per Option A: a
+        // crash before the rename leaves the old file, and the trimmed
+        // record's replay is an idempotent no-op.
+        var header: [header_len]u8 = undefined;
+        writeHeader(&header);
+        const tmp = try self.dir.createFile(self.io, "unslotted.queue.tmp", .{
+            .read = true,
+            .truncate = true,
+            .permissions = store.data_file_perm,
+        });
+        errdefer self.dir.deleteFile(self.io, "unslotted.queue.tmp") catch {};
+        try tmp.writePositionalAll(self.io, &header, 0);
+        try tmp.writePositionalAll(self.io, kept.items, header_len);
+        try std.Io.Dir.rename(
+            self.dir,
+            "unslotted.queue.tmp",
+            self.dir,
+            "unslotted.queue",
+            self.io,
+        );
+        // The temp handle now names the queue file; the old handle names an
+        // inode the rename unlinked — swap it out and close it.
+        const old = self.file;
+        self.file = tmp;
+        old.close(self.io);
         self.queued_bytes = @intCast(kept.items.len);
-        // No sync (RFC 0003, Option A): a trimmed entry's slot is already
-        // stored, so a crash that loses the trim leaves the record in the
-        // file and the replay redelivers an idempotent no-op — the barrier
-        // was redundant under every setting (same argument as `clear`).
     }
 
     /// Empties the queue (all queued entries have been slotted).
