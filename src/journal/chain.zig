@@ -815,7 +815,24 @@ pub const FoldState = struct {
         // comes from the cluster's fold, not this journal's; the merge fact
         // itself lives on the control fold too (a data fold never sees a
         // merge entry — bug 2026-08-28-merge-settle-rule-dead).
+        //
+        // The window protects the re-slotted losing-branch entries, which
+        // chain *after* the merge entry. A checkpoint at or before the
+        // merge's position cannot reach them, whatever its timestamp —
+        // refusing it would brick the reopen of a survivor whose journal
+        // held a pre-merge checkpoint: the reopen folds the control chain
+        // first (setting last_merge), then the data journal's pre-merge
+        // checkpoint would be refused forever (bug
+        // 2026-08-30-merge-settle-bricks-reopen).
         if (cluster.last_merge) |merge| {
+            // A checkpoint whose slot predates the merge was authored
+            // before the heal, so its expire_through cannot reach the
+            // re-slotted losing-branch entries the window protects —
+            // refusing it would brick the survivor's reopen: the control
+            // chain (with the merge) folds before this journal on restart,
+            // so a pre-merge checkpoint would be refused forever (bug
+            // 2026-08-30-merge-settle-bricks-reopen).
+            if (sl.slot_ts_ms < merge.slot_ts_ms) return;
             const settle = cluster.settings.getU64(schema.keyIndex("merge.settle_ms").?);
             if (sl.slot_ts_ms < merge.slot_ts_ms +| settle) return error.MergeSettling;
         }
@@ -2556,8 +2573,28 @@ test "a checkpoint inside merge.settle_ms of a real merge entry is refused" {
     try cluster.control.applyControl(&merge_sl, &merge_en);
     try std.testing.expect(cluster.control.last_merge != null);
 
+    // A checkpoint whose slot predates the merge (ts 1500 < the merge's
+    // 2000) must fold: it was authored before the heal, so its
+    // expire_through cannot reach the re-slotted losing-branch entries —
+    // and refusing it would brick the survivor's reopen, which folds the
+    // control chain (with the merge) before this journal (bug
+    // 2026-08-30-merge-settle-bricks-reopen).
+    var pre_buf: [16]u8 = undefined;
+    encodeCheckpointPayload(.{ .expire_through = .{ .epoch = 1, .seq = 1 } }, &pre_buf);
+    const pre_en = try fix.entryFor(
+        .checkpoint,
+        fix.data_id,
+        nextAuthorSeq(&cluster.data, fix.founder_id),
+        0,
+        &pre_buf,
+    );
+    const pre_sl = try fix.slotFor(1, 1, entry.entryHash(&pre_en), slot.genesis_prev, 1500);
+    try cluster.data.applyData(&cluster.control, &pre_sl, &pre_en);
+
+    // A checkpoint 3000 ms after the merge's slot: inside settle_ms
+    // (default 30000) — refused.
     var cp_buf: [16]u8 = undefined;
-    encodeCheckpointPayload(.{ .expire_through = .{ .epoch = 1, .seq = 1 } }, &cp_buf);
+    encodeCheckpointPayload(.{ .expire_through = .{ .epoch = 1, .seq = 2 } }, &cp_buf);
     const cp_en = try fix.entryFor(
         .checkpoint,
         fix.data_id,
@@ -2565,15 +2602,26 @@ test "a checkpoint inside merge.settle_ms of a real merge entry is refused" {
         0,
         &cp_buf,
     );
-    // 3000 ms after the merge's slot: inside settle_ms (default 30000).
-    const cp_sl = try fix.slotFor(1, 1, entry.entryHash(&cp_en), slot.genesis_prev, 5000);
+    const cp_sl = try fix.slotFor(
+        1,
+        (cluster.data.head orelse slot.Position{ .epoch = 1, .seq = 0 }).seq + 1,
+        entry.entryHash(&cp_en),
+        cluster.data.head_slot_hash,
+        5000,
+    );
     try std.testing.expectError(
         error.MergeSettling,
         cluster.data.applyData(&cluster.control, &cp_sl, &cp_en),
     );
 
-    // Once settle_ms has passed, the same checkpoint is accepted.
-    const late_sl = try fix.slotFor(1, 1, entry.entryHash(&cp_en), slot.genesis_prev, 40_000);
+    // Once settle_ms has passed, a post-merge checkpoint is accepted.
+    const late_sl = try fix.slotFor(
+        1,
+        (cluster.data.head orelse slot.Position{ .epoch = 1, .seq = 0 }).seq + 1,
+        entry.entryHash(&cp_en),
+        cluster.data.head_slot_hash,
+        40_000,
+    );
     try cluster.data.applyData(&cluster.control, &late_sl, &cp_en);
 }
 
