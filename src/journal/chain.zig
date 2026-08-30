@@ -840,6 +840,7 @@ pub const FoldState = struct {
             payload.expire_through,
             sl.slot_ts_ms,
             &self.settings,
+            false,
         );
         defer self.allocator.free(set);
         for (set) |removed| {
@@ -871,6 +872,7 @@ pub const FoldState = struct {
                 .ttl_action = info.ttl_action,
                 .stale_marked = info.stale_marked,
                 .stale_position = info.stale_position,
+                .removed = info.removed,
             };
         }
         std.debug.assert(index == candidates.len);
