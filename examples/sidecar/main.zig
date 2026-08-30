@@ -43,7 +43,12 @@ pub fn main(init: std.process.Init) !void {
 
 test "sidecar: a host speaks to a node over the wire" {
     const gpa = std.heap.page_allocator;
-    var io_state = std.Io.Threaded.init(gpa, .{});
+    // The node starts loop/timer/accept/reader tasks; the Threaded default
+    // async limit (cpu_count - 1) is zero on a 1-CPU host, where groupAsync
+    // runs tasks eagerly and start() never returns — the same deadlock
+    // embed-cluster hit and fixed with an explicit limit (bug
+    // 2026-08-29-embed-cluster-async-limit-deadlock).
+    var io_state = std.Io.Threaded.init(gpa, .{ .async_limit = .limited(64) });
     defer io_state.deinit();
     const io = io_state.io();
     try runDemo(gpa, io, &.{});
