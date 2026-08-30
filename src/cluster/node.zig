@@ -4302,15 +4302,20 @@ test "e2e (G4): three members remove the same set at the same checkpoint slot, b
         try std.testing.expectEqualSlices(u8, &hash_a, &hash_b);
         try std.testing.expectEqualSlices(u8, &hash_a, &hash_c);
 
-        // The pending-bytes early trigger: raise the cadence to "essentially
-        // never" and lower the threshold to 1 byte. A fresh burst of TTL
-        // entries must still produce a checkpoint well before the cadence
-        // could — the trigger fires on the data it saw arrive.
+        // The pending-bytes early trigger: lengthen the cadence well past
+        // the burst window and lower the threshold to 1 byte. A fresh burst
+        // of TTL entries must still produce a checkpoint well before the
+        // cadence could — the trigger fires on the data it saw arrive. The
+        // cadence is not set to "essentially never": entries that expire
+        // *after* the last append are the cadence's job (the trigger only
+        // rescans when data arrives — bug
+        // 2026-08-30-removed-entries-re-enter-the-removal-set), so a 2 s
+        // cadence lets them fall and still proves the trigger fired first.
         {
             const every_idx = schema.keyIndex("checkpoint.every_ms").?;
             const pending_idx = schema.keyIndex("checkpoint.pending_bytes").?;
             const changes = [_]validate.Change{
-                .{ .key = every_idx, .value = .{ .u64 = 600_000 } },
+                .{ .key = every_idx, .value = .{ .u64 = 2_000 } },
                 .{ .key = pending_idx, .value = .{ .u64 = 1 } },
             };
             const len = settings_fold.changesLen(&changes);
@@ -4321,7 +4326,7 @@ test "e2e (G4): three members remove the same set at the same checkpoint slot, b
             try std.testing.expectEqual(@as(usize, 0), reply.refusal.len);
             // The leftover fast cadence fires once more with an empty set
             // (everything is already removed) and re-arms the next due to
-            // the new 600 s cadence; wait it out so the burst below cannot
+            // the new cadence; wait it out so the burst below cannot
             // ride an old due time.
             {
                 std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(800), .awake) catch {};
@@ -4336,8 +4341,9 @@ test "e2e (G4): three members remove the same set at the same checkpoint slot, b
                 burst[i] = reply2.id;
                 std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(150), .awake) catch {};
             }
-            // Well before the 600 s cadence, the pending trigger emits a
-            // checkpoint that removes the burst.
+            // The pending trigger removes the burst — the first entries by
+            // the trigger, the stragglers by the 2 s cadence — well inside
+            // the 10 s window.
             const dl2 = wallMs(tio) + 10_000;
             var pending_removed = false;
             while (wallMs(tio) < dl2) {

@@ -472,8 +472,11 @@ pub const Node = struct {
 
         // The removal set is computed against the checkpoint's own stamp —
         // the slot's timestamp, not the raw clock (PRD 0002: the leader's
-        // clock chose the instant once, in the chain).
-        const removed = try self.removalIds(fold, through, @intCast(sl.slot_ts_ms));
+        // clock chose the instant once, in the chain). The G7 question skips
+        // entries an earlier checkpoint already reclaimed, so an idle
+        // journal emits nothing (bug
+        // 2026-08-30-removed-entries-re-enter-the-removal-set).
+        const removed = try self.removalIds(fold, through, @intCast(sl.slot_ts_ms), true);
         defer self.allocator.free(removed);
         if (removed.len == 0) {
             self.allocator.free(en.payload); // never emit an empty removal set (G7)
@@ -499,7 +502,10 @@ pub const Node = struct {
         now: i64,
     ) !void {
         const js = self.journals.get(journal_id) orelse return error.UnknownJournal;
-        const removed = try self.removalIds(&js.fold, through, now);
+        // The reclaim question: entries the fold JUST marked removed must
+        // stay in the set, or nothing would ever be compacted (bug
+        // 2026-08-30-removed-entries-re-enter-the-removal-set).
+        const removed = try self.removalIds(&js.fold, through, now, false);
         defer self.allocator.free(removed);
         if (removed.len == 0) return;
         try self.compactRemoved(&js.fold, removed);
@@ -516,12 +522,18 @@ pub const Node = struct {
 
     /// The entries a checkpoint at `head` with stamp `now` would remove —
     /// the same set `applyCheckpoint` will fold, so compaction cannot drop
-    /// a payload the fold still treats as present.
+    /// a payload the fold still treats as present. `skip_removed` selects
+    /// the caller's question: the G7 caller ("is there anything left to
+    /// do?") skips entries an earlier checkpoint already reclaimed, so an
+    /// idle journal stops emitting (bug
+    /// 2026-08-30-removed-entries-re-enter-the-removal-set); the reclaim
+    /// callers pass false, or nothing would ever be compacted.
     fn removalIds(
         self: *Node,
         fold: *chain.FoldState,
         through: slot.Position,
         now: i64,
+        skip_removed: bool,
     ) ![]const entry.Id {
         // Same guard as the fold's applyCheckpoint: under the default
         // settings nothing can ever be removed, so the O(entries) candidates
@@ -540,6 +552,7 @@ pub const Node = struct {
             through,
             @intCast(now),
             &fold.settings,
+            skip_removed,
         );
         defer self.allocator.free(set);
         const ids = try self.allocator.alloc(entry.Id, set.len);
@@ -549,7 +562,9 @@ pub const Node = struct {
 
     /// The entries a checkpoint at `through` with stamp `now` would remove —
     /// public so the cluster leader can refuse an empty removal set (G7)
-    /// before the entry reaches the chain.
+    /// before the entry reaches the chain. Unfiltered: the byte probe's
+    /// caller (driveCheckpoints) counts removable payload, and the G7 gate
+    /// is checkpointForBroadcast's own filtered question.
     pub fn checkpointRemovalSet(
         self: *Node,
         journal_id: [16]u8,
@@ -557,7 +572,7 @@ pub const Node = struct {
         now: i64,
     ) ![]const entry.Id {
         const js = self.journals.get(journal_id) orelse return error.UnknownJournal;
-        return self.removalIds(&js.fold, through, now);
+        return self.removalIds(&js.fold, through, now, false);
     }
 
     /// Builds the next slot as the leader: current epoch, next seq, clamped

@@ -143,6 +143,12 @@ pub const SlottedEntry = struct {
     ttl_action: TtlAction,
     stale_marked: bool,
     stale_position: ?slot.Position,
+    /// Whether an earlier checkpoint already reclaimed the entry. Removal
+    /// leaves position, expiry and action untouched, so without this flag an
+    /// already-removed entry matches every removal test forever and the G7
+    /// rule ("never emit an empty removal set") stops holding (bug
+    /// 2026-08-30-removed-entries-re-enter-the-removal-set).
+    removed: bool,
 };
 
 /// Whether any removal is possible at all, so callers can skip the
@@ -200,11 +206,18 @@ pub fn removalSet(
     expire_through: slot.Position,
     checkpoint_ts_ms: u64,
     settings: *const schema.SettingsState,
+    skip_removed: bool,
 ) ![]const SlottedEntry {
     const cleanup_delete = std.mem.eql(u8, settings.getEnum(k_stale_cleanup), "delete");
     var out = std.ArrayListUnmanaged(SlottedEntry).empty;
     errdefer out.deinit(allocator);
     for (entries) |se| {
+        // `skip_removed` is set by the caller asking "is there anything left
+        // to do?" (the G7 question). The reclaim callers must NOT skip: the
+        // fold marks the entries removed, then recomputes the set to know
+        // which bytes to drop (bug
+        // 2026-08-30-removed-entries-re-enter-the-removal-set).
+        if (skip_removed and se.removed) continue;
         if (slot.Position.order(se.position, expire_through) == .gt) continue;
         const past = se.expires_at != null and se.expires_at.? <= checkpoint_ts_ms;
         const expired = se.ttl_action == .delete and past;
@@ -378,6 +391,7 @@ test "removalSet drops expired entries, and stale only under cleanup=delete" {
                 .ttl_action = ttl_action,
                 .stale_marked = stale,
                 .stale_position = if (stale) .{ .epoch = 1, .seq = seq } else null,
+                .removed = false,
             };
         }
     }.at;
@@ -391,14 +405,48 @@ test "removalSet drops expired entries, and stale only under cleanup=delete" {
     const checkpoint = slot.Position{ .epoch = 1, .seq = 4 };
 
     // cleanup=keep: only the TTL-expired entry is removed.
-    const set = try removalSet(test_alloc, &entries, checkpoint, 1600, &settings);
+    const set = try removalSet(test_alloc, &entries, checkpoint, 1600, &settings, false);
     defer test_alloc.free(set);
     try std.testing.expectEqual(@as(usize, 1), set.len);
     try std.testing.expectEqual(@as(u64, 1), set[0].position.seq);
 
     // cleanup=delete: the stale-marked entry joins the set.
     try settings.set(stale_cleanup, .{ .enum_value = schema.enumValue(stale_cleanup, "delete").? });
-    const set2 = try removalSet(test_alloc, &entries, checkpoint, 1600, &settings);
+    const set2 = try removalSet(test_alloc, &entries, checkpoint, 1600, &settings, false);
     defer test_alloc.free(set2);
     try std.testing.expectEqual(@as(usize, 2), set2.len);
+}
+
+test "removalSet skips already-removed entries only when asked" {
+    // Bug 2026-08-30-removed-entries-re-enter-the-removal-set: removal
+    // leaves position/expiry/action untouched, so an already-removed entry
+    // matches every removal test forever. The G7 caller ("is there anything
+    // left to do?") must skip it; the reclaim callers must not.
+    var settings = try schema.SettingsState.initDefaults(test_alloc);
+    defer settings.deinit();
+    const mk = struct {
+        fn at(seq: u64, removed: bool) SlottedEntry {
+            return .{
+                .id = .{ .author = [_]u8{0xAA} ** 16, .author_seq = seq },
+                .position = .{ .epoch = 1, .seq = seq },
+                .slot_ts_ms = 1000,
+                .expires_at = 1500,
+                .ttl_action = .delete,
+                .stale_marked = false,
+                .stale_position = null,
+                .removed = removed,
+            };
+        }
+    }.at;
+    const entries = [_]SlottedEntry{ mk(1, false), mk(2, true) };
+    const checkpoint = slot.Position{ .epoch = 1, .seq = 2 };
+
+    const unfiltered = try removalSet(test_alloc, &entries, checkpoint, 1600, &settings, false);
+    defer test_alloc.free(unfiltered);
+    try std.testing.expectEqual(@as(usize, 2), unfiltered.len);
+
+    const filtered = try removalSet(test_alloc, &entries, checkpoint, 1600, &settings, true);
+    defer test_alloc.free(filtered);
+    try std.testing.expectEqual(@as(usize, 1), filtered.len);
+    try std.testing.expectEqual(@as(u64, 1), filtered[0].position.seq);
 }

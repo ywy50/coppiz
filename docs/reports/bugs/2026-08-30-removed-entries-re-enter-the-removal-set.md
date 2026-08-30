@@ -20,8 +20,9 @@
 
 ## Status
 
-Open - 2026-08-30. Found by reading; the mechanism was then confirmed by
-building the fix and observing which test it breaks.
+Resolved - `SlottedEntry` now carries `removed`, and `removalSet` skips
+already-removed entries for the G7 caller. The G4 e2e's pending-bytes phase
+was adjusted to stop relying on the checkpoint-spam loop it caused.
 
 ## Symptom and impact
 
@@ -115,21 +116,28 @@ finding is recorded rather than shipped.
 
 ## Resolution
 
-Not fixed. The change needed, in one place each:
+Fixed, exactly as the change list here proposed:
 
-1. `expiry.SlottedEntry` gains `removed: bool`; `expiryCandidates` copies
+1. `expiry.SlottedEntry` gained `removed: bool`; `expiryCandidates` copies
    `info.removed`.
-2. `expiry.removalSet` gains a `skip_removed` parameter and skips on it.
-3. `journal.removalIds` forwards it: `true` from
-   `checkpointForBroadcast` (the G7 question), `false` from
-   `compactAfterCheckpoint` (the reclaim question), and `false` from
-   `checkpointRemovalSet`, whose caller is the byte probe.
-4. The G4 e2e's pending-bytes phase stops relying on a checkpoint being
-   emitted for entries that expire after the last append.
+2. `expiry.removalSet` gained a `skip_removed` parameter and skips on it.
+3. `journal.removalIds` forwards it: `true` from `checkpointForBroadcast`
+   (the G7 question), `false` from `compactAfterCheckpoint` (the reclaim
+   question - entries the fold just marked removed must stay in the set, or
+   nothing would ever be compacted), and `false` from
+   `checkpointRemovalSet` (the byte probe; its emission is gated by
+   checkpointForBroadcast's filtered question, and the probe only rescans
+   when the head moves).
+4. The G4 e2e's pending-bytes phase sets a 2 s cadence instead of 600 s:
+   the pending trigger still fires first and proves itself, and entries
+   that expire after the last append are removed by the cadence - the
+   designed division of labour (PRD 0002: "on a cadence or when
+   `pending_bytes` has accumulated, whichever first"). The probe re-arming
+   on time was considered and rejected: it would duplicate the cadence.
 
-Step 4 is the one that needs deciding: either the burst test waits on the
-cadence, or the pending-bytes probe re-arms on time as well as on data -
-which is a design question, not a mechanical fix.
+Regression test: "removalSet skips already-removed entries only when asked"
+(expiry.zig) asserts the filtered set excludes a removed entry while the
+unfiltered set keeps it.
 
 ## Verification
 
