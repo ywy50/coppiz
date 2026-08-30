@@ -8,13 +8,18 @@
   leader.
 - **Impact:** a silently divergent member. It serves reads from a chain the
   cluster has discarded, and it is a member in every other member's fold.
-- **Resolution:** open. This report is the first deterministic
-  reproduction; the cause is not yet established.
+- **Resolution:** Resolved - a member that folds a new epoch without
+  authoring it (a follower) never recorded its branch facts, so
+  `becomeLoser` refused to act. The folding paths now record them; the
+  losing follower converges like the losing leader.
 
 ## Status
 
-Open. Reproduced 2026-08-30 by the new loop simulator. This is the failure
-PRD 0003's *Status* has carried as a known issue since 2026-08-27:
+Resolved - the branch facts (`branch_start`/`common_tail`) are now recorded
+whenever a member folds a new epoch, from any path. Reproduced 2026-08-30
+by the new loop simulator; the root cause below was established by tracing
+the deterministic scenario. This is the failure PRD 0003's *Status* has
+carried as a known issue since 2026-08-27:
 
 > a **three-member partition that elects a second leader does not reliably
 > converge on heal** - the survivor's branch fetch or the losers' re-sync
@@ -74,22 +79,49 @@ there and has to update the scenario and this report together.
 
 ## Root cause
 
-Not established. What is ruled in and out so far:
+Established by tracing the deterministic scenario (temporary prints on the
+divergence/merge paths): node 2 reaches `onDivergence` with node 0 as the
+winner, `becomeLoser` is called, and it returns at `branch_start orelse
+return` - node 2 has **no branch facts**.
 
-- It is not the transport: `LoopWorld` has no sockets, no reader threads and
-  no timing.
-- It is not the merge rule. The pure-function simulator's
-  `three-member partition: the losing side's follower converges too` runs the
-  same shape over `membership`/`election`/`epoch` and converges all three
-  nodes, including the follower. So the rules are right and the loop's use
-  of them is not.
-- The losing *leader*'s path works end to end, so `becomeLoser`, the
-  truncate, the re-fold and the re-sync are all functional. What is missing
-  is whatever should put the follower on that path.
+The branch facts are set only where a member *authors* a new epoch
+(`appendEpoch`, unconditional) - never where it *folds* one:
+
+- `onSlot` and `slotAndBroadcast` both compared the epoch slot's number
+  against the fold's epoch **after** `applyReplicated` had already advanced
+  it (`ep.number` equals the slot's epoch, so `sl.epoch > ep.number` is
+  always false) - the blocks were dead code.
+- `onSyncPage` (backfill) had no block at all, so a follower whose only
+  knowledge of the new term came from a sync page - the sim's node 2 -
+  carried a folded epoch 2 with no `branch_start`.
+
+`becomeLoser`'s guard then bails, and nothing else moves the member: the
+survivor's merge re-slot broadcasts keep hitting `BadPrevHash` and re-enter
+`onDivergence` -> `becomeLoser` -> the same early return, every tick. The
+losing *leader* (node 1) converges because it authored its own epoch and so
+has facts.
+
+The earlier "what is ruled in and out" list holds; the missing piece was
+the branch-facts setter, not the loser machinery.
 
 ## Resolution
 
-Open.
+Fixed in `src/cluster/node.zig`:
+
+- `onSlot` and `slotAndBroadcast` now capture the pre-apply epoch number and
+  compare against it (`ep.number > prev_epoch_number`), and use the
+  pre-apply head (`prev_head != null`) instead of the post-apply head - so a
+  genuinely new term recorded by a live broadcast sets the facts, while a
+  re-slotted epoch (which carries the current number and never advances the
+  fold) still does not.
+- `onSyncPage` records the same facts when it folds an epoch on the control
+  chain, so a member that learns its branch only from backfill is no longer
+  stranded.
+
+The `LoopWorld` scenario's final assertions now pin the converged state:
+all three members' folds hash equal, node 2 names node 0 as leader at
+epoch 1 with the survivor's settings value (previously it pinned the
+strand).
 
 ## Verification
 

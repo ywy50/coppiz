@@ -1601,17 +1601,22 @@ test "LoopWorld: a three-member partition elects a second leader and heals" {
         world.nodes.items[0].cn.node.control.settings.getU32(max_journals),
     );
 
-    // The losing branch's *follower* is stranded: still on the dead branch,
-    // still naming its old leader. This is PRD 0003's known issue, pinned -
-    // "three members - two losers - surfaced a stall" - and reported at
-    // docs/reports/bugs/2026-08-30-three-member-merge-strands-the-losing-follower.md.
-    //
-    // The assertion is deliberately on the *current* behaviour, so that the
-    // change which fixes it fails here and has to update this scenario and
-    // that report together.
-    try std.testing.expectEqualSlices(u8, &world.memberId(1), &world.leaderOf(2).?);
+    // The losing branch's *follower* converges too: node 2 folded node 1's
+    // epoch only from backfill, so it used to carry no branch facts and
+    // becomeLoser refused to act - the strand this scenario pinned (PRD
+    // 0003's known issue, reported at
+    // docs/reports/bugs/2026-08-30-three-member-merge-strands-the-losing-follower.md).
+    // The sync path now records the branch facts an epoch fold implies, so
+    // all three members discard their branches, re-fold node 0's chain and
+    // hold node 0 as leader with the survivor's value.
+    try world.assertConvergedAmong(&.{ 0, 1, 2 });
+    try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(2).?);
     try std.testing.expectEqual(
-        @as(u64, 2),
+        @as(u64, 1),
         world.nodes.items[2].cn.node.control.epoch.?.number,
+    );
+    try std.testing.expectEqual(
+        @as(u32, 21),
+        world.nodes.items[2].cn.node.control.settings.getU32(max_journals),
     );
 }

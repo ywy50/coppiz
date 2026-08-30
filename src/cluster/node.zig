@@ -1942,14 +1942,18 @@ pub const ClusterNode = struct {
     ) !slot.Slot {
         const fold = self.foldFor(en.journal) orelse return error.UnknownJournal;
         const sl = try self.node.slotFor(fold, en);
+        // Branch facts use the pre-apply epoch number: the fold's epoch
+        // advances with the apply, so comparing after it would never fire
+        // (bug 2026-08-30-three-member-merge-strands-the-losing-follower).
         const prev_head = self.node.control.head;
+        const prev_epoch_number = if (self.node.control.epoch) |ep| ep.number else 0;
         const record = try self.allocator.alloc(u8, segment.recordSize(&sl, en));
         defer self.allocator.free(record);
         segment.encodeRecord(&sl, en, record);
         try self.node.applyReplicated(en.journal, &sl, en, reslotted, record);
         if (en.kind == .epoch) {
             if (self.node.control.epoch) |ep| {
-                if (sl.epoch > ep.number) {
+                if (ep.number > prev_epoch_number and prev_head != null) {
                     self.branch_start = sl.position();
                     self.common_tail = prev_head;
                 }
@@ -2143,9 +2147,17 @@ pub const ClusterNode = struct {
             try self.onDivergence(conn_id, payload.leader, m.sl.epoch);
             return;
         }
-        // Note my branch facts when an epoch folds (before the fold moves).
+        // Note my branch facts when an epoch folds (before the fold moves):
+        // the fold's epoch number advances with the apply, so the
+        // "did this open a new term" comparison below must use the
+        // pre-apply number, or it never fires (bug
+        // 2026-08-30-three-member-merge-strands-the-losing-follower).
         var prev_head: ?slot.Position = null;
-        if (en.kind == .epoch) prev_head = self.node.control.head;
+        var prev_epoch_number: u64 = 0;
+        if (en.kind == .epoch) {
+            prev_head = self.node.control.head;
+            if (self.node.control.epoch) |ep| prev_epoch_number = ep.number;
+        }
 
         self.node.applyReplicated(jid, &m.sl, &en, m.reslotted, m.record) catch |err| switch (err) {
             error.BadPrevHash => {
@@ -2194,10 +2206,13 @@ pub const ClusterNode = struct {
             },
         };
         // Branch facts only move for a *live* epoch (a new term); a
-        // re-slotted epoch from a merge broadcast must not move them.
+        // re-slotted epoch from a merge broadcast must not move them (the
+        // re-slot carries the current epoch number, so it never advances the
+        // fold). `prev_head` non-null means the chain existed before the
+        // epoch - a chainless member's genesis has no branch.
         if (en.kind == .epoch) {
             const ep = self.node.control.epoch orelse return;
-            if (m.sl.epoch > ep.number and self.node.control.head != null) {
+            if (ep.number > prev_epoch_number and prev_head != null) {
                 self.branch_start = m.sl.position();
                 self.common_tail = prev_head;
             }
@@ -2416,12 +2431,29 @@ pub const ClusterNode = struct {
                 return;
             }
             // The record bytes the page carried are the exact on-disk form,
-            // so the store appends them verbatim (no re-encode).
+            // so the store appends them verbatim (no re-encode). An epoch on
+            // the control chain is a new term this member may be folding for
+            // the first time: record the branch facts exactly as the live
+            // broadcast path does. A member that learns its branch only from
+            // backfill used to carry no branch_start, so becomeLoser refused
+            // to act and the member stayed stranded after a heal (bug
+            // 2026-08-30-three-member-merge-strands-the-losing-follower).
             const raw = p.records[off .. off + rec.next_offset];
+            const prev_control_head = self.node.control.head;
+            const prev_epoch_number = if (self.node.control.epoch) |ep| ep.number else 0;
             self.node.applyReplicated(p.journal_id, &rec.slot, &e, false, raw) catch {
                 self.closeConn(conn_id);
                 return;
             };
+            if (e.kind == .epoch and
+                std.mem.eql(u8, &p.journal_id, &self.node.control.journal_id))
+            {
+                const ep = self.node.control.epoch orelse return;
+                if (ep.number > prev_epoch_number and prev_control_head != null) {
+                    self.branch_start = rec.slot.position();
+                    self.common_tail = prev_control_head;
+                }
+            }
             // A client or host awaiting this entry's slot: the broadcast
             // was dropped by the sync guard, so this apply is what must
             // post the ack/completion (bug
