@@ -904,6 +904,20 @@ pub const Node = struct {
         return self.readRecord(journal_id, info, ctx, on_entry);
     }
 
+    /// Which entries a read yields, beyond the slot window and the
+    /// visibility flags (PRD 0001 *Read path*). A field left null does not
+    /// filter, so `.{}` is the plain range read.
+    ///
+    /// Both are entry facts rather than slot facts, and the entry header is
+    /// already in hand when the filter runs, so filtering costs one
+    /// comparison per record and never a second pass.
+    pub const Filter = struct {
+        /// Only entries whose author is this member id.
+        author: ?[16]u8 = null,
+        /// Only entries of this kind (`data`, or one of the control kinds).
+        kind: ?entry.Kind = null,
+    };
+
     /// Reads slots in `[from, to]`, in chain order. `from` defaults to the
     /// journal's genesis, `to` to its head (inclusive). Walks the store in
     /// chain order (one region read per segment) instead of sorting the
@@ -920,6 +934,87 @@ pub const Node = struct {
         ctx: anytype,
         comptime on_entry: fn (@TypeOf(ctx), *const slot.Slot, ?*const entry.Entry) anyerror!void,
     ) !void {
+        return self.readWhere(
+            journal_id,
+            from,
+            to,
+            .{},
+            include_stale,
+            include_expired,
+            ctx,
+            on_entry,
+        );
+    }
+
+    /// Every entry `author` wrote to this journal, in chain order (PRD 0001
+    /// *Read path*: "by author"). Same window and visibility rules as
+    /// `readRange` over the whole chain.
+    ///
+    /// The author is the entry's, not the slot leader's: a re-slotted entry
+    /// still belongs to whoever wrote it, which is the point of separating
+    /// entry from slot.
+    pub fn readByAuthor(
+        self: *Node,
+        journal_id: [16]u8,
+        author: [16]u8,
+        include_stale: bool,
+        include_expired: bool,
+        ctx: anytype,
+        comptime on_entry: fn (@TypeOf(ctx), *const slot.Slot, ?*const entry.Entry) anyerror!void,
+    ) !void {
+        return self.readWhere(
+            journal_id,
+            null,
+            null,
+            .{ .author = author },
+            include_stale,
+            include_expired,
+            ctx,
+            on_entry,
+        );
+    }
+
+    /// Every entry of `kind` in this journal, in chain order (PRD 0001 *Read
+    /// path*: "by kind"). `.data` on a data journal skips that journal's own
+    /// `settings`, `stale` and `checkpoint` records; a control kind reads
+    /// them, which is how a host inspects what the chain did to itself
+    /// without folding it again.
+    pub fn readByKind(
+        self: *Node,
+        journal_id: [16]u8,
+        kind: entry.Kind,
+        include_stale: bool,
+        include_expired: bool,
+        ctx: anytype,
+        comptime on_entry: fn (@TypeOf(ctx), *const slot.Slot, ?*const entry.Entry) anyerror!void,
+    ) !void {
+        return self.readWhere(
+            journal_id,
+            null,
+            null,
+            .{ .kind = kind },
+            include_stale,
+            include_expired,
+            ctx,
+            on_entry,
+        );
+    }
+
+    /// The one read walk: slot window, then `filter`, then the fold's
+    /// visibility. `readRange`, `readByAuthor` and `readByKind` are all this
+    /// with a different `filter`, so there is one place where "what a read
+    /// hides" is decided.
+    pub fn readWhere(
+        self: *Node,
+        journal_id: [16]u8,
+        from: ?slot.Position,
+        to: ?slot.Position,
+        filter: Filter,
+        include_stale: bool,
+        include_expired: bool,
+        ctx: anytype,
+        comptime on_entry: fn (@TypeOf(ctx), *const slot.Slot, ?*const entry.Entry) anyerror!void,
+    ) !void {
         const fold = self.foldOf(journal_id) orelse return;
         const start = from orelse slot.Position{ .epoch = 1, .seq = 1 };
         const end = to orelse fold.head orelse return;
@@ -929,6 +1024,7 @@ pub const Node = struct {
             start: slot.Position,
             end: slot.Position,
             now: i64,
+            filter: Filter,
             include_stale: bool,
             include_expired: bool,
             user_ctx: @TypeOf(ctx),
@@ -938,6 +1034,7 @@ pub const Node = struct {
             .start = start,
             .end = end,
             .now = self.now(self.io),
+            .filter = filter,
             .include_stale = include_stale,
             .include_expired = include_expired,
             .user_ctx = ctx,
@@ -952,6 +1049,12 @@ pub const Node = struct {
                 // under every flag — the fold filter below already excludes
                 // it, and without an entry its id is not derivable.
                 const e = en orelse return;
+                if (cc.filter.author) |a| {
+                    if (!std.mem.eql(u8, &e.author, &a)) return;
+                }
+                if (cc.filter.kind) |k| {
+                    if (e.kind != k) return;
+                }
                 const info = cc.fold.entries.get(e.id()) orelse return;
                 if (!visible(cc.fold, info, cc.now, cc.include_stale, cc.include_expired)) return;
                 try on_entry(cc.user_ctx, sl, en);
@@ -1506,6 +1609,85 @@ test "a journal the chain names but the store lost is refused, not unwrapped" {
     const ttl_default = schema.keyIndex("ttl.default_ms").?;
     const changes = [_]validate.Change{.{ .key = ttl_default, .value = .{ .u64 = 5000 } }};
     try std.testing.expectError(error.UnknownJournal, node.changeSettings(jid, &changes));
+}
+
+test "reads filter by author and by kind (PRD 0001 read path)" {
+    // PRD 0001 *Read path* lists what the read API exposes: "by slot range
+    // within an epoch, by entry id, by author, by kind, from a cursor with
+    // follow". The range, the id and the cursor shipped with the core;
+    // `readByAuthor` and `readByKind` did not exist, so the PRD named an API
+    // the tree did not have. Both are entry facts the scan already holds, so
+    // they are one comparison inside the existing walk rather than a
+    // second pass.
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    var node = try openNode(&env);
+    defer node.deinit();
+    const jid = node.journalIdByName("main").?;
+
+    _ = try node.append(jid, "one", 0);
+    _ = try node.append(jid, "two", 0);
+    // A journal-scoped settings entry lands in this journal's own chain, so
+    // the data journal holds two kinds.
+    const ttl_default = schema.keyIndex("ttl.default_ms").?;
+    const changes = [_]validate.Change{.{ .key = ttl_default, .value = .{ .u64 = 5000 } }};
+    try node.changeSettings(jid, &changes);
+
+    const Count = struct {
+        n: usize = 0,
+        fn cb(c: *@This(), _: *const slot.Slot, _: ?*const entry.Entry) anyerror!void {
+            c.n += 1;
+        }
+    };
+
+    // The unfiltered read is the baseline: three records in the chain.
+    var all = Count{};
+    try node.readRange(jid, null, null, false, false, &all, Count.cb);
+    try std.testing.expectEqual(@as(usize, 3), all.n);
+
+    // By kind, both ways round: the data entries without the settings
+    // record, and the settings record without the data entries.
+    var data_only = Count{};
+    try node.readByKind(jid, .data, false, false, &data_only, Count.cb);
+    try std.testing.expectEqual(@as(usize, 2), data_only.n);
+    var settings_only = Count{};
+    try node.readByKind(jid, .settings, false, false, &settings_only, Count.cb);
+    try std.testing.expectEqual(@as(usize, 1), settings_only.n);
+    // A kind this journal never carries yields nothing rather than
+    // everything - the filter is applied, not ignored when it matches no
+    // record.
+    var none_of_kind = Count{};
+    try node.readByKind(jid, .join, false, false, &none_of_kind, Count.cb);
+    try std.testing.expectEqual(@as(usize, 0), none_of_kind.n);
+
+    // By author. A single-member journal has one author, so the two sides
+    // that matter are "this member" (everything) and "some other member"
+    // (nothing); the negative half is what shows the comparison runs.
+    var mine = Count{};
+    try node.readByAuthor(jid, node.id(), false, false, &mine, Count.cb);
+    try std.testing.expectEqual(@as(usize, 3), mine.n);
+    var stranger = Count{};
+    try node.readByAuthor(jid, [_]u8{0xAA} ** 16, false, false, &stranger, Count.cb);
+    try std.testing.expectEqual(@as(usize, 0), stranger.n);
+
+    // The control journal is read the same way: its genesis is one record of
+    // kind `genesis`, whatever else the chain has accumulated.
+    var genesis_count = Count{};
+    try node.readByKind(
+        node.control.journal_id,
+        .genesis,
+        false,
+        false,
+        &genesis_count,
+        Count.cb,
+    );
+    try std.testing.expectEqual(@as(usize, 1), genesis_count.n);
 }
 
 test "stale marks hide the entry from default reads; include_stale shows it (G5, G7)" {
