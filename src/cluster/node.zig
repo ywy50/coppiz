@@ -2168,7 +2168,7 @@ pub const ClusterNode = struct {
 
         // The epoch's liveness half: a member that disagrees keeps its
         // previous view — a partition, resolved by the merge.
-        if (en.kind == .epoch and !self.epochAccepted(&en, &m.sl)) {
+        if (en.kind == .epoch and !try self.epochAccepted(&en, &m.sl)) {
             const payload = epoch.decodeEpochPayload(en.payload) catch {
                 // A malformed epoch payload is a protocol violation: drop
                 // the connection rather than silently keeping a stale view.
@@ -2454,7 +2454,7 @@ pub const ClusterNode = struct {
             // leader must be what `leader(...)` returns for my liveness
             // view. A member that disagrees keeps its previous view — that
             // is a partition, and the merge resolves it.
-            if (e.kind == .epoch and !self.epochAccepted(&e, &rec.slot)) {
+            if (e.kind == .epoch and !try self.epochAccepted(&e, &rec.slot)) {
                 const payload = epoch.decodeEpochPayload(e.payload) catch {
                     self.closeConn(conn_id);
                     return;
@@ -3230,12 +3230,22 @@ pub const ClusterNode = struct {
     /// Only a *live* epoch — one that opens a new term — is checked; a
     /// merge re-slot at the current epoch number is a no-op the inference
     /// applies regardless of who it claims.
-    fn epochAccepted(self: *ClusterNode, en: *const entry.Entry, sl: *const slot.Slot) bool {
+    fn epochAccepted(
+        self: *ClusterNode,
+        en: *const entry.Entry,
+        sl: *const slot.Slot,
+    ) error{OutOfMemory}!bool {
         if (self.syncing) return true;
         if (sl.epoch == self.node.control.epoch.?.number) return true;
         const payload = epoch.decodeEpochPayload(en.payload) catch return false;
         const inputs = self.electionInputs();
-        const views = self.viewsFor() catch return false;
+        // Running out of memory is not a disagreement. `false` here means
+        // "my liveness view elects someone else", which both callers answer
+        // with `onDivergence` — and a divergence can truncate a committed
+        // suffix (`becomeLoser`). A transient allocation failure must not
+        // fabricate a partition, so it propagates instead of being folded
+        // into the verdict.
+        const views = try self.viewsFor();
         defer self.allocator.free(views);
         const elected = election.leader(inputs, views) orelse return false;
         return std.mem.eql(u8, &elected, &payload.leader);
@@ -6077,4 +6087,68 @@ test "(PRD 0003) a leadership change that elects the same member appends no epoc
     try cn.onSettings(9, .{ .journal = "__cluster__", .changes = other_encoded });
     try std.testing.expectEqual(epoch_before, cn.node.control.epoch.?.number);
     try std.testing.expect(cn.isLeader());
+}
+
+test "an allocation failure while judging an epoch is not a partition" {
+    // `epochAccepted` folded `viewsFor`'s `OutOfMemory` into `false`, and
+    // both callers read `false` as "my liveness view elects someone else",
+    // which they answer with `onDivergence` — the path `becomeLoser`
+    // truncates a committed suffix from. A transient allocation failure
+    // must not fabricate a branch, so the error propagates instead.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    // A *live* epoch — one past the fold's current number, so neither early
+    // return answers it — claiming this member, which is what a one-member
+    // view elects.
+    const next_number = cn.node.control.epoch.?.number + 1;
+    var payload: [epoch.epoch_payload_len]u8 = undefined;
+    epoch.encodeEpochPayload(.{
+        .number = next_number,
+        .reason = .leader_lost,
+        .leader = cn.node.member_id,
+    }, &payload);
+    const en = try cn.signedEntry(.epoch, cn.node.control.journal_id, &payload, 0);
+    const sl = slot.Slot{
+        .epoch = next_number,
+        .seq = 1,
+        .slot_ts_ms = 0,
+        .entry_hash = entry.entryHash(&en),
+        .prev_slot_hash = cn.node.control.head_slot_hash,
+        .leader = cn.node.member_id,
+        .signature = undefined,
+    };
+
+    // With memory the epoch is judged, and judged accepted.
+    try std.testing.expect(try cn.epochAccepted(&en, &sl));
+
+    // Without memory the verdict is unavailable — which is not "rejected".
+    const saved = cn.allocator;
+    cn.allocator = std.testing.failing_allocator;
+    defer cn.allocator = saved;
+    try std.testing.expectError(error.OutOfMemory, cn.epochAccepted(&en, &sl));
 }
