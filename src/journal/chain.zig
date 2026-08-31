@@ -700,8 +700,12 @@ pub const FoldState = struct {
         if (!std.mem.eql(u8, &en.payload_hash, &entry.payloadHash(en.payload))) {
             return error.BadPayloadHash;
         }
-        settings_fold.applyGenesis(&self.settings, payload.changes) catch
-            return error.InvalidSettings;
+        // An allocation failure inside the apply must propagate, not become
+        // a refusal: a refusal makes this one member reject a genesis every
+        // other member accepted (bug
+        // 2026-08-31-apply-side-oom-read-as-a-refusal).
+        settings_fold.applyGenesis(&self.settings, payload.changes) catch |err|
+            return mapSettingsApplyError(err);
         try self.members.append(self.allocator, .{
             .id = founder_id,
             .public_key = payload.founder_key,
@@ -751,15 +755,33 @@ pub const FoldState = struct {
         if (self.journals.count() >= max_journals) return error.TooManyJournals;
         // The initial journal settings are validated as a whole, like any
         // settings change, against a fresh journal-scoped state.
-        var state = schema.SettingsState.initDefaults(self.allocator) catch
-            return error.InvalidSettings;
+        // Both steps map their failure rather than flattening it: OOM is
+        // fatal here, never a refusal (bug
+        // 2026-08-31-apply-side-oom-read-as-a-refusal). `initDefaults`'s
+        // other error, `BadSchemaDefault`, is a schema bug a test pins away
+        // and keeps its old `InvalidSettings` reading.
+        var state = schema.SettingsState.initDefaults(self.allocator) catch |err|
+            return mapSettingsApplyError(err);
         defer state.deinit();
-        settings_fold.applyGenesis(&state, payload.changes) catch return error.InvalidSettings;
-        try self.journals.put(payload.journal_id, .{
-            .id = payload.journal_id,
-            .name = try self.allocator.dupe(u8, payload.name),
-            .created_at = sl.position(),
-        });
+        settings_fold.applyGenesis(&state, payload.changes) catch |err|
+            return mapSettingsApplyError(err);
+        {
+            // The name is duped in its own scope, with an errdefer, rather
+            // than inline as an argument: an argument is evaluated before
+            // the call, so an OutOfMemory in the map's own growth left the
+            // dupe owned by nobody (bug
+            // 2026-08-31-create-journal-name-leaks-on-put-failure).
+            // `membership.applyJoin` already separates the two steps this
+            // way. The scope ends once `put` has taken ownership, so a
+            // later failure cannot free what the map now holds.
+            const name = try self.allocator.dupe(u8, payload.name);
+            errdefer self.allocator.free(name);
+            try self.journals.put(payload.journal_id, .{
+                .id = payload.journal_id,
+                .name = name,
+                .created_at = sl.position(),
+            });
+        }
         try self.registerEntry(sl, en);
     }
 
@@ -1721,6 +1743,79 @@ test "decode OutOfMemory propagates as fatal, never a refusal" {
     const sl = try fix.slotFor(1, 2, entry.entryHash(&en), fold.head_slot_hash, 1001);
     fa.fail_index = fa.alloc_index;
     try std.testing.expectError(error.OutOfMemory, fold.applyControl(&sl, &en));
+}
+
+test "an apply-side allocation failure is fatal, never a settings refusal" {
+    // Bug 2026-08-31-apply-side-oom-read-as-a-refusal: three apply-side call
+    // sites flattened every failure into `InvalidSettings`, OutOfMemory
+    // included. A refusal is a chain verdict every member reaches the same
+    // way; OOM is one member's local condition, so reporting it as a refusal
+    // makes that member reject an entry every other member accepted and
+    // diverge silently. `mapSettingsApplyError` is this file's own rule for
+    // the distinction and was not used at those sites.
+    //
+    // The failure index is swept rather than aimed at one allocation: what
+    // has to hold is that *no* index anywhere in the fold yields a refusal,
+    // and an aimed index pins the wrong thing as soon as the path allocates
+    // once more or once less.
+    const authorities = schema.keyIndex("leadership.authorities").?;
+    const names = try test_alloc.alloc([]const u8, 2);
+    defer {
+        for (names) |n| test_alloc.free(n);
+        test_alloc.free(names);
+    }
+    names[0] = try test_alloc.dupe(u8, "a1b2");
+    names[1] = try test_alloc.dupe(u8, "node.example");
+    const changes = [_]validate.Change{
+        .{ .key = authorities, .value = .{ .string_list = names } },
+    };
+
+    var fix = Fix.init();
+    // Genesis carrying a string_list, so `applyGenesis`'s clone-validate-
+    // commit really allocates; then a create_journal, whose apply builds a
+    // fresh journal-scoped state and applies its initial settings to it.
+    const g = try fix.genesisPair(&changes);
+    defer test_alloc.free(g.payload);
+    const cj = try test_alloc.alloc(
+        u8,
+        createJournalPayloadLen(.{ .journal_id = fix.data_id, .name = "main", .changes = &.{} }),
+    );
+    defer test_alloc.free(cj);
+    try encodeCreateJournalPayload(
+        .{ .journal_id = fix.data_id, .name = "main", .changes = &.{} },
+        cj,
+    );
+    const cj_en = try fix.entryFor(.create_journal, fix.control_id, 2, 0, cj);
+    const cj_sl = try fix.slotFor(1, 2, entry.entryHash(&cj_en), slot.slotHash(&g.sl), 1001);
+
+    for (0..120) |i| {
+        var fa = std.testing.FailingAllocator.init(test_alloc, .{ .fail_index = i });
+        var fold = FoldState.init(fa.allocator(), true, [_]u8{0} ** 16) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            continue;
+        };
+        var failure: ?ApplyError = null;
+        fold.applyControl(&g.sl, &g.en) catch |err| {
+            failure = err;
+        };
+        if (failure == null) {
+            fold.applyControl(&cj_sl, &cj_en) catch |err| {
+                failure = err;
+            };
+        }
+        // Deinit before the assertions, so the accounting below sees
+        // everything the fold gave back.
+        fold.deinit();
+        if (failure) |err| {
+            try std.testing.expectEqual(ApplyError.OutOfMemory, err);
+            // The other half of "a refused apply changes nothing": it owns
+            // nothing either. `create_journal`'s duped journal name was
+            // evaluated as an argument to `journals.put`, so an OOM in the
+            // map's growth orphaned it (bug
+            // 2026-08-31-create-journal-name-leaks-on-put-failure).
+            try std.testing.expectEqual(fa.allocations, fa.deallocations);
+        }
+    }
 }
 
 test "data entries: valid appends, and each refusal names its reason" {
