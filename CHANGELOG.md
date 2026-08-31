@@ -5,6 +5,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ## [Unreleased]
 
+### Added
+
+- `coppiz doctor` names a directory whose chain has peers but which no node
+  is serving. That is PRD 0005's "host never calls `run()`/`tick()`" failure
+  mode - nothing replicates, no member is watched - and it produced no error
+  anywhere: the directory opens, appends and reads exactly as a healthy one
+  does. An unset `listen` is named beside it, since peers cannot reach that
+  member even once it serves. A single-member directory is unaffected.
+
 ### Fixed
 
 - Closing a listener on the in-memory hub transport now frees its address.

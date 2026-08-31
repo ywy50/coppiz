@@ -673,6 +673,25 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void
         }
     }
     try checkGenesisDrift(&doc, &cfg, node);
+    // Reaching here means `Node.open` took the lock, so nothing is serving
+    // this directory. At size 1 that is ordinary - local appends work and
+    // there is nobody to replicate to. With peers in the chain it is the
+    // PRD 0005 failure mode "host never calls run()/tick()": nothing
+    // replicates, the failure detector never runs, and no error says so
+    // anywhere. Naming it is this command's job.
+    if (node.control.memberCount() > 1) {
+        try doc.warn(
+            "cluster: {d} members and no node serving this directory - " ++
+                "nothing replicates and no member is being watched",
+            .{node.control.memberCount()},
+        );
+        if (cfg.listen == null) {
+            try doc.warn(
+                "listen: unset, so peers cannot reach this member even once it serves",
+                .{},
+            );
+        }
+    }
     if (cfg.listen) |l| {
         try doc.warn("listen {s} configured but no node is serving", .{l});
     }
@@ -1150,6 +1169,10 @@ test "members and doctor work locally on a single-member directory" {
         "chain: epoch 1, 1 member(s), 1 journal(s)",
     ) != null);
     try std.testing.expect(std.mem.indexOf(u8, doctor_out, "journal main: head") != null);
+    // A directory nobody is serving is only worth naming when the chain has
+    // peers to replicate to. At size 1 a stopped node is the ordinary
+    // resting state, so the cluster warning must stay quiet here.
+    try std.testing.expect(std.mem.indexOf(u8, doctor_out, "nothing replicates") == null);
     try std.testing.expect(std.mem.indexOf(u8, doctor_out, "FAIL") == null);
 }
 
@@ -1440,6 +1463,20 @@ test "process-level: a live cluster grows 1 → 2 → 3 members over TCP, founde
     pc_proc.stop();
     try std.testing.expectEqual(@as(usize, 3), try memberCountOf(&a));
     try std.testing.expectEqual(@as(usize, 3), try memberCountOf(&b));
+
+    // Nothing is serving any of the three directories now, and each chain
+    // says it has peers: the PRD 0005 failure mode where the host never
+    // runs the loop, in which nothing replicates and no member is watched.
+    // `doctor` names it rather than reporting a healthy three-member chain
+    // (warnings do not fail the command).
+    const doc_b = try b.runRaw(&.{ "doctor", "--dir", b.dir });
+    defer test_alloc.free(doc_b.out);
+    if (std.mem.indexOf(u8, doc_b.out, "nothing replicates") == null) {
+        std.debug.print("doctor said (code {d}):\n{s}\n", .{ doc_b.code, doc_b.out });
+        return error.DoctorDidNotNameTheSilentCluster;
+    }
+    try std.testing.expect(std.mem.indexOf(u8, doc_b.out, "no node serving") != null);
+    try std.testing.expectEqual(@as(u8, 0), doc_b.code);
 }
 
 /// Polls `read --dir` until the output contains `needle`.
