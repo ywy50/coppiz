@@ -8,7 +8,20 @@
 
 ## Status
 
-Resolved.
+Reopened 2026-08-31. `8893ae1` set this to `Resolved.` in a docs-only commit;
+the TL;DR and References below were left reading "Still open" and `Fix: none`,
+and they were the accurate half. The behaviour is unchanged: the arms that were
+supposed to render a compacted slot over the wire cannot run, because
+`readWhere` drops slot-only records before any callback fires. So
+`onReadReq`'s slot-only arm and `printRecord`'s `(removed)` arm are both dead
+code, and a wire read still shows an unmarked position gap where a local read
+shows `(removed)`.
+
+Fixing it needs a decision that is not yet made - may a read show a removed
+slot at all? PRD 0002 G5 and this report point opposite ways - so it is
+recorded rather than patched. See
+[the 2026-08-31 investigation](../investigations/2026-08-31-wire-and-local-reads-still-disagree.md),
+which also covers `coppiz head`'s wire/local divergence, and RFC 0018.
 
 ## Symptom and impact
 
@@ -37,4 +50,5 @@ None - output-consistency issue, no data loss.
 ## References
 
 - Code: `src/cluster/node.zig:2440-2448` (`onReadReq`), `src/net/client.zig:183`, `src/main.zig:426`
-- Fix: none
+- Fix: none. Still none as of 2026-08-31 - see Status.
+- Investigation: [2026-08-31 - the wire read and the local read still disagree, and one recorded fix cannot run](../investigations/2026-08-31-wire-and-local-reads-still-disagree.md)
