@@ -15,6 +15,21 @@ tier-0 CLI).
 The format magics are coppiz-derived (`CPPZ` entry, `CPSG`
 segment, `CPST` seal, `CPPQ` queue), not the draft's `SPNE`.
 
+Phase 1's "fuzz test on the decoders" reached the rest of the untrusted-input
+surface on 2026-08-31. The entry, slot, segment-record and wire-message
+decoders had one each; the payload decoders a control entry carries did not,
+although a `settings`, `genesis` or `create_journal` payload arrives over the
+wire and is decoded by every member. `settings/schema.zig` (`decodeValue`),
+`settings/fold.zig` (`decodePayload`) and `journal/chain.zig` (`genesis`,
+`create_journal`, `stale`, `checkpoint`) now each carry one, asserting the
+property the fold determinism hash rests on: a successful decode is
+*canonical* - its encoded length is the input length and re-encoding
+reproduces the bytes - so two members cannot read one signed payload as two
+different things without either of them refusing it. The `coppiz.toml` parser
+(operator input, not peer input, but hand-rolled and the subject of five
+recorded bugs) is fuzzed for the weaker contract that a refusal leaves a
+`Config` `deinit` can take apart exactly once.
+
 This PRD is the data model every other PRD builds on: [0002](0002-ttl-and-staleness.md)
 (TTL and staleness), [0003](0003-membership-and-leadership.md) (membership,
 leadership), [0004](0004-settings.md) (settings), [0005](0005-embedding-the-library-as-the-product.md)

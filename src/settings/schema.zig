@@ -774,6 +774,37 @@ test "a string_list item count is sized against the body, not trusted from it" {
     );
 }
 
+const FuzzCtx = struct {
+    fn fuzzOne(_: @This(), smith: *std.testing.Smith) anyerror!void {
+        // The value codec is an untrusted-input surface: a `settings`
+        // entry's payload arrives over the wire and every member decodes it
+        // with the same rule (AGENTS.md - untrusted-input decoders get a
+        // fuzz test; PRD 0001 phase 1). Any error is acceptable. A success
+        // must be *canonical*: the value's encoded length is the input
+        // length and re-encoding reproduces the bytes exactly. That is the
+        // property the fold determinism hash rests on - two members that
+        // read the same bytes as different values disagree on the hash
+        // without either of them refusing anything.
+        var buf: [512]u8 = undefined;
+        const len = smith.slice(&buf);
+        const allocator = std.testing.allocator;
+        for (0..key_count) |i| {
+            const key: u16 = @intCast(i);
+            const value = decodeValue(allocator, key, buf[0..len]) catch continue;
+            defer value.deinit(allocator);
+            try std.testing.expectEqual(len, valueLen(value));
+            const round = try allocator.alloc(u8, len);
+            defer allocator.free(round);
+            try encodeValue(value, round);
+            try std.testing.expectEqualSlices(u8, buf[0..len], round);
+        }
+    }
+};
+
+test "the settings value decoder fuzzes over untrusted bytes" {
+    try std.testing.fuzz(FuzzCtx{}, FuzzCtx.fuzzOne, .{});
+}
+
 test "unknown keys are not in the table" {
     try std.testing.expect(keyIndex("ttl.enforcee") == null);
     try std.testing.expect(keyIndex("leader") == null);
