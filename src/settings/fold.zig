@@ -74,6 +74,14 @@ pub fn decodeChanges(
 ) DecodeError![]validate.Change {
     if (bytes.len < 2) return error.InvalidLength;
     const count = std.mem.readInt(u16, bytes[0..2], .little);
+    // Size the allocation against what the body could actually hold, not
+    // against the count it claims. Each change carries at least its two
+    // u16 length fields, so a body shorter than `2 + count * 4` is
+    // malformed however the rest of it decodes - and the per-change bounds
+    // check below would reach that conclusion anyway, after allocating for
+    // up to 65,535 changes on the strength of two bytes.
+    const min_bytes = 2 + @as(usize, count) * 4;
+    if (bytes.len < min_bytes) return error.InvalidLength;
     const changes = try allocator.alloc(validate.Change, count);
     var filled: usize = 0;
     errdefer {
@@ -425,4 +433,38 @@ test "applySettings commit is atomic: an OOM on the second change leaves the sta
             try std.testing.expectEqualSlices(u8, &before, &after);
         }
     }
+}
+
+test "a change count is sized against the body, not trusted from it" {
+    // `decodeChanges` read a u16 count and allocated for it before looking
+    // at how much body there was to decode. Two bytes claiming 65,535
+    // changes committed 65,535 `validate.Change` slots, every one of which
+    // the per-change bounds check below the allocation was going to refuse
+    // on the first iteration.
+    var body: [2]u8 = undefined;
+    std.mem.writeInt(u16, &body, std.math.maxInt(u16), .little);
+
+    // With no memory to allocate from, the refusal has to come from the
+    // shape of the input rather than from the allocator: the body cannot
+    // hold 65,535 changes, and that is knowable before asking for a byte.
+    try std.testing.expectError(
+        error.InvalidLength,
+        decodeChanges(std.testing.failing_allocator, &body, null),
+    );
+
+    // A count of one still needs its 4-byte header to be there.
+    var short: [4]u8 = undefined;
+    std.mem.writeInt(u16, short[0..2], 1, .little);
+    std.mem.writeInt(u16, short[2..4], 0, .little);
+    try std.testing.expectError(
+        error.InvalidLength,
+        decodeChanges(test_alloc, short[0..3], null),
+    );
+
+    // And an honest empty list still decodes.
+    var empty: [2]u8 = undefined;
+    std.mem.writeInt(u16, &empty, 0, .little);
+    const none = try decodeChanges(test_alloc, &empty, null);
+    defer test_alloc.free(none);
+    try std.testing.expectEqual(@as(usize, 0), none.len);
 }

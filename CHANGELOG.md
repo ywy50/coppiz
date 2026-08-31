@@ -7,6 +7,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A malformed settings payload no longer sizes an allocation from a count
+  nothing has checked. The change list begins with a u16 count, and the
+  decoder allocated for it before establishing that the body could hold
+  that many changes - so two bytes claiming 65,535 changes committed 65,535
+  slots for a decode that was refused on its first iteration. The body is
+  now checked against the minimum the count implies first. The same decoder
+  reads a `settings` entry, a genesis's initial settings and a
+  `create_journal`'s journal settings.
+
 - A `merge_ack` whose handling fails part-way no longer strands the member
   on its dead branch. The handler truncates, re-folds and re-arms the sync
   cursors, but it was the one frame handler whose error the dispatch
