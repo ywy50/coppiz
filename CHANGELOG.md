@@ -80,6 +80,27 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   both paths and a heal cannot admit an entry a tick would have dropped.
   Harness fidelity only.
 
+- A cancelled `localReadRange` frees the range the loop copied for it. The
+  embedded host's read blocks on its completion while the loop copies every
+  visible record in, and those copies - the record list plus one allocation
+  per entry payload - are the waiter's to free. The `defer` that frees them
+  was armed *after* the `catch return error.Canceled` on the wait, so the one
+  exit that skipped it was the one where the loop had most likely already
+  filled the completion. A host that cancels reads leaked the whole answer,
+  not a fixed overhead, once per cancelled read.
+
+- One un-slotable entry in the durable queue no longer stops the whole node.
+  The leader's queue sweep, `slotQueuedEntries`, wrapped its slot step in a
+  bare `try`, so any per-entry refusal - too large after `max_entry_bytes` was
+  lowered, a duplicate seq consumed while the entry sat queued, a journal the
+  member no longer has a fold for - left the queue scan, reached the tick's
+  `catch self.fatal()`, and stopped the loop. The other queue-drain path,
+  `reforwardQueue`, has always answered the entry's waiter with the refusal
+  and moved on; both paths now do, and the entry stays in the durable queue
+  the way `reforwardQueue` leaves it. Its bug report was marked resolved on
+  2026-08-29 by a docs-only status sweep while the defect was still in the
+  tree; the record now carries that correction with its evidence.
+
 - The simulator's `heal` reads a side's leader and branch from a live node
   instead of from whichever node the partition set happens to list first.
   `sideLeader` and `tailOf` took `partition_sides[side].items[0]` with no

@@ -645,6 +645,10 @@ pub const ClusterNode = struct {
         comptime on_entry: fn (@TypeOf(ctx), *const slot.Slot, ?*const entry.Entry) anyerror!void,
     ) !void {
         var completion = LocalReadCompletion{ .allocator = self.allocator };
+        // Armed before the wait, not after it: the wait's own cancellation
+        // path returns, and by then the loop may already have copied the
+        // whole range in (bug 2026-08-31-local-read-cancel-leak).
+        defer deinitLocalRead(&completion, self.allocator);
         if (!self.mailbox.post(io, .{ .local_read = .{
             .journal_id = journal_id,
             .from = from,
@@ -657,7 +661,6 @@ pub const ClusterNode = struct {
         } else {
             completion.sem.wait(io) catch return error.Canceled;
         }
-        defer deinitLocalRead(&completion, self.allocator);
         if (completion.err) |err| return err;
         for (completion.records.items) |*rec| {
             try on_entry(ctx, &rec.slot, if (rec.entry) |*en| en else null);
@@ -1338,7 +1341,23 @@ pub const ClusterNode = struct {
                     c.self.completePendingFor(en);
                     return;
                 }
-                _ = try c.self.slotAndBroadcast(en, false);
+                _ = c.self.slotAndBroadcast(en, false) catch |err| {
+                    // A refusal is this entry's, not the node's: a bare
+                    // `try` here left the queue scan and reached `onTick`'s
+                    // `catch self.fatal()`, so one un-slotable queued entry
+                    // (too large after `max_entry_bytes` was lowered, a seq
+                    // consumed while it sat queued) stopped the whole loop.
+                    // `reforwardQueue`'s branch acks the waiters and moves
+                    // on; both queue-drain paths now do (bug
+                    // 2026-08-28-sweep3-slotqueued-refusal-fatal).
+                    if (c.self.pending_clients.fetchRemove(en.id())) |kv| {
+                        c.self.ackClient(kv.value, en.id(), clientRefusalName(err)) catch {};
+                    }
+                    if (c.self.pending_locals.fetchRemove(en.id())) |kv| {
+                        completeLocal(kv.value, c.self.io, undefined, clientRefusalName(err));
+                    }
+                    return;
+                };
                 if (c.self.pending_clients.fetchRemove(en.id())) |kv| {
                     c.self.ackClient(kv.value, en.id(), "") catch {};
                 }
@@ -6728,4 +6747,177 @@ test "a merge_ack that fails part-way leaves the offer outstanding" {
     // meant the retry - the survivor re-offering after the connection drops
     // - was refused by the `orelse return` on the first line.
     try std.testing.expectEqual(@as(?u64, 7), cn.merging_to);
+}
+
+test "one un-slotable queued entry refuses that entry, not the whole node" {
+    // Bug 2026-08-28-sweep3-slotqueued-refusal-fatal: `slotQueuedEntries`
+    // wrapped `slotAndBroadcast` in a bare `try`, so a refusal on one
+    // queued entry propagated out of the queue scan to `onTick` and into
+    // `fatal()` - a single un-slotable entry stopped the whole loop.
+    // `reforwardQueue`'s equivalent branch acks the waiters and continues;
+    // the two queue-drain paths have to agree.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+    // The founder is the epoch-1 leader straight out of genesis, so the
+    // leader-side sweep is the one under test.
+    try std.testing.expect(cn.isLeader());
+
+    const main_id = node.journalIdByName("main").?;
+    // One slotted entry so the good queued entry below gets author_seq 2 and
+    // cannot share an id with the bad one (whose unknown journal has no
+    // fold to raise the floor from).
+    _ = try node.append(main_id, "seed", 0);
+
+    // A queued entry naming a journal this member does not have: the slot
+    // step refuses it with `UnknownJournal` every time it is swept.
+    const unknown_jid = [_]u8{0xAB} ** 16;
+    const bad = try cn.signedEntry(.data, unknown_jid, "bad", 0);
+    try cn.node.queue.append(&bad);
+    var bad_waiter = LocalCompletion{};
+    try cn.pending_locals.put(test_alloc, bad.id(), &bad_waiter);
+
+    // A slotable entry queued behind it, so the sweep has to continue
+    // rather than merely swallow the refusal.
+    const good = try cn.signedEntry(.data, main_id, "good", 0);
+    try cn.noteBuilt(main_id, good.author_seq);
+    try cn.node.queue.append(&good);
+    try std.testing.expect(bad.author_seq != good.author_seq);
+
+    // On the parent this returns `error.UnknownJournal`, which is exactly
+    // what `onTick` hands to `fatal()`.
+    try cn.slotQueuedEntries();
+
+    // The refused entry's waiter was answered, not stranded ...
+    try std.testing.expectEqual(@as(usize, 1), bad_waiter.sem.permits);
+    try std.testing.expectEqualStrings("unknown_journal", bad_waiter.refusal);
+    // ... and the entry behind it still reached its slot.
+    try std.testing.expect(
+        cn.node.journals.get(main_id).?.fold.entries.contains(good.id()),
+    );
+}
+
+test "a cancelled localReadRange frees the records the loop already copied" {
+    // Bug 2026-08-31-local-read-cancel-leak: the
+    // `defer deinitLocalRead(&completion, ...)` sat *after*
+    // `completion.sem.wait(io) catch return error.Canceled`, so the one exit
+    // that does not run it is the one where the loop may already have filled
+    // the completion. `records` (and every entry payload in it) is the
+    // waiter's to free - nobody else has the pointer once the host returns.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+    const main_id = node.journalIdByName("main").?;
+
+    // The host's read runs on its own task so it can be cancelled while it
+    // is parked on the completion, which is the only way out of that wait.
+    const Host = struct {
+        err: ?anyerror = null,
+        fn run(h: *@This(), c: *ClusterNode, io: std.Io, jid: [16]u8) void {
+            c.localReadRange(io, jid, null, null, false, false, {}, onEntry) catch |e| {
+                h.err = e;
+            };
+        }
+        fn onEntry(_: void, _: *const slot.Slot, _: ?*const entry.Entry) anyerror!void {}
+    };
+    var host = Host{};
+    var group: std.Io.Group = .init;
+    try group.concurrent(oio, Host.run, .{ &host, cn, oio, main_id });
+
+    // Take the event off the mailbox the way the loop does, so nothing
+    // reaches the host's frame after it has returned.
+    var event: ?LocalRead = null;
+    {
+        const deadline = wallMs(oio) + 10_000;
+        while (wallMs(oio) < deadline) {
+            cn.mailbox.mutex.lockUncancelable(oio);
+            if (cn.mailbox.events.items.len > 0) {
+                event = cn.mailbox.events.orderedRemove(0).local_read;
+                cn.mailbox.mutex.unlock(oio);
+                break;
+            }
+            cn.mailbox.mutex.unlock(oio);
+            std.Io.sleep(oio, std.Io.Duration.fromMilliseconds(5), .awake) catch {};
+        }
+    }
+    const read = event orelse {
+        group.cancel(oio);
+        group.await(oio) catch {};
+        return error.ReadNeverPosted;
+    };
+
+    // `onLocalRead`'s copy step, without its post: one record with a payload
+    // the completion owns. This is the state the loop leaves behind when the
+    // host's wait loses the race to a cancellation.
+    {
+        const rec = try read.completion.records.addOne(read.completion.allocator);
+        rec.slot = std.mem.zeroes(slot.Slot);
+        rec.entry = .{
+            .kind = .data,
+            .journal = main_id,
+            .author = node.member_id,
+            .author_seq = 1,
+            .author_ts_ms = 0,
+            .ttl_ms = 0,
+            .payload_hash = [_]u8{0} ** 32,
+            .signature = [_]u8{0} ** 64,
+            .payload_len = 1,
+            .payload_omitted = false,
+            .payload = try read.completion.allocator.dupe(u8, "x"),
+        };
+    }
+
+    group.cancel(oio);
+    group.await(oio) catch {};
+
+    // The host reports the cancellation, and the testing allocator's leak
+    // check is the assertion that it freed on the way out: on the parent the
+    // record list and its payload are both still allocated here.
+    try std.testing.expectEqual(@as(?anyerror, error.Canceled), host.err);
 }
