@@ -262,15 +262,49 @@ pub fn tcpListen(
 // In-memory hub (tests and the simulator's transport)
 // ---------------------------------------------------------------------------
 
+/// How long `Direction.readInto` waits for a frame before it gives up.
+///
+/// The hub is the fabric the tests and the simulator run on, so an
+/// unbounded wait here does not fail a test - it hangs the whole test
+/// binary at 0% CPU, with nothing in the log naming the culprit (bug
+/// 2026-08-31-hub-read-has-no-deadline). The `cluster.node` e2e tests are
+/// already written to survive a failed read: they poll for convergence
+/// against their own wall-clock deadline and read a read error as "not
+/// converged yet". An untimed read defeats that, because the poll deadline
+/// is checked only between reads, never during one.
+///
+/// The number is a backstop, not an SLA: far above every legitimate
+/// in-suite wait (those convergence polls allow 20 s, and two e2e tests
+/// sleep 2.5 s at a stretch), far below "forever". A `Direction` a test
+/// builds itself may lower it.
+pub const default_read_timeout_ms: i64 = 120_000;
+
 /// One direction of a hub pipe: an ordered queue of frame bodies. `recv`
 /// pops them; `send` (from the peer) appends. A `close` wakes the reader
-/// with EndOfStream and later sends are discarded.
+/// with EndOfStream and later sends are discarded; a reader that waits
+/// `read_timeout_ms` for a frame that never comes gets `error.Timeout`.
 pub const Direction = struct {
     allocator: std.mem.Allocator,
     mutex: std.Io.Mutex = .init,
-    sem: std.Io.Semaphore = .{},
+    /// Bumped under `mutex` by `push`, `pushFramed` and `close`, then
+    /// published with `futexWake`. `readInto` snapshots it while it still
+    /// holds the mutex and waits for that value to change, which is what
+    /// makes the wait lost-wakeup-free: a writer that bumps between the
+    /// unlock and the wait has already changed the value the wait compares
+    /// against, so the wait returns at once.
+    ///
+    /// A counter rather than the `Io.Semaphore` this used to be, because a
+    /// semaphore cannot carry a deadline - it has only `wait`,
+    /// `waitUncancelable` and `post`, and `Io.Condition` has no timed wait
+    /// either. `futexWaitTimeout` is the primitive that composes with one.
+    /// Accessed atomically even under the mutex, because the waiter
+    /// compares it without holding the lock.
+    seq: u32 = 0,
     chunks: std.ArrayListUnmanaged([]u8) = .empty,
     closed: bool = false,
+    /// Overridable so a test can pin the timeout in milliseconds rather
+    /// than minutes.
+    read_timeout_ms: i64 = default_read_timeout_ms,
 
     pub fn deinit(self: *Direction) void {
         for (self.chunks.items) |chunk| self.allocator.free(chunk);
@@ -287,11 +321,11 @@ pub const Direction = struct {
             self.allocator.free(copy);
             return;
         };
-        self.sem.post(io);
+        self.wake(io);
     }
 
     /// Pushes a header immediately followed by a body as one chunk: one
-    /// lock, one copy, one sem post, where two `push` calls would each pay
+    /// lock, one copy, one wake, where two `push` calls would each pay
     /// all three. The reader already handles a combined chunk (a partial
     /// `readInto` re-bases the remainder).
     pub fn pushFramed(self: *Direction, io: std.Io, header: []const u8, body: []const u8) void {
@@ -305,7 +339,7 @@ pub const Direction = struct {
             self.allocator.free(copy);
             return;
         };
-        self.sem.post(io);
+        self.wake(io);
     }
 
     pub fn close(self: *Direction, io: std.Io) void {
@@ -313,12 +347,28 @@ pub const Direction = struct {
         defer self.mutex.unlock(io);
         if (self.closed) return;
         self.closed = true;
-        self.sem.post(io);
+        self.wake(io);
     }
 
-    /// Reads up to `dest.len` bytes, blocking until data or a close. Returns
-    /// 0 on a clean close with nothing left.
+    /// Wakes a reader waiting for data or a close. Called with `mutex`
+    /// held: the waiter blocks on `seq`, never on the mutex, so waking it
+    /// from inside the critical section costs it nothing.
+    fn wake(self: *Direction, io: std.Io) void {
+        _ = @atomicRmw(u32, &self.seq, .Add, 1, .release);
+        io.futexWake(u32, &self.seq, std.math.maxInt(u32));
+    }
+
+    /// Reads up to `dest.len` bytes, blocking until data or a close.
+    /// Returns 0 on a clean close with nothing left, and `error.Timeout`
+    /// once `read_timeout_ms` has passed with neither.
     pub fn readInto(self: *Direction, io: std.Io, dest: []u8) !usize {
+        // Converted to an absolute deadline once, on entry: the budget is
+        // the total wait, not a fresh allowance handed out per wakeup.
+        const budget: std.Io.Timeout = .{ .duration = .{
+            .raw = std.Io.Duration.fromMilliseconds(self.read_timeout_ms),
+            .clock = .awake,
+        } };
+        const deadline = budget.toDeadline(io);
         while (true) {
             self.mutex.lockUncancelable(io);
             if (self.chunks.items.len > 0) {
@@ -347,10 +397,27 @@ pub const Direction = struct {
                 return n;
             }
             const closed = self.closed;
+            const expected = @atomicLoad(u32, &self.seq, .acquire);
             self.mutex.unlock(io);
             if (closed) return 0;
-            try self.sem.wait(io);
+            try io.futexWaitTimeout(u32, &self.seq, expected, deadline);
+            // `futexWaitTimeout` returns `Cancelable!void`, so an expiry is
+            // indistinguishable from a spurious wakeup: the deadline is
+            // checked here, the way `Io.Event.waitTimeout` checks its own.
+            if (self.expired(io, deadline)) return error.Timeout;
         }
+    }
+
+    /// True once `deadline` has passed with nothing readable and no close.
+    /// The last look happens under the lock, so data or a close landing in
+    /// the same instant as the expiry is delivered rather than reported as
+    /// a timeout.
+    fn expired(self: *Direction, io: std.Io, deadline: std.Io.Timeout) bool {
+        const left = deadline.toDurationFromNow(io) orelse return false;
+        if (left.raw.nanoseconds > 0) return false;
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        return self.chunks.items.len == 0 and !self.closed;
     }
 };
 
@@ -374,6 +441,9 @@ pub const PipeConn = struct {
     fn recvFrame(ctx: *anyopaque, io: std.Io, allocator: std.mem.Allocator) framing.ReadError![]u8 {
         const self: *PipeConn = @ptrCast(@alignCast(ctx));
         var header: [framing.len_bytes]u8 = undefined;
+        // A `Direction` read is bounded (`default_read_timeout_ms`), so a
+        // frame that never arrives surfaces here as `error.ReadFailed`
+        // rather than parking this task forever.
         var n = self.in.readInto(io, &header) catch return error.ReadFailed;
         if (n == 0) return error.EndOfStream;
         while (n < framing.len_bytes) {
@@ -1020,6 +1090,53 @@ test "a partial read leaves a freeable remainder" {
     // must not free an interior pointer of the original chunk.
     try std.testing.expectEqual(@as(usize, 1), try dir.readInto(tio, &second));
     try std.testing.expectEqualStrings("o", second[0..1]);
+}
+
+/// Pushes `body` into `dir` after `delay_ms`, from another task, so a
+/// reader is already parked in the wait when it lands.
+fn pushAfter(dir: *Direction, delay_ms: i64, body: []const u8) void {
+    std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(delay_ms), .awake) catch {};
+    dir.push(tio, body);
+}
+
+test "a read with no data and no close times out rather than blocking forever" {
+    // The hub is the fabric the cluster e2e tests run on, so an unbounded
+    // wait here does not fail one test - it hangs the whole test binary at
+    // 0% CPU (bug 2026-08-31-hub-read-has-no-deadline). Before the deadline
+    // this call parked in `Io.Semaphore.wait` and never came back.
+    var dir = Direction{ .allocator = test_alloc, .read_timeout_ms = 50 };
+    defer dir.deinit();
+    var buf: [4]u8 = undefined;
+    try std.testing.expectError(error.Timeout, dir.readInto(tio, &buf));
+    // A timeout is not a close: the direction still delivers what arrives
+    // after it.
+    dir.push(tio, "ok");
+    try std.testing.expectEqual(@as(usize, 2), try dir.readInto(tio, &buf));
+    try std.testing.expectEqualStrings("ok", buf[0..2]);
+}
+
+test "a clean close with nothing left still reads as 0, not a timeout" {
+    var dir = Direction{ .allocator = test_alloc, .read_timeout_ms = 50 };
+    defer dir.deinit();
+    dir.close(tio);
+    var buf: [4]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 0), try dir.readInto(tio, &buf));
+}
+
+test "a frame pushed while a reader waits still wakes it" {
+    // The wait compares a sequence number snapshotted under the mutex, so
+    // a push landing between the unlock and the wait changed the value the
+    // wait compares against and the wait returns at once. The timeout is
+    // generous relative to the delay: this test is about the wakeup, not
+    // about the deadline.
+    var dir = Direction{ .allocator = test_alloc, .read_timeout_ms = 5_000 };
+    defer dir.deinit();
+    var group: std.Io.Group = .init;
+    group.async(tio, pushAfter, .{ &dir, @as(i64, 30), "late" });
+    var buf: [8]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 4), try dir.readInto(tio, &buf));
+    try std.testing.expectEqualStrings("late", buf[0..4]);
+    try group.await(tio);
 }
 
 test "an empty pushed body is data, not a close" {

@@ -79,6 +79,19 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   2026-08-29 by a docs-only status sweep while the defect was still in the
   tree; the record now carries that correction with its evidence.
 
+- The simulator's `heal` reads a side's leader and branch from a live node
+  instead of from whichever node the partition set happens to list first.
+  `sideLeader` and `tailOf` took `partition_sides[side].items[0]` with no
+  `alive` check, so a leader that crashed mid-partition supplied both: the
+  survivor was named from its frozen fold and the merged branch was sliced
+  out of its frozen chain. A side that then re-elected and wrote lost that
+  epoch and every write after it, while the heal still succeeded and every
+  live node still converged - the loss was invisible to `assertConverged`,
+  and swapping the two indices inside the set changed the outcome. A side
+  with no live node left now contributes no branch, which is what `heal`
+  already assumed by re-folding only live nodes. Harness fidelity only: the
+  simulator is the test and scenario surface, not a served path.
+
 - A refused open no longer leaks the journal fold it was building. The three
   sites that construct a `JournalState` guarded the box and not `js.fold`,
   which allocates the moment it is initialised and again per folded record, so
@@ -388,6 +401,24 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   posted during shutdown. `localAppend` reports it as `error.Canceled`
   rather than `error.Refused`: the cluster refused nothing, and the entry
   may still be in the durable queue.
+
+- A read on the in-memory hub can no longer wait forever. `Direction.readInto`
+  blocked on an untimed `Io.Semaphore.wait` when its queue was empty and the
+  peer had not closed, and nothing on that path carried a deadline - so a
+  frame that never arrived parked the caller for good. The hub is what the
+  unit tests and the simulator's transport run on, so the casualty was `zig
+  build test`: the suite stopped at 0% CPU with nothing in the log naming the
+  test, and the `e2e (b)` convergence poll's own 20 s deadline could not save
+  it, because that deadline is checked between reads and never during one.
+  The semaphore is replaced by a sequence counter waited on with
+  `io.futexWaitTimeout` against a deadline fixed once on entry, snapshotted
+  under the mutex so a push between the unlock and the wait cannot be lost;
+  a read that finds neither data nor a close within `read_timeout_ms`
+  (default 120 s) returns `error.Timeout`, which the pipe conn reports to its
+  caller as `error.ReadFailed`. The number is a backstop rather than an SLA.
+  `Hub.Endpoint.acceptConn` keeps its untimed wait on purpose: blocking until
+  a dialer arrives is what an accept is for. Test-facing and simulator-facing
+  only; the production TCP path is `TcpConn` and was not affected.
 
 ### Added
 

@@ -495,17 +495,30 @@ pub const World = struct {
         }
     }
 
-    /// The side's leader: the member its nodes' fold names, provided that
-    /// member's own node is in the same side. A side whose fold still names
-    /// a leader from the other side (the stall case — it never elected
-    /// anyone) is leaderless and therefore wrote nothing.
+    /// The side's leader: the member its live nodes' fold names, provided
+    /// that member's own node is in the same side. A side whose fold still
+    /// names a leader from the other side (the stall case — it never
+    /// elected anyone) is leaderless and therefore wrote nothing, and so is
+    /// a side with no live node left.
     fn sideLeader(self: *World, side: usize) ?usize {
         const nodes = self.partition_sides[side].items;
-        if (nodes.len == 0) return null;
-        const leader_id = self.nodes.items[nodes[0]].fold.epoch.?.leader;
+        const observer = self.firstLiveOn(side) orelse return null;
+        const leader_id = self.nodes.items[observer].fold.epoch.?.leader;
         const leader_idx = self.nodeIndex(leader_id) orelse return null;
         for (nodes) |i| {
             if (i == leader_idx) return leader_idx;
+        }
+        return null;
+    }
+
+    /// The first live node listed on a side: the side's fold and chain are
+    /// read through it. A crashed node's fold and chain are frozen at its
+    /// crash point, so it can neither name the side's leader nor supply the
+    /// side's branch, whatever position it holds in the partition set
+    /// (bug 2026-08-28-sweep3-sim-heal-crashed-leader).
+    fn firstLiveOn(self: *World, side: usize) ?usize {
+        for (self.partition_sides[side].items) |i| {
+            if (self.nodes.items[i].alive) return i;
         }
         return null;
     }
@@ -608,10 +621,11 @@ pub const World = struct {
         try self.reopenLinks();
     }
 
-    /// A side's chain tail after the common prefix (any node on the side
-    /// shares the same chain).
+    /// A side's chain tail after the common prefix, read from the first live
+    /// node on the side (any live node on the side shares the same chain).
+    /// A side with no live node contributes no branch.
     fn tailOf(self: *World, side: usize) []const *const Message {
-        const node_idx = self.partition_sides[side].items[0];
+        const node_idx = self.firstLiveOn(side) orelse return &.{};
         return self.nodes.items[node_idx].chain.items[self.commonPrefixLen()..];
     }
 
@@ -1127,6 +1141,58 @@ test "three-member partition: the losing side's follower converges too (PRD 0003
     // A merge really happened, and C - which never spoke to A during the
     // partition - folded it.
     try std.testing.expect(world.nodes.items[c].fold.last_merge != null);
+}
+
+test "heal reads a side's branch from a live node, not a crashed leader" {
+    // Bug 2026-08-28-sweep3-sim-heal-crashed-leader: `sideLeader` and
+    // `tailOf` read `partition_sides[side].items[0]` with no `alive` check.
+    // When that node is a leader that crashed mid-partition, its frozen
+    // chain both named the side's survivor and built the merged branch, so
+    // the side's post-crash epoch and writes were dropped from the merged
+    // chain while the heal still succeeded and `assertConverged` still held.
+    var world = try World.init(test_alloc, 0x7EED, test_control_id, &.{});
+    defer world.deinit();
+    const a: usize = 0;
+    const b = try world.addMember(memberKey(1), "node-b", a);
+    const c = try world.addMember(memberKey(2), "node-c", a);
+
+    var buf: [128]u8 = undefined;
+    try world.append(a, .settings, settingsEntryPayload(&buf, max_journals, .{ .u32 = 11 }));
+    for (0..3) |_| try world.tick();
+    try world.assertConverged();
+
+    // A is listed first on its side, and leads it.
+    try world.partition(&.{ &[_]usize{ a, b }, &[_]usize{c} });
+    for (0..3) |_| try world.tick();
+    try std.testing.expectEqualSlices(u8, &world.nodeId(a), &(try world.leaderOf(a)).?);
+    try std.testing.expectEqualSlices(u8, &world.nodeId(c), &(try world.leaderOf(c)).?);
+
+    // The side's leader crashes mid-partition; B re-elects itself and
+    // writes, so the side's live chain is strictly longer than A's frozen
+    // one.
+    world.crash(a);
+    for (0..3) |_| try world.tick();
+    try std.testing.expectEqualSlices(u8, &world.nodeId(b), &(try world.leaderOf(b)).?);
+    try world.append(b, .settings, settingsEntryPayload(&buf, max_journals, .{ .u32 = 22 }));
+    for (0..3) |_| try world.tick();
+
+    const b_chain = world.nodes.items[b].chain.items;
+    const b_write = b_chain[b_chain.len - 1];
+    const b_write_id = entry.Id{
+        .author = b_write.entry.author,
+        .author_seq = b_write.entry.author_seq,
+    };
+    try std.testing.expect(world.entryResolves(b, b_write_id));
+
+    try world.heal();
+    for (0..8) |_| try world.tick();
+    try world.assertConverged();
+
+    // The surviving side's post-crash write is in the merged chain, on both
+    // live nodes. Under the bug the merged chain was built from A's frozen
+    // chain and this entry existed nowhere.
+    try std.testing.expect(world.entryResolves(b, b_write_id));
+    try std.testing.expect(world.entryResolves(c, b_write_id));
 }
 
 // ---------------------------------------------------------------------------
