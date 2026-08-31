@@ -2917,11 +2917,14 @@ pub const ClusterNode = struct {
             // The broadcast has to describe what this member just did. It
             // said `false`, so every other member folded the same records
             // through the live rule and refused the journal-scoped ones
-            // `NotLeader` - their author is the *losing* branch's leader.
-            // Unlike the control chain, `applyDataChecked` cannot infer the
-            // re-slot from authorship, so the flag on the wire is the only
-            // signal there is (bug
-            // 2026-08-30-merge-data-broadcast-reslotted-false).
+            // `NotLeader` - their author is the *losing* branch's leader
+            // (bug 2026-08-30-merge-data-broadcast-reslotted-false). Since
+            // 2026-08-31 `applyDataChecked` infers that re-slot from
+            // authorship as well, the way the control chain always has, so
+            // the flag is no longer the only signal - which is what lets a
+            // record written here be replayed off disk at all (bug
+            // 2026-08-31-data-reslot-cannot-be-replayed). It stays on the
+            // wire because it is the cheaper and more explicit of the two.
             self.broadcastToMembers(.{ .slot = .{
                 .reslotted = true,
                 .record = &.{},
@@ -6151,4 +6154,94 @@ test "an allocation failure while judging an epoch is not a partition" {
     cn.allocator = std.testing.failing_allocator;
     defer cn.allocator = saved;
     try std.testing.expectError(error.OutOfMemory, cn.epochAccepted(&en, &sl));
+}
+
+test "a re-slotted journal-scoped entry replays from the store it was written to" {
+    // `doMergeData` re-slots the losing branch's data records into the
+    // survivor's chain and folds them with `reslotted = true`, under which
+    // journal-scoped `settings`/`checkpoint`/`stale` are no-ops (OQ 33) —
+    // their author is the *losing* branch's leader, which the live rule
+    // refuses. `applyReplicated` then writes them to the store like any
+    // other record.
+    //
+    // Nothing marks them on disk. Every path that replays a record from a
+    // store folds it with `reslotted = false`: `Node.foldJournal` on open
+    // and refold, and `onSyncPage` on backfill. So the record the survivor
+    // just accepted is refused the moment it is read back — the survivor
+    // cannot reopen its own directory, and no peer can backfill the journal.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    // A second member, admitted by this one, so its signature verifies.
+    const other = std.crypto.sign.Ed25519.KeyPair.generate(oio);
+    const other_id = chain.deriveMemberId(other.public_key.toBytes());
+    {
+        const info = membership.JoinPayload{
+            .member_id = other_id,
+            .public_key = other.public_key.toBytes(),
+            .address = "other",
+        };
+        const payload = try test_alloc.alloc(u8, membership.joinPayloadLen(info));
+        defer test_alloc.free(payload);
+        membership.encodeJoinPayload(info, payload);
+        try node.appendControl(.join, payload, &node.control);
+    }
+
+    const main_id = node.journalIdByName("main").?;
+    const fold = &node.journals.get(main_id).?.fold;
+
+    // One ordinary entry, so the checkpoint below has a position to name.
+    _ = try node.append(main_id, "one", 0);
+
+    // The shape a merge re-slot has: the entry is the *other* member's, the
+    // slot is signed by this member, the current leader.
+    var payload: [16]u8 = undefined;
+    chain.encodeCheckpointPayload(.{ .expire_through = fold.head.? }, &payload);
+    var ck = entry.Entry{
+        .kind = .checkpoint,
+        .journal = main_id,
+        .author = other_id,
+        .author_seq = 1,
+        .author_ts_ms = cn.nowMs(),
+        .ttl_ms = 0,
+        .payload_hash = entry.payloadHash(&payload),
+        .payload_len = payload.len,
+        .payload_omitted = false,
+        .signature = undefined,
+        .payload = &payload,
+    };
+    ck.signature = (try entry.sign(other, &ck)).toBytes();
+    const sl = try node.slotFor(fold, &ck);
+
+    // The survivor's own step: accepted as a re-slot, and written to disk.
+    try node.applyReplicated(main_id, &sl, &ck, true, null);
+    try std.testing.expectEqual(sl.position(), node.head(main_id).?);
+
+    // Reading the very same record back must reach the very same fold.
+    try node.refold();
+    try std.testing.expectEqual(sl.position(), node.head(main_id).?);
 }

@@ -7,6 +7,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A merge that re-slots a losing branch's journal-scoped `settings` or
+  `checkpoint` records no longer leaves the surviving member unable to
+  reopen its own data directory. The re-slot was represented on the wire and
+  in memory but never in the record, so every path that reads a record back
+  - opening the store, re-folding it, and serving a backfill page - judged
+  it by the live rule and refused it, because its author is the losing
+  branch's leader rather than the current one. The fold now infers the
+  re-slot from authorship for those two kinds, as the control chain has
+  always done.
+
 - A member that runs out of memory while judging an `epoch` entry no longer
   declares a partition against a peer it agrees with. The check that asks
   whether the claimed leader is the one this member's own liveness view
