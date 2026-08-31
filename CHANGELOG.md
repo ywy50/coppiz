@@ -84,6 +84,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   watchdog to release it. One 32-byte frame from any admitted peer therefore
   stopped a healthy member folding anything for as long as the connection
   stayed open, while it went on heartbeating and serving reads.
+- A backfill page whose cursor does not advance is refused instead of stored.
+  `onSyncPage` took the peer's `next` on trust, so a page at or behind the
+  position it answered made the member re-issue exactly the same `sync_req`
+  on every tick - and because `syncing` clears only once every cursor has
+  drained, it stayed ineligible for leadership and never drained its durable
+  queue, silently, for the life of the process. The wire client's own copy of
+  this cursor was already checked; the node's was not.
 
 - A merge no longer aborts on a re-slotted `join` for a member the survivor
   already holds. `applyJoinReslotted` delegated verbatim to the live rule, so

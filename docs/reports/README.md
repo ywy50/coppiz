@@ -159,6 +159,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-31 - a re-slotted `join` for a member the survivor already holds refuses `AlreadyMember`, and the heal can never complete](bugs/2026-08-31-reslotted-join-already-member.md)
 - [2026-08-31 - three wire decoders orphan their first allocation when the second one fails](bugs/2026-08-31-wire-decoder-first-dupe-leak.md)
 - [2026-08-31 - one `merge_offer` naming a member's own leader freezes its replication for the life of the connection](bugs/2026-08-31-merge-offer-names-my-own-leader.md)
+- [2026-08-31 - a sync page whose cursor does not advance pins a member in `syncing` forever](bugs/2026-08-31-sync-page-cursor-unvalidated.md)
 
 ### Investigations
 

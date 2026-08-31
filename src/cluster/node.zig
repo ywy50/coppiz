@@ -2614,6 +2614,22 @@ pub const ClusterNode = struct {
             // Advance the cursor; a page that served nothing marks the
             // journal done.
             if (p.records.len > 0) {
+                // The cursor comes from the peer, so it is checked before it
+                // is stored. A `next` at or behind the position this page
+                // answers makes `driveBackfill` re-issue the same request on
+                // every tick with nothing to show for it, and `syncing` is
+                // cleared only once every cursor has drained - so the member
+                // never becomes leader-eligible, never drains its queue, and
+                // burns a page round trip per tick for good (bug
+                // 2026-08-31-sync-page-cursor-unvalidated). This is the node
+                // side of bug 2026-08-29-client-read-cursor-assert, which
+                // fixed the same peer-supplied cursor in `net/client.zig`.
+                if (self.sync_cursors.get(p.journal_id)) |from| {
+                    if (slot.Position.order(p.next, from) != .gt) {
+                        self.closeConn(conn_id);
+                        return;
+                    }
+                }
                 try self.sync_cursors.put(self.allocator, p.journal_id, p.next);
             } else {
                 _ = self.sync_cursors.remove(p.journal_id);
@@ -5567,6 +5583,125 @@ test "a broadcast dropped while backfilling leaves a cursor behind" {
     try std.testing.expectEqual(head, cn.headFor(data_id));
     const cursor = cn.sync_cursors.get(data_id) orelse return error.NoCursor;
     try std.testing.expectEqual(head.next(), cursor);
+}
+
+test "a sync page whose cursor does not advance is refused, not looped on" {
+    // Bug 2026-08-31-sync-page-cursor-unvalidated. `onSyncPage` stored the
+    // peer's `next` verbatim. A page whose cursor is at or behind the
+    // position it answers makes `driveBackfill` re-issue exactly the same
+    // `sync_req` on every tick, and `syncing` is cleared only once every
+    // cursor has drained - so the member stays ineligible for leadership,
+    // never drains its durable queue, and pays a page round trip per tick
+    // for good. The wire client's own copy of this cursor was checked (bug
+    // 2026-08-29-client-read-cursor-assert); the node's was not.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    const Sink = struct {
+        fn send(_: *anyopaque, _: std.Io, _: []const u8) net.transport.SendError!void {}
+        fn recv(
+            _: *anyopaque,
+            _: std.Io,
+            _: std.mem.Allocator,
+        ) net.transport.RecvError![]u8 {
+            return error.EndOfStream;
+        }
+        fn nop(_: *anyopaque, _: std.Io) void {}
+    };
+    var sink_ctx: u8 = 0;
+    try cn.conns.put(test_alloc, 9, .{ .conn = .{
+        .ctx = &sink_ctx,
+        .recv_frame = Sink.recv,
+        .send_frame = Sink.send,
+        .shutdown_fn = Sink.nop,
+        .close_fn = Sink.nop,
+    } });
+
+    // The page carries a record this member has already folded - the
+    // genesis slot - so the record loop skips it as a redelivery and
+    // reaches the cursor bookkeeping, which is what is under test.
+    const control_id = cn.node.control.journal_id;
+    var records = std.ArrayListUnmanaged(u8).empty;
+    defer records.deinit(test_alloc);
+    {
+        const Ctx = struct {
+            cn: *ClusterNode,
+            records: *std.ArrayListUnmanaged(u8),
+            bytes: usize,
+        };
+        var ctx = Ctx{ .cn = cn, .records = &records, .bytes = 0 };
+        try cn.node.store.scanFrom(control_id, .{ .epoch = 1, .seq = 1 }, &ctx, struct {
+            fn cb(c: *Ctx, sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
+                if (c.bytes > 0) return; // one record is enough
+                const e = en orelse return;
+                try c.cn.encodeRecordIntoPage(c.records, sl, e, &c.bytes, 64 * 1024);
+            }
+        }.cb);
+        try std.testing.expect(records.items.len > 0);
+    }
+
+    // Backfilling, with the cursor a page would answer.
+    cn.syncing = true;
+    const cursor = slot.Position{ .epoch = 1, .seq = 3 };
+    try cn.sync_cursors.put(test_alloc, control_id, cursor);
+
+    // The peer answers with records and a cursor that moved backwards.
+    try cn.onSyncPage(9, .{
+        .journal_id = control_id,
+        .next = .{ .epoch = 1, .seq = 2 },
+        .records = records.items,
+    });
+
+    // Refused: the cursor keeps the value it had rather than the one that
+    // cannot make progress, and the connection is dropped - the peer is not
+    // following the protocol.
+    try std.testing.expectEqual(cursor, cn.sync_cursors.get(control_id).?);
+    try std.testing.expect(cn.conns.getPtr(9).?.closing);
+
+    // The same for a cursor that merely stands still.
+    cn.conns.getPtr(9).?.closing = false;
+    try cn.onSyncPage(9, .{
+        .journal_id = control_id,
+        .next = cursor,
+        .records = records.items,
+    });
+    try std.testing.expectEqual(cursor, cn.sync_cursors.get(control_id).?);
+    try std.testing.expect(cn.conns.getPtr(9).?.closing);
+
+    // Not a blanket refusal: a cursor that does advance is stored.
+    cn.conns.getPtr(9).?.closing = false;
+    const ahead = slot.Position{ .epoch = 1, .seq = 5 };
+    try cn.onSyncPage(9, .{
+        .journal_id = control_id,
+        .next = ahead,
+        .records = records.items,
+    });
+    try std.testing.expectEqual(ahead, cn.sync_cursors.get(control_id).?);
+    try std.testing.expect(!cn.conns.getPtr(9).?.closing);
 }
 
 test "a replicated slot whose store write is refused stops the member" {
