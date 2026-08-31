@@ -161,6 +161,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-31 - one `merge_offer` naming a member's own leader freezes its replication for the life of the connection](bugs/2026-08-31-merge-offer-names-my-own-leader.md)
 - [2026-08-31 - a sync page whose cursor does not advance pins a member in `syncing` forever](bugs/2026-08-31-sync-page-cursor-unvalidated.md)
 - [2026-08-31 - `Direction.readInto` waits for a frame with no deadline, so a hub read that never arrives hangs the whole test binary](bugs/2026-08-31-hub-read-has-no-deadline.md)
+- [2026-08-31 - a cancelled `localReadRange` leaks the whole range the loop copied for it](bugs/2026-08-31-local-read-cancel-leak.md)
 
 ### Investigations
 

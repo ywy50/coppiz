@@ -67,6 +67,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A cancelled `localReadRange` frees the range the loop copied for it. The
+  embedded host's read blocks on its completion while the loop copies every
+  visible record in, and those copies - the record list plus one allocation
+  per entry payload - are the waiter's to free. The `defer` that frees them
+  was armed *after* the `catch return error.Canceled` on the wait, so the one
+  exit that skipped it was the one where the loop had most likely already
+  filled the completion. A host that cancels reads leaked the whole answer,
+  not a fixed overhead, once per cancelled read.
+
 - One un-slotable entry in the durable queue no longer stops the whole node.
   The leader's queue sweep, `slotQueuedEntries`, wrapped its slot step in a
   bare `try`, so any per-entry refusal - too large after `max_entry_bytes` was
