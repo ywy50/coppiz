@@ -516,9 +516,38 @@ pub const FoldState = struct {
                 .data => if (!self.settings.getBool(
                     schema.keyIndex("journal.allow_append").?,
                 )) return error.JournalFrozen,
-                .settings => try self.applyJournalSettings(sl, en, cluster),
+                // A journal-scoped `settings` or `checkpoint` is
+                // leader-authored under the live rule below, so one whose
+                // author is *not* the leader can only be a merge re-slot:
+                // `doMergeData` gives the losing branch's entry a slot the
+                // survivor signs, and leaves the entry itself alone.
+                //
+                // The re-slot has to be inferred here because the wire flag
+                // that carries it is not on disk. `applyReplicated` writes a
+                // re-slotted record to the store like any other, and every
+                // path that reads one back folds it as live: `foldJournal`
+                // on open and refold, and `onSyncPage` on backfill. Without
+                // the inference the survivor cannot reopen the directory it
+                // just wrote, and no peer can backfill the journal (bug
+                // 2026-08-31-data-reslot-cannot-be-replayed). `applyControl`
+                // infers a control re-slot the same way and for the same
+                // reason.
+                //
+                // Sound by construction, as it is there: an entry the live
+                // rule accepts is leader-authored, so it never matches. The
+                // slot signature, the entry signature and the member check
+                // above are unchanged, so this admits nothing a re-slot
+                // could not already carry.
+                .settings, .checkpoint => {
+                    if (!std.mem.eql(u8, &en.author, &cluster.epoch.?.leader)) {
+                        // A re-slot: a no-op, exactly as the branch above.
+                    } else if (en.kind == .settings) {
+                        try self.applyJournalSettings(sl, en, cluster);
+                    } else {
+                        try self.applyCheckpoint(sl, en, cluster);
+                    }
+                },
                 .stale => try self.applyStale(sl, en),
-                .checkpoint => try self.applyCheckpoint(sl, en, cluster),
                 .genesis, .create_journal => return error.WrongJournalType,
                 .join, .leave, .epoch, .merge => return error.WrongJournalType,
             }
@@ -2180,6 +2209,10 @@ test "a re-slotted data entry folds journal settings/checkpoint/stale as no-ops"
     // too, so the heal never converged. The re-slot rule mirrors
     // applyControlReslotted: `data` folds normally, the rest re-slot as
     // no-ops (the survivor's value wins; OQ 33).
+    //
+    // Since 2026-08-31 the live path infers the same re-slot for the two
+    // leader-authored kinds, so a record written by the re-slot rule folds
+    // identically when it is read back off disk.
     var fix = Fix.init();
     var cluster = try clusterWithDataJournal(&fix);
     defer {
@@ -2215,8 +2248,12 @@ test "a re-slotted data entry folds journal settings/checkpoint/stale as no-ops"
         }
     }.of;
 
-    // Journal-scoped settings: the live rule refuses NotLeader; the
-    // re-slot is a no-op — the survivor's value stays.
+    // Journal-scoped settings: the author is not the leader, so this can
+    // only be a re-slot, and both the live path and the explicit re-slot
+    // fold it as a no-op — the survivor's value stays. They have to agree:
+    // the re-slot flag is not written to disk, so replaying this record
+    // from a store or a sync page has only the live path to fold it with
+    // (bug 2026-08-31-data-reslot-cannot-be-replayed).
     const ttl = schema.keyIndex("ttl.default_ms").?;
     const ttl_before = cluster.data.settings.getU64(ttl);
     const changes = [_]validate.Change{.{ .key = ttl, .value = .{ .u64 = 2000 } }};
@@ -2226,11 +2263,7 @@ test "a re-slotted data entry folds journal settings/checkpoint/stale as no-ops"
     try settings_fold.encodePayload(pl, pl_buf);
     const settings_en = try fix.entryFor(.settings, fix.data_id, 2, 0, pl_buf);
     const settings_sl = try next_data_slot(&fix, &cluster.data, &settings_en, 1002);
-    try std.testing.expectError(
-        error.NotLeader,
-        cluster.data.applyData(&cluster.control, &settings_sl, &settings_en),
-    );
-    try cluster.data.applyDataReslotted(&cluster.control, &settings_sl, &settings_en);
+    try cluster.data.applyData(&cluster.control, &settings_sl, &settings_en);
     try std.testing.expectEqual(ttl_before, cluster.data.settings.getU64(ttl));
 
     // A stale mark: the re-slot is a no-op (no target lookup at all).
