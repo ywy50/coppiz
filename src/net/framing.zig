@@ -40,9 +40,23 @@ pub fn writeFrame(writer: *std.Io.Writer, body: []const u8) !void {
     try writer.writeAll(body);
 }
 
+/// How much of a body is read, and committed, at a time.
+pub const read_chunk_bytes: usize = 64 * 1024;
+
 /// Reads one frame body into a freshly allocated buffer (the caller frees
 /// it — typically by resetting the frame arena it was allocated from).
 /// `error.EndOfStream` means the peer closed before a full frame arrived.
+///
+/// The body is read a chunk at a time and the buffer grown as the chunks
+/// arrive, so what a connection commits follows the bytes delivered rather
+/// than the length its 4-byte header claims. Allocating `len` up front let
+/// a peer that announced a `max_body_bytes` frame and then sent nothing
+/// hold 17 MiB for as long as it kept the connection open, and the header
+/// is read before the connection has a role — `frameAllowed` is applied to
+/// the decoded message, which is two steps later. That is not a defence
+/// against a hostile peer, which the trust model does not claim (RFC 0009);
+/// it keeps a truncated or dead connection from costing what a complete one
+/// would.
 pub fn readFrame(allocator: std.mem.Allocator, reader: *std.Io.Reader) ReadError![]u8 {
     var hdr: [len_bytes]u8 = undefined;
     reader.readSliceAll(&hdr) catch |err| switch (err) {
@@ -51,13 +65,21 @@ pub fn readFrame(allocator: std.mem.Allocator, reader: *std.Io.Reader) ReadError
     };
     const len = std.mem.readInt(u32, &hdr, .little);
     if (len > max_body_bytes) return error.OversizedFrame;
-    const body = try allocator.alloc(u8, len);
-    errdefer allocator.free(body);
-    reader.readSliceAll(body) catch |err| switch (err) {
-        error.EndOfStream => return error.EndOfStream,
-        else => return err,
-    };
-    return body;
+    var body = try std.ArrayListUnmanaged(u8).initCapacity(
+        allocator,
+        @min(len, read_chunk_bytes),
+    );
+    errdefer body.deinit(allocator);
+    while (body.items.len < len) {
+        const start = body.items.len;
+        const want = @min(len - start, read_chunk_bytes);
+        try body.resize(allocator, start + want);
+        reader.readSliceAll(body.items[start..]) catch |err| switch (err) {
+            error.EndOfStream => return error.EndOfStream,
+            else => return err,
+        };
+    }
+    return body.toOwnedSlice(allocator);
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +119,12 @@ const ChunkedReader = struct {
         limit: std.Io.Limit,
     ) std.Io.Reader.StreamError!usize {
         const self: *ChunkedReader = @fieldParentPtr("reader", io_r);
-        if (self.pos == self.data.len) return 0; // EOF
+        // A `stream` that has nothing left must say so, not return 0.
+        // `Reader.readSliceShort` loops on its vtable until the buffer is
+        // full or an error arrives, so a zero-length "success" spins
+        // forever. Nothing had read past the end of a ChunkedReader before
+        // the truncated-frame test below, which is why it never showed.
+        if (self.pos == self.data.len) return error.EndOfStream;
         const dest = limit.slice(try io_w.writableSliceGreedy(1));
         const chunk = @min(@min(self.max_chunk, self.data.len - self.pos), dest.len);
         @memcpy(dest[0..chunk], self.data[self.pos..][0..chunk]);
@@ -163,4 +190,45 @@ test "a close mid-frame is EndOfStream, not a partial body" {
 test "a close between frames is EndOfStream too" {
     var empty = std.Io.Reader.fixed("");
     try std.testing.expectError(error.EndOfStream, readFrame(test_alloc, &empty));
+}
+
+test "a frame body is committed as it arrives, not as it is announced" {
+    // The header announces the largest body the wire allows and the peer
+    // then sends none of it - a connection that died mid-frame, or one
+    // whose header was never honest. Reading the body up front meant that
+    // header alone committed 17 MiB.
+    var hdr: [len_bytes]u8 = undefined;
+    std.mem.writeInt(u32, &hdr, max_body_bytes, .little);
+
+    // Far less memory than the frame claims, and more than a chunk of it.
+    var buf: [4 * read_chunk_bytes]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    var chunked = ChunkedReader.init(&hdr, len_bytes);
+
+    // The answer is "the peer is gone", which is what the loop acts on -
+    // not a failure to find room for bytes that never arrived.
+    try std.testing.expectError(
+        error.EndOfStream,
+        readFrame(fba.allocator(), &chunked.reader),
+    );
+}
+
+test "a body larger than one chunk still round-trips" {
+    // The chunked read must reassemble a body that spans several chunks in
+    // order, and hand back exactly it.
+    const len = 3 * read_chunk_bytes + 17;
+    const body = try test_alloc.alloc(u8, len);
+    defer test_alloc.free(body);
+    for (body, 0..) |*b, i| b.* = @truncate(i *% 31);
+
+    const frame = try test_alloc.alloc(u8, len_bytes + len);
+    defer test_alloc.free(frame);
+    var writer = std.Io.Writer.fixed(frame);
+    try writeFrame(&writer, body);
+
+    // Delivered in awkward pieces, so no chunk boundary lines up.
+    var chunked = ChunkedReader.init(writer.buffered(), 7000);
+    const got = try readFrame(test_alloc, &chunked.reader);
+    defer test_alloc.free(got);
+    try std.testing.expectEqualSlices(u8, body, got);
 }
