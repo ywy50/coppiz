@@ -52,7 +52,7 @@ restart without a side channel. The embedded-host write API shipped with
 it (`cluster.ClusterNode.localAppend`, PRD 0005 step 1). The simulator driving the loop itself
 (OQ 27's second half) landed 2026-08-30: `sim.LoopWorld` runs real
 `ClusterNode`s over real stores without `start()`, owning the wire,
-connectivity and liveness so a scenario is deterministic. Remaining: the
+connectivity, liveness and elapsed time so a scenario is deterministic. Remaining: the
 open questions the matrix names.
 
 Known issue, found 2026-08-27 while exercising the loop from
@@ -68,16 +68,19 @@ the issue is now pinned rather than intermittent: the losing branch's
 *leader* converges on the survivor and the losing branch's *follower* does
 not, keeping its dead branch and its old leader
 ([report](../reports/bugs/2026-08-30-three-member-merge-strands-the-losing-follower.md)).
-The cause is not yet established. The same scenario also records that a
-healed cluster with no writer stays forked - shown since 2026-08-31 by
-running that window with a heartbeat due on every tick and finding two
-branches still standing after 200 of them. The reason first recorded here,
-that heartbeats carry the peer's head without anything comparing it, was
-wrong: `onHeartbeat` compares it and requests a sync when the peer is
-ahead. What is missing is the step from that sync to a merge, so the
-divergence is still only caught when a record fails `prev_slot_hash` -
-which is why a write is what starts the heal (investigation
-[2026-08-31](../reports/investigations/2026-08-31-no-writer-heal-window-proved-nothing.md)).
+The cause is not yet established. The same scenario records that a
+healed cluster with no writer **converges**, with nobody writing anything:
+`onHeartbeat` compares the peer's head against its own, requests a sync when
+the peer is ahead, and that sync carries the divergence through to a merge.
+Two earlier readings of that window said the opposite and both were cadence
+artefacts, corrected 2026-08-31: first no heartbeat was ever due inside it
+([investigation](../reports/investigations/2026-08-31-no-writer-heal-window-proved-nothing.md)),
+then the two joiners had armed their heartbeat schedule for the survivor
+from the schema default before folding the chain, so 200 sub-millisecond
+ticks never reached it
+([investigation](../reports/investigations/2026-08-31-writer-less-heal-was-a-stale-heartbeat-schedule.md)).
+`sim.LoopWorld` now owns elapsed time as well as the wire and connectivity,
+so a scenario names the cadence it depends on.
 Reported rather than silently worked around: the embed-cluster example's
 partition stays short enough to avoid the election.
 

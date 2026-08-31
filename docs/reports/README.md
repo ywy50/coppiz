@@ -153,6 +153,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - the leader encodes each replicated slot twice](investigations/2026-08-29-leader-encode-once.md)
 - [2026-08-29 - verification of the test-build speedup reports and their remaining open topics](investigations/2026-08-29-test-build-sweep-verification.md)
 - [2026-08-31 - the post-heal window in the three-member scenario proved nothing](investigations/2026-08-31-no-writer-heal-window-proved-nothing.md)
+- [2026-08-31 - the writer-less heal was a stale heartbeat schedule, not a missing merge step](investigations/2026-08-31-writer-less-heal-was-a-stale-heartbeat-schedule.md)
 - [2026-08-29 - runtime speedup sweep: findings and disposition](investigations/2026-08-29-runtime-sweep-findings.md)
 - [2026-08-29 - simulator leader evaluation and TCP page writes](investigations/2026-08-29-runtime-sweep-sim-micro.md)
 - [2026-08-29 - write-path data flow: queue drains, replication re-encodes, and per-frame overhead](investigations/2026-08-29-runtime-sweep-queue-wire.md)

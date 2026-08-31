@@ -1158,11 +1158,18 @@ test "three-member partition: the losing side's follower converges too (PRD 0003
 ///   Because the world owns this, the node's own redial is suppressed:
 ///   `dial_at_ms` is cleared before each tick, so `onTick` never reaches
 ///   `spawnDial` and no task is ever spawned.
-/// - **liveness.** `elapsedMs` reads the real monotonic clock and has no
-///   seam, so the failure detector cannot be driven by advancing a fake
-///   clock. `cut` instead backdates the peer's `last_heard_ms`, which is
-///   what a missed heartbeat does, and the suspect branch then fires on the
-///   very next tick.
+/// - **liveness.** The world owns elapsed time too: every node reads its
+///   cadences (heartbeat interval, suspect and evict windows, redial and
+///   seed backoff, the sync watchdog) off one counter the world advances,
+///   through `cluster.ElapsedClock`. `tick_advance_ms` says how far a tick
+///   moves it; the default 0 freezes it, so a scenario that means to
+///   exercise a cadence has to say so. That is the trap the 2026-08-31
+///   investigation found: ticks span microseconds of real time, so a
+///   default 1 s heartbeat was never once due and a window meaning to
+///   measure the heartbeat path measured nothing. `cut` also backdates the
+///   peer's `last_heard_ms`, which is what a missed heartbeat does, so a
+///   scenario that only needs a member gone reaches the suspect branch on
+///   the next tick without advancing anything.
 ///
 /// What it does *not* model: the reader task's concurrency (frames are
 /// delivered on the driving thread, in order), real timing, and the dial
@@ -1180,6 +1187,32 @@ pub const LoopWorld = struct {
     /// to node j, or null when the pair is not connected.
     conn_ids: std.ArrayListUnmanaged(?u64) = .empty,
     size: usize,
+    /// The world's monotonic reading, in milliseconds, that every node's
+    /// `ElapsedClock` returns. It starts well past any default window so
+    /// `cut`'s backdating still saturates the way it does on a real clock
+    /// that has been up for a while.
+    elapsed_ms: u64 = elapsed_base_ms,
+    /// How far one `tick` moves `elapsed_ms`. 0 - the default - freezes it,
+    /// which is every pre-existing scenario's behaviour: no cadence comes
+    /// due on its own.
+    tick_advance_ms: u64 = 0,
+
+    /// A real node has been up for a while by the time anything cuts a
+    /// link, and the loop's windows are subtractions against `now`. Starting
+    /// at zero would make every `now -| window` saturate to zero and no
+    /// window would ever be judged elapsed.
+    const elapsed_base_ms: u64 = 1_000_000;
+
+    fn readElapsed(ctx: *anyopaque, _: std.Io) u64 {
+        const self: *LoopWorld = @ptrCast(@alignCast(ctx));
+        return self.elapsed_ms;
+    }
+
+    /// Moves the world's clock forward. Cadences come due on the next
+    /// `tick`, which is what reads them.
+    pub fn advance(self: *LoopWorld, ms: u64) void {
+        self.elapsed_ms += ms;
+    }
 
     const Wire = struct {
         frames: std.ArrayListUnmanaged([]u8) = .empty,
@@ -1293,6 +1326,7 @@ pub const LoopWorld = struct {
                     .deinit_fn = nopTransport,
                 },
                 .address = address,
+                .elapsed_clock = .{ .ctx = self, .read_fn = readElapsed },
             });
             const ctxs = try allocator.alloc(LinkCtx, size);
             for (ctxs, 0..) |*c, j| c.* = .{ .world = self, .from = i, .to = j };
@@ -1394,6 +1428,7 @@ pub const LoopWorld = struct {
     /// One round: every node runs its periodic work, then the wire settles.
     /// Redials are suppressed first - the world owns connectivity.
     pub fn tick(self: *LoopWorld) !void {
+        self.advance(self.tick_advance_ms);
         for (self.nodes.items) |*n| n.cn.simClearRedials();
         for (self.nodes.items) |*n| try n.cn.simTick();
         try self.pump();
@@ -1419,10 +1454,19 @@ pub const LoopWorld = struct {
     /// heartbeat each holds for the other, so the suspect branch fires on
     /// the next tick rather than after a real 5 s.
     pub fn cut(self: *LoopWorld, i: usize, j: usize) void {
-        self.links.items[self.wireIndex(i, j)] = false;
-        self.links.items[self.wireIndex(j, i)] = false;
+        self.sever(i, j);
         self.nodes.items[i].cn.simExpireHeartbeat(self.nodes.items[j].node.member_id);
         self.nodes.items[j].cn.simExpireHeartbeat(self.nodes.items[i].node.member_id);
+    }
+
+    /// Severs both directions and nothing else: no heartbeat is backdated,
+    /// so each side notices the other only once `cluster.suspect_after_ms`
+    /// of the world's clock has passed with nothing arriving. That is what a
+    /// scenario about the failure detector itself needs - `cut` would have
+    /// pre-decided its answer.
+    pub fn sever(self: *LoopWorld, i: usize, j: usize) void {
+        self.links.items[self.wireIndex(i, j)] = false;
+        self.links.items[self.wireIndex(j, i)] = false;
     }
 
     /// Reopens both directions and re-runs the handshake, which is what a
@@ -1484,6 +1528,17 @@ pub const LoopWorld = struct {
     pub fn memberId(self: *LoopWorld, i: usize) [16]u8 {
         return self.nodes.items[i].node.member_id;
     }
+
+    /// Whether node `i`'s failure detector currently regards node `j` as
+    /// lost.
+    pub fn regardsLost(self: *LoopWorld, i: usize, j: usize) bool {
+        return self.nodes.items[i].cn.simPeerLost(self.memberId(j));
+    }
+
+    /// How many members node `i`'s fold holds.
+    pub fn memberCount(self: *LoopWorld, i: usize) usize {
+        return self.nodes.items[i].cn.node.control.members.items.len;
+    }
 };
 
 test "LoopWorld: three members join and replicate over the real loop" {
@@ -1536,14 +1591,21 @@ test "LoopWorld: a three-member partition elects a second leader and heals" {
             .value = .{ .enum_value = schema.enumValue(admission, "open").? },
         },
         // A heartbeat is due every tick. `onTick` gates sending on
-        // `cluster.heartbeat_ms` of *real* elapsed time and the sim drives
-        // ticks as fast as it can, so at the 1000 ms default a scenario can
-        // run its whole length without one member ever heartbeating
-        // another - which is what the post-heal window below used to do.
+        // `cluster.heartbeat_ms` of elapsed time, and at the 1000 ms
+        // default a scenario can run its whole length without one member
+        // ever heartbeating another - which is what the post-heal window
+        // below used to do.
         .{ .key = schema.keyIndex("cluster.heartbeat_ms").?, .value = .{ .u64 = 0 } },
     };
     var world = try LoopWorld.init(test_alloc, oio, 3, &genesis);
     defer world.deinit();
+
+    // The sync watchdog is the one cadence this scenario depends on, so the
+    // world's clock has to move: a stalled sync (a response lost to a conn
+    // race) releases only after `sync_response_timeout_ms`. 25 ms a tick
+    // puts that 200 ticks out, well inside the poll below, and keeps every
+    // other window (suspect at 5 s, with a heartbeat every tick) clear.
+    world.tick_advance_ms = 25;
 
     // Join through the founder first: a hello landing on a member that has
     // not yet folded the newcomer's join is not an admission (bug
@@ -1590,21 +1652,21 @@ test "LoopWorld: a three-member partition elects a second leader and heals" {
     try world.restore(0, 1);
     try world.restore(0, 2);
 
-    // Reconnecting is not enough on its own, and this window is what says
-    // so. It runs 200 ticks with the links back up and a heartbeat due on
-    // every one of them, and the three nodes are still on two branches at
-    // the end: node 0 on its epoch-1 chain, 1 and 2 on their epoch-2 one.
+    // Reconnecting *is* enough on its own, and this window is what says
+    // so. `onHeartbeat` compares the peer's head against its own and asks
+    // for a sync when the peer is ahead; that sync carries the divergence
+    // through to a merge with nobody writing anything.
     //
-    // The heartbeat traffic is the point. `onHeartbeat` does compare the
-    // peer's head against its own and asks for a sync when the peer is
-    // ahead - the claim that nothing compares it, carried here and in PRD
-    // 0003's status, was wrong. What this pins is that the comparison and
-    // the sync it triggers do not carry the divergence through to a merge:
-    // until a record fails `prev_slot_hash`, the two branches sit there.
-    //
-    // At the 1000 ms default the window proved nothing at all, because no
-    // heartbeat was ever due inside it (investigation
-    // 2026-08-31-no-writer-heal-window-proved-nothing).
+    // The window used to assert the opposite, on two successive cadence
+    // artefacts. At the 1000 ms default no heartbeat was ever due inside it
+    // (investigation 2026-08-31-no-writer-heal-window-proved-nothing). With
+    // a heartbeat due every tick but elapsed time still supplied by the
+    // real monotonic clock, the two joiners had armed their schedule for
+    // this peer from the *schema default* before folding the chain, and 200
+    // sub-millisecond ticks never reached it - so they never heartbeated
+    // node 0 at all (investigation
+    // 2026-08-31-writer-less-heal-was-a-stale-heartbeat-schedule). Only the
+    // world owning elapsed time makes the window run the path it names.
     var converged_without_a_write = false;
     for (0..200) |_| {
         try world.tick();
@@ -1613,80 +1675,117 @@ test "LoopWorld: a three-member partition elects a second leader and heals" {
             break;
         }
     }
-    try std.testing.expect(!converged_without_a_write);
+    try std.testing.expect(converged_without_a_write);
+    // One chain, and it is the survivor's: node 0 kept epoch 1 and its own
+    // value, and the losing branch's members hold both.
     try std.testing.expectEqual(
         @as(u64, 1),
-        world.nodes.items[0].cn.node.control.epoch.?.number,
-    );
-    try std.testing.expectEqual(
-        @as(u64, 2),
         world.nodes.items[1].cn.node.control.epoch.?.number,
     );
-
-    // A write after the heal is what starts the merge. Convergence takes a
-    // variable number of ticks - the threaded io's completion ordering is
-    // not fixed, so a fixed 30-tick window flaked (bug
-    // 2026-08-30-loopworld-convergence-window) - poll with a bound.
-    try world.settingsWrite(1, settingsEntryChanges(&buf, max_journals, .{ .u32 = 99 }));
-    var merged = false;
-    // The stall this scenario can hit (a lost sync response) self-heals via
-    // the sync watchdog, which needs sync_response_timeout_ms of *real*
-    // time - the sim's ticks are driven as fast as possible, so the poll
-    // must span that many ticks' worth of real time to let it fire. The
-    // common (non-stall) case converges in a handful of ticks and exits
-    // early.
-    for (0..6000) |_| {
-        try world.tick();
-        if (try world.convergedAmong(&.{ 0, 1, 2 })) {
-            merged = true;
-            break;
-        }
+    for (0..3) |i| {
+        try std.testing.expectEqual(
+            @as(u32, 21),
+            world.nodes.items[i].cn.node.control.settings.getU32(max_journals),
+        );
     }
-    if (!merged) {
-        for (0..3) |i| {
-            const n = world.nodes.items[i].cn;
-            std.debug.print(
-                "SIMDBG node={} epoch={} head={any} syncing={} merging={} sync_in_flight={}\n",
-                .{
-                    i,
-                    if (n.node.control.epoch) |e| e.number else 0,
-                    n.node.control.head,
-                    n.syncing,
-                    n.merging_from != null,
-                    n.sync_in_flight,
-                },
-            );
-        }
-    }
-    try std.testing.expect(merged);
 
-    // The survivor and the losing branch's *leader* converge: node 1
-    // discarded its branch, re-folded node 0's chain, and both hold node 0
-    // as leader with the survivor's value.
-    try world.assertConvergedAmong(&.{ 0, 1 });
-    try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(0).?);
-    try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(1).?);
-    try std.testing.expectEqual(
-        @as(u32, 21),
-        world.nodes.items[0].cn.node.control.settings.getU32(max_journals),
-    );
-
-    // The losing branch's *follower* converges too: node 2 folded node 1's
+    // The losing branch's *follower* converged too: node 2 folded node 1's
     // epoch only from backfill, so it used to carry no branch facts and
     // becomeLoser refused to act - the strand this scenario pinned (PRD
     // 0003's known issue, reported at
     // docs/reports/bugs/2026-08-30-three-member-merge-strands-the-losing-follower.md).
-    // The sync path now records the branch facts an epoch fold implies, so
-    // all three members discard their branches, re-fold node 0's chain and
-    // hold node 0 as leader with the survivor's value.
+    // The sync path records the branch facts an epoch fold implies, so all
+    // three members discard their branches, re-fold node 0's chain and hold
+    // node 0 as leader.
+    for (0..3) |i| {
+        try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(i).?);
+    }
+
+    // A write after the heal reaches every member, which is what says the
+    // merged chain is live rather than merely identical. It goes through the
+    // survivor, the leader all three now name. Convergence takes a variable
+    // number of ticks - the threaded io's completion ordering is not fixed,
+    // so a fixed 30-tick window flaked (bug
+    // 2026-08-30-loopworld-convergence-window) - poll with a bound.
+    try world.settingsWrite(0, settingsEntryChanges(&buf, max_journals, .{ .u32 = 99 }));
+    var replicated = false;
+    for (0..200) |_| {
+        try world.tick();
+        replicated = for (0..3) |i| {
+            const v = world.nodes.items[i].cn.node.control.settings.getU32(max_journals);
+            if (v != 99) break false;
+        } else true;
+        if (replicated) break;
+    }
+    try std.testing.expect(replicated);
     try world.assertConvergedAmong(&.{ 0, 1, 2 });
-    try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(2).?);
-    try std.testing.expectEqual(
-        @as(u64, 1),
-        world.nodes.items[2].cn.node.control.epoch.?.number,
-    );
-    try std.testing.expectEqual(
-        @as(u32, 21),
-        world.nodes.items[2].cn.node.control.settings.getU32(max_journals),
-    );
+}
+
+test "LoopWorld: the failure detector and eviction run on the world's clock" {
+    // The cadence trap, closed. `onTick` measures the heartbeat interval,
+    // the suspect window and the evict window against elapsed milliseconds,
+    // and before the world owned that reading no scenario could reach any
+    // of them: ticks span microseconds of real time, so a 1 s heartbeat was
+    // never due and a 5 s suspect window never elapsed (investigation
+    // 2026-08-31-no-writer-heal-window-proved-nothing). `cut` backdated
+    // `last_heard_ms` instead, which reaches the suspect branch by
+    // pre-deciding its answer - it proves nothing about the window.
+    //
+    // Here nothing is backdated. The links are severed with `sever` and the
+    // world's clock does the rest, so both halves are real: heartbeats keep
+    // a live peer out of the suspect branch, and silence walks it through
+    // `suspect_after_ms` to `lost` and then through `evict_after_ms` to a
+    // `leave` on the leader's chain (PRD 0003 *Leave and seniority*).
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(8) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    const admission = schema.keyIndex("cluster.admission").?;
+    const genesis = [_]validate.Change{
+        .{
+            .key = admission,
+            .value = .{ .enum_value = schema.enumValue(admission, "open").? },
+        },
+        .{ .key = schema.keyIndex("cluster.heartbeat_ms").?, .value = .{ .u64 = 100 } },
+        .{ .key = schema.keyIndex("cluster.suspect_after_ms").?, .value = .{ .u64 = 2000 } },
+        .{ .key = schema.keyIndex("membership.evict_after_ms").?, .value = .{ .u64 = 5000 } },
+    };
+    var world = try LoopWorld.init(test_alloc, oio, 2, &genesis);
+    defer world.deinit();
+
+    // 100 ms a tick: a heartbeat every tick, suspicion 20 ticks after the
+    // last one heard, eviction 50.
+    world.tick_advance_ms = 100;
+    try world.connect(1, 0);
+    for (0..4) |_| try world.tick();
+    try std.testing.expectEqual(@as(usize, 2), world.memberCount(0));
+
+    // Live half: 60 ticks is 6 s of the world's clock, three suspect
+    // windows and more than one evict window. Neither side suspects the
+    // other, because the heartbeats are flowing on the same clock the
+    // window is measured against. With the clock frozen this would have
+    // passed whatever the heartbeat path did.
+    for (0..60) |_| try world.tick();
+    try std.testing.expect(!world.regardsLost(0, 1));
+    try std.testing.expect(!world.regardsLost(1, 0));
+    try std.testing.expectEqual(@as(usize, 2), world.memberCount(0));
+
+    // Silent half: sever both directions and backdate nothing.
+    world.sever(0, 1);
+
+    // Still inside the suspect window after 15 ticks (1.5 s).
+    for (0..15) |_| try world.tick();
+    try std.testing.expect(!world.regardsLost(0, 1));
+
+    // Past it after ten more.
+    for (0..10) |_| try world.tick();
+    try std.testing.expect(world.regardsLost(0, 1));
+    // Suspicion is not eviction: the member is still on the chain.
+    try std.testing.expectEqual(@as(usize, 2), world.memberCount(0));
+
+    // Past `evict_after_ms`, the leader converts the loss to a `leave`.
+    for (0..30) |_| try world.tick();
+    try std.testing.expectEqual(@as(usize, 1), world.memberCount(0));
+    // The founder still leads, now of a one-member cluster.
+    try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(0).?);
 }
