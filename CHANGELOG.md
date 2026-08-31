@@ -104,6 +104,24 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   `2026-08-28-sweep3-pre-failover-settings-replay`, whose earlier "resolved"
   status credited a fix that was never written.
 
+- A newcomer whose only reachable peer is a follower can join. `onHello`
+  acked `admitted = true` and then `admitNewcomer` authored the join
+  *locally*, as the admitter; a follower's slot names itself as leader, which
+  the fold refuses, the error closed the connection, and the joiner - already
+  told it was admitted - redialed the same follower forever. A follower now
+  forwards the join to the leader, whose slot the fold's re-slot inference
+  applies as a validated join, and refuses the hello outright when no leader
+  is reachable so the seed retry re-asks. `onForward` excepts the `.join`
+  kind from its data-only rule, but only behind the leader's own admission
+  policy: the id must derive from the key, the address must be safe, the
+  cluster must have room, and the admission mode must allow it. That is a
+  deliberate narrowing of PRD 0003's "whoever received the hello admits" -
+  the leader has to agree too, because the forward path is otherwise a write
+  to the membership available to any member. An allowlist entry on the
+  admitter but not on the leader no longer admits, matching what dialing the
+  leader directly would do. A failed admit also no longer leaves a phantom
+  member entry that blocked every later re-admission until restart.
+
 - Backfill across a `retain = none` compacted chain terminates. `onSyncReq`
   dropped a compacted (slot-only) record from the page it served and left the
   page cursor where it was, and `onSyncPage` closed the connection on any
