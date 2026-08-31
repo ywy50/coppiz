@@ -7,6 +7,21 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- `leadership.fallback = stall` now actually stalls: a write is refused
+  `no_leader` while `configured` or `combined` leadership elects nobody. PRD
+  0003's failure-mode table has specified that refusal from the start and
+  nothing emitted it, because every write path tested `isLeader` - which reads
+  the *fold's* epoch, and the fold keeps naming the last leader it was told
+  about, which is what makes the view stable across a blip. So the CP posture
+  the mode exists for was not there: the non-authority side of a partition
+  queued the write and left the caller waiting on an unreachable leader, and a
+  leader the new authority list no longer named went on sequencing. The check
+  is on the wire `append`, the embedded host's `localAppend`, a `settings`
+  entry, and the leader's own queue drain. Reads, follows and backfill are
+  unaffected, as the table says. A `settings` entry is refused too, including
+  the one that would end the stall: only a leader may author one, and the
+  offline reconfigure procedure exists for that case.
+
 - `Node.readByAuthor` and `Node.readByKind`: the two reads PRD 0001's *Read
   path* has always listed beside the range read and the by-id read, and which
   did not exist. Both are entry facts the chain walk already holds, so they

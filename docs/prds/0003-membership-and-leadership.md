@@ -377,7 +377,7 @@ join-order mechanism), clanker PRD 0011 (admission modes, reused as design).
 |---|---|
 | Leader becomes unreachable | each member that notices runs `leader(...)`; the new leader appends `epoch`; writers forwarded to the old leader time out and retry at the new one |
 | Two members both believe they lead | by construction they are partitioned; each slots its side; merge on heal |
-| `configured`, no authority live, `fallback = stall` | `append` returns `no_leader`; reads, follows and backfill continue |
+| `configured`, no authority live, `fallback = stall` | `append` returns `no_leader`; reads, follows and backfill continue. Shipped 2026-08-31 (`electsNobody`); a `settings` entry is refused the same way, including the one that would end the stall - only a leader may author one, which is what the offline procedure ([RFC 0014](../rfcs/0014-offline-reconfigure.md)) is for |
 | A `join` arrives for a key already a member | refused `already_member`; a key that `left` may rejoin with new seniority |
 | A member presents a chain whose `join` slots differ from ours | its chain fails `prev_slot_hash` at the first divergence; the branch the mode's ranking makes the loser (*Partition and merge*, above) is archived, never accepted as truth |
 | `settings` touches `leadership.*` while `reconfigurable = false` | refused by every member, `leadership frozen` |
@@ -392,8 +392,18 @@ join-order mechanism), clanker PRD 0011 (admission modes, reused as design).
 - [ ] (G2) E2E (a) passes for `seniority`, `configured`, `combined`.
 - [ ] (G3) E2E (e): a forged earlier `join` is refused by every member; the
   fold's seniority table matches the chain on every member.
-- [ ] (G4) E2E (c): under `configured` + `stall`, the non-authority side of a
-  partition refuses writes and rejoins without a merge.
+- [x] (G4) E2E (c): under `configured` + `stall`, the non-authority side of a
+  partition refuses writes and rejoins without a merge. The refusal half
+  shipped 2026-08-31: `electsNobody` asks `leader(...)` on the write paths -
+  the wire `append`, the embedded host's `localAppend`, a `settings` entry,
+  and the leader's own queue drain - and answers `no_leader` when the mode
+  elects nobody. Until then nothing consulted `leader(...)` on a write at
+  all: every path tested `isLeader`, which reads the *fold's* epoch, and the
+  fold goes on naming the last leader it was told about (that is what keeps
+  the view stable across a blip). So the stall stalled nothing - a
+  non-authority side queued the write and left the caller waiting for an
+  unreachable leader, and a leader the new authority list no longer named
+  went on sequencing.
 - [ ] (G5) A `syncing` member is never returned by `leader(...)` in any
   liveness subset (table test).
 - [ ] (G6) E2E (d) in both `reconfigurable` states.
