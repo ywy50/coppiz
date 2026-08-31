@@ -529,6 +529,23 @@ pub const World = struct {
     pub fn heal(self: *World) !void {
         const head = self.partition_head orelse return error.NotPartitioned;
         const n = self.nodes.items.len;
+
+        // A broadcast the side's leader sent but no tick has delivered yet
+        // sits in a member's inbox, unfolded. It is part of that side's
+        // branch, and the re-fold below clears every inbox - so folding
+        // what is chainable first is what keeps it: otherwise the branch is
+        // read off a chain that does not have it and the message is
+        // treated as if it had never been broadcast (bug
+        // 2026-08-29-sim-heal-drops-inbox). This is exactly what a `tick`
+        // would do, on the still-partitioned links: no cross-side message
+        // can be queued, because the links closed before any of these were
+        // sent. It is also what makes `tailOf`'s "any live node on the side
+        // shares the same chain" true at the moment the branches are read.
+        for (0..self.nodes.items.len) |i| {
+            if (!self.nodes.items[i].alive) continue;
+            try self.processInbox(i);
+        }
+
         const common_len = blk: {
             var count: usize = 0;
             for (self.nodes.items[0].chain.items) |msg| {
@@ -1193,6 +1210,55 @@ test "heal reads a side's branch from a live node, not a crashed leader" {
     // chain and this entry existed nowhere.
     try std.testing.expect(world.entryResolves(b, b_write_id));
     try std.testing.expect(world.entryResolves(c, b_write_id));
+}
+
+test "heal folds pending inbox broadcasts into the branch it merges" {
+    // Bug 2026-08-29-sim-heal-drops-inbox: `heal` built each side's branch
+    // from a side node's *folded* chain and then cleared every node's inbox.
+    // A broadcast the side's leader had sent but no tick had delivered sat
+    // in a member's inbox at heal time, so it never entered the merged
+    // chain - and `assertConverged` could not see it, because every node
+    // re-folds that same merged chain.
+    var world = try World.init(test_alloc, 0x1EED, test_control_id, &.{});
+    defer world.deinit();
+    const a: usize = 0;
+    const b = try world.addMember(memberKey(1), "node-b", a);
+    const c = try world.addMember(memberKey(2), "node-c", a);
+
+    var buf: [128]u8 = undefined;
+    try world.append(a, .settings, settingsEntryPayload(&buf, max_journals, .{ .u32 = 11 }));
+    for (0..3) |_| try world.tick();
+    try world.assertConverged();
+
+    // The side is listed follower-first, so the node `heal` reads it
+    // through is not the node that authors its writes.
+    try world.partition(&.{ &[_]usize{a}, &[_]usize{ c, b } });
+    for (0..3) |_| try world.tick();
+    try std.testing.expectEqualSlices(u8, &world.nodeId(b), &(try world.leaderOf(b)).?);
+    try std.testing.expectEqualSlices(u8, &world.nodeId(b), &(try world.leaderOf(c)).?);
+
+    // Both sides write, and the losing side's write is healed with no
+    // intervening tick: it is still in C's inbox, unfolded.
+    try world.append(a, .settings, settingsEntryPayload(&buf, max_journals, .{ .u32 = 22 }));
+    try world.append(b, .settings, settingsEntryPayload(&buf, max_journals, .{ .u32 = 33 }));
+
+    const b_chain = world.nodes.items[b].chain.items;
+    const b_write = b_chain[b_chain.len - 1];
+    const b_write_id = entry.Id{
+        .author = b_write.entry.author,
+        .author_seq = b_write.entry.author_seq,
+    };
+    try std.testing.expect(world.nodes.items[c].inbox.items.len > 0);
+    try std.testing.expect(!world.entryResolves(c, b_write_id));
+
+    try world.heal();
+    for (0..8) |_| try world.tick();
+    try world.assertConverged();
+
+    // The in-flight write is in the merged chain on every node. Under the
+    // bug it was dropped: the branch came from C's folded chain, which did
+    // not have it, and the inbox that did was cleared.
+    for (0..3) |i| try std.testing.expect(world.entryResolves(i, b_write_id));
 }
 
 // ---------------------------------------------------------------------------
