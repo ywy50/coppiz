@@ -61,6 +61,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   the same path: `loadJournal` duped each segment file name as an argument to
   `names.append`, so an allocation failure in the list's growth orphaned it.
 
+- A `merge_offer` naming a member's own current leader is dropped instead of
+  starting a merge against its own branch. `onDivergence` carried that guard
+  and `onMergeOffer` did not, and `epoch.survivor` answers "I survive" when it
+  ranks one leader against itself - so the member set `merging_from`, and
+  `onSlot` returns early for every broadcast while that is set, with no
+  watchdog to release it. One 32-byte frame from any admitted peer therefore
+  stopped a healthy member folding anything for as long as the connection
+  stayed open, while it went on heartbeating and serving reads.
+
 - A merge no longer aborts on a re-slotted `join` for a member the survivor
   already holds. `applyJoinReslotted` delegated verbatim to the live rule, so
   it answered `already_member` - and `doMergeControl` appends the `merge`
