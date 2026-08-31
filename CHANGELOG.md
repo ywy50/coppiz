@@ -85,6 +85,21 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Backfill across a `retain = none` compacted chain terminates. `onSyncReq`
+  dropped a compacted (slot-only) record from the page it served and left the
+  page cursor where it was, and `onSyncPage` closed the connection on any
+  record with no entry. A requester whose window spanned a compacted record
+  therefore got the records either side of the gap, could not chain the first
+  one after it to its own head, read that as a divergence, and re-requested
+  the identical window on every tick - a joiner over such a journal stayed
+  `syncing` for good and never became a member. The page now carries the
+  slot-only marker (the shape the wire read already serves) and the requester
+  advances its fold head over it, storing the bytes verbatim so a restart
+  replays the same chain. A slot-only record is still checked before it is
+  taken: position against the head, `prev_slot_hash` against the head hash,
+  and the leader's signature over the slot against the control fold's member
+  table. The merge re-slot path is unchanged.
+
 - `Hub.listen` and `Hub.dialer` allocate from the hub's own allocator rather
   than from their `allocator` parameter. Seven allocations per listen+dial
   pair - the endpoint, the listener, its address, the `endpoints` key and the
