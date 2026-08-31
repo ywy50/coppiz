@@ -145,6 +145,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-31 - closing a hub listener leaves its address taken for the life of the hub](bugs/2026-08-31-hub-listener-never-unregisters.md)
 - [2026-08-31 - a frame body is committed from its header, before any of it arrives](bugs/2026-08-31-frame-body-committed-before-delivery.md)
 - [2026-08-31 - `decodeValue` sizes a string_list from a count it has not checked](bugs/2026-08-31-settings-value-count-before-bounds.md)
+- [2026-08-31 - an entry payload ending in seal-trailer bytes bricks every member's store](bugs/2026-08-31-payload-tail-mimics-seal-trailer.md)
 
 ### Investigations
 
