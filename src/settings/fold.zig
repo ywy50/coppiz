@@ -468,3 +468,28 @@ test "a change count is sized against the body, not trusted from it" {
     defer test_alloc.free(none);
     try std.testing.expectEqual(@as(usize, 0), none.len);
 }
+
+const FuzzCtx = struct {
+    fn fuzzOne(_: @This(), smith: *std.testing.Smith) anyerror!void {
+        // A `settings` entry's payload is peer-supplied and every member
+        // decodes it with this one rule (AGENTS.md - untrusted-input
+        // decoders get a fuzz test). Any error is acceptable. A success must
+        // be canonical: `payloadLen` agrees with the input length and
+        // re-encoding reproduces the bytes exactly, since two members that
+        // read the same payload as different changes diverge without either
+        // refusing anything.
+        var buf: [1024]u8 = undefined;
+        const len = smith.slice(&buf);
+        const payload = decodePayload(test_alloc, buf[0..len]) catch return;
+        defer payload.deinit(test_alloc);
+        try std.testing.expectEqual(len, payloadLen(payload));
+        const round = try test_alloc.alloc(u8, len);
+        defer test_alloc.free(round);
+        try encodePayload(payload, round);
+        try std.testing.expectEqualSlices(u8, buf[0..len], round);
+    }
+};
+
+test "the settings payload decoder fuzzes over untrusted bytes" {
+    try std.testing.fuzz(FuzzCtx{}, FuzzCtx.fuzzOne, .{});
+}

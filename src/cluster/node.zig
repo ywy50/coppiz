@@ -1179,7 +1179,20 @@ pub const ClusterNode = struct {
                 ms.state = .lost;
                 if (ms.dial_at_ms == 0) ms.dial_at_ms = now + ms.backoff_ms;
             } else if (ms.conn_id != null) {
-                if (now >= ms.next_heartbeat_ms) {
+                // A schedule armed under a *longer* interval is re-armed
+                // rather than waited out. The interval is read from the
+                // fold, so a member with no chain yet reads the schema
+                // default (1000 ms) and arms a second out before it has
+                // ever seen the cluster's `cluster.heartbeat_ms`; folding
+                // the chain a tick later lowered the setting and left the
+                // schedule alone. In a cluster whose
+                // `cluster.suspect_after_ms` is under that default, every
+                // member it admits fell silent long enough to be suspected
+                // and disconnected, so it could not finish its own backfill
+                // (bug 2026-08-31-heartbeat-schedule-stale-interval). A
+                // live lowering of the interval had the same lag.
+                const waiting = ms.next_heartbeat_ms -| now;
+                if (now >= ms.next_heartbeat_ms or waiting > heartbeat_ms) {
                     self.sendHeartbeat(ms) catch {};
                     ms.next_heartbeat_ms = now + heartbeat_ms;
                 }

@@ -671,3 +671,26 @@ test "genesis initial settings fold back to the parsed state (PRD 0004 G6 half)"
     const max_journals = schema.keyIndex("cluster.max_journals").?;
     try std.testing.expectEqual(@as(u32, 16), state.getU32(max_journals));
 }
+
+const FuzzCtx = struct {
+    fn fuzzOne(_: @This(), smith: *std.testing.Smith) anyerror!void {
+        // `coppiz.toml` is operator input rather than peer input, so it is
+        // not the untrusted surface the wire decoders are - but it is
+        // hand-rolled, it is the first thing every command parses, and it has
+        // been the subject of five recorded bugs (quote handling, escapes,
+        // trailing tokens, duplicate keys, unbalanced quotes). The contract
+        // fuzzed here is the one those bugs kept breaking in different ways:
+        // whatever the bytes, the parser either refuses or fills a `Config`
+        // that `deinit` can take apart exactly once. The testing allocator's
+        // leak and double-free checks are the assertion.
+        var buf: [512]u8 = undefined;
+        const len = smith.slice(&buf);
+        var config = Config{ .allocator = test_alloc };
+        defer config.deinit();
+        parse(test_alloc, buf[0..len], &config) catch return;
+    }
+};
+
+test "the coppiz.toml parser fuzzes over arbitrary bytes" {
+    try std.testing.fuzz(FuzzCtx{}, FuzzCtx.fuzzOne, .{});
+}

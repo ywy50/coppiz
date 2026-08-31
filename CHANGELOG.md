@@ -7,6 +7,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- Fuzz tests for the control-entry and settings payload decoders. The entry,
+  slot, segment-record and wire-message decoders each had one; the payloads a
+  control entry carries did not, although a `settings`, `genesis` or
+  `create_journal` payload arrives over the wire and is decoded by every
+  member - and the two count-before-bounds bugs fixed this week both lived
+  there. Each new test asserts that a successful decode is canonical: the
+  payload's encoded length is the input length and re-encoding reproduces the
+  bytes, which is the property the fold determinism hash rests on. The
+  `coppiz.toml` parser is fuzzed for the weaker contract that any input either
+  refuses or yields a `Config` that `deinit` takes apart exactly once.
+
 - The deterministic simulator's `LoopWorld` owns elapsed time as well as the
   wire and connectivity. Every node reads its cadences - the heartbeat
   interval, the suspect and evict windows, the redial and seed backoff, the
@@ -50,6 +61,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   disagreeing, and the reopen is clean. Every sibling method already returned
   `unknown_journal` for the same lookup. The same unwrap on the wire path
   (`onSettings`) is recorded in the report and not yet fixed.
+- A member re-arms its heartbeat when the interval it was scheduled under
+  turns out to be longer than the current one. `onTick` read
+  `cluster.heartbeat_ms` from the fold at the moment it sent and honoured the
+  answer only when that instant arrived, so a joiner - which has no chain on
+  its first tick, and therefore no folded settings - armed a beat from the
+  schema default of 1000 ms and stayed silent for it. A cluster whose
+  `cluster.suspect_after_ms` is under a second suspected and disconnected
+  every member it admitted, before the newcomer could finish backfilling, and
+  evicted it where `membership.evict_after_ms` was set. Lowering
+  `cluster.heartbeat_ms` live had the same lag for every member.
 
 - A refused `Store.open` closes the data directory handle it was given. The
   call documents that it takes ownership, but only `deinit` closed the
