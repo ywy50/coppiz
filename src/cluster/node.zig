@@ -2540,7 +2540,30 @@ pub const ClusterNode = struct {
         self.node.store.scanFrom(journal_id, r.from, &ctx, struct {
             fn cb(c: *Ctx, sl: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
                 if (slot.Position.order(sl.position(), c.from) == .lt) return;
-                const e = en orelse return; // compacted records are not served (OQ 43)
+                const e = en orelse {
+                    // A `retain = none` compacted record has no entry, but
+                    // its slot is still a link in the chain: the next full
+                    // record chains to this slot's hash. Dropping it from
+                    // the page left the requester unable to chain that
+                    // record to its own head, so `onSyncPage` treated it as
+                    // a divergence and never advanced the cursor - the same
+                    // window was re-requested on every tick and the
+                    // backfill never terminated (bug
+                    // 2026-08-28-sweep3-backfill-compacted-chain-loop).
+                    // The wire read serves the same marker for the same
+                    // reason (bug 2026-08-29-wire-read-drops-compacted-slots).
+                    const size = segment.slotOnlyRecordSize();
+                    if (c.bytes > 0 and c.bytes + size > @as(usize, c.max_bytes)) {
+                        return error.StopServing;
+                    }
+                    const buf = try c.self.allocator.alloc(u8, size);
+                    defer c.self.allocator.free(buf);
+                    segment.encodeSlotOnlyRecord(sl, buf);
+                    try c.records.appendSlice(c.self.allocator, buf);
+                    c.bytes += size;
+                    c.next = sl.position().next();
+                    return;
+                };
                 try c.self.encodeRecordIntoPage(c.records, sl, e, &c.bytes, c.max_bytes);
                 c.next = sl.position().next();
             }
@@ -2570,9 +2593,23 @@ pub const ClusterNode = struct {
                 return;
             };
             const e = rec.entry orelse {
-                // A compacted record cannot be folded (OQ 43); refuse it.
-                self.closeConn(conn_id);
-                return;
+                // A `retain = none` compacted record: the entry is gone by
+                // design and only the slot is left, so the head advances
+                // over it rather than folding an entry. Refusing the shape
+                // outright stranded every backfill across a compacted
+                // record (bug
+                // 2026-08-28-sweep3-backfill-compacted-chain-loop).
+                const raw = p.records[off .. off + rec.next_offset];
+                const chained = self.applySlotOnly(p.journal_id, &rec.slot, raw) catch {
+                    self.closeConn(conn_id);
+                    return;
+                };
+                if (!chained) {
+                    try self.onDivergence(conn_id, rec.slot.leader, rec.slot.epoch);
+                    return;
+                }
+                off += rec.next_offset;
+                continue;
             };
             // A gap-sync response can race broadcasts: records already
             // applied are skipped, never re-checked (the fold's dedup
@@ -2682,6 +2719,35 @@ pub const ClusterNode = struct {
                 }
             }
         }
+    }
+
+    /// Folds a slot-only (`retain = none` compacted) record from a sync
+    /// page: the fold head moves over it (`chain.advanceHead`) and the bytes
+    /// are stored verbatim, so the record that chains to this slot is
+    /// accepted now and again on reopen (`foldJournal` advances the head the
+    /// same way). Returns false when the record does not chain to my head -
+    /// a divergence for the caller to resolve. A record at or behind my head
+    /// is a redelivery and returns true; unlike a full record there is no
+    /// entry id to tell a redelivery from a divergence, so the position is
+    /// the whole test.
+    fn applySlotOnly(
+        self: *ClusterNode,
+        journal_id: [16]u8,
+        sl: *const slot.Slot,
+        record: []const u8,
+    ) !bool {
+        const fold = self.foldFor(journal_id) orelse return error.UnknownJournal;
+        if (slot.Position.order(sl.position(), self.headFor(journal_id)) != .gt) return true;
+        if (!std.mem.eql(u8, &sl.prev_slot_hash, &self.headHashFor(journal_id))) return false;
+        // The leader's signature over the slot is the only thing that pins a
+        // slot-only record; the membership lives in the control fold even
+        // when the record is a data journal's (chain.applyDataChecked).
+        const slot_leader = self.node.control.memberById(sl.leader) orelse
+            return error.NotLeader;
+        try chain.FoldState.verifySlotSignature(slot_leader, sl);
+        try fold.advanceHead(sl);
+        try self.node.store.appendRecord(journal_id, sl.position(), record);
+        return true;
     }
 
     /// Whether the fold already knows an entry id (the dedup test for
@@ -4032,6 +4098,42 @@ fn bothPayloads(client: *net.client.Client, name: []const u8, a: []const u8, b: 
     }.cb) catch return false;
     return ctx.found_a and ctx.found_b;
 }
+
+/// A connection that keeps every frame the node sends it, for tests that
+/// assert on the wire rather than on internal state.
+const FrameCapture = struct {
+    frames: std.ArrayListUnmanaged([]u8) = .empty,
+
+    fn conn(self: *FrameCapture) net.transport.Conn {
+        return .{
+            .ctx = self,
+            .recv_frame = recv,
+            .send_frame = send,
+            .shutdown_fn = nop,
+            .close_fn = nop,
+        };
+    }
+
+    fn deinit(self: *FrameCapture) void {
+        for (self.frames.items) |f| test_alloc.free(f);
+        self.frames.deinit(test_alloc);
+    }
+
+    fn send(ctx: *anyopaque, _: std.Io, body: []const u8) net.transport.SendError!void {
+        const self: *FrameCapture = @ptrCast(@alignCast(ctx));
+        const copy = test_alloc.dupe(u8, body) catch return error.SendFailed;
+        self.frames.append(test_alloc, copy) catch {
+            test_alloc.free(copy);
+            return error.SendFailed;
+        };
+    }
+
+    fn recv(_: *anyopaque, _: std.Io, _: std.mem.Allocator) net.transport.RecvError![]u8 {
+        return error.EndOfStream;
+    }
+
+    fn nop(_: *anyopaque, _: std.Io) void {}
+};
 
 fn wallMs(io: std.Io) i64 {
     return std.Io.Timestamp.now(io, .real).toMilliseconds();
@@ -5737,6 +5839,163 @@ test "a sync page whose cursor does not advance is refused, not looped on" {
     });
     try std.testing.expectEqual(ahead, cn.sync_cursors.get(control_id).?);
     try std.testing.expect(!cn.conns.getPtr(9).?.closing);
+}
+
+test "a sync page carries a compacted slot instead of skipping the gap" {
+    // Bug 2026-08-28-sweep3-backfill-compacted-chain-loop. `onSyncReq`
+    // dropped a compacted (slot-only) record from the page entirely, so the
+    // requester never saw the position and the record that follows it could
+    // not chain to the requester's head: the same window was re-requested on
+    // every tick and the backfill never finished.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    var jit = node.control.journals.keyIterator();
+    const data_id = (jit.next() orelse return error.NoDataJournal).*;
+
+    // Three records; the middle one is then compacted away under
+    // `retain = none`, which keeps its slot and drops its entry.
+    var middle: entry.Id = undefined;
+    for ([_][]const u8{ "one", "two", "three" }, 0..) |payload, i| {
+        const en = try cn.signedEntry(.data, data_id, payload, 0);
+        try cn.noteBuilt(data_id, en.author_seq);
+        _ = try cn.slotAndBroadcast(&en, false);
+        if (i == 1) middle = en.id();
+    }
+    try node.store.compact(data_id, &.{middle}, .none);
+
+    var capture = FrameCapture{};
+    defer capture.deinit();
+    try cn.conns.put(test_alloc, 9, .{ .conn = capture.conn() });
+
+    try cn.onSyncReq(9, .{
+        .journal_id = data_id,
+        .from = .{ .epoch = 1, .seq = 1 },
+        .max_bytes = 64 * 1024,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), capture.frames.items.len);
+    var msg = try message.decode(test_alloc, capture.frames.items[0]);
+    defer msg.deinit(test_alloc);
+    const page = msg.sync_page;
+
+    // Every position in the window is on the page, the compacted one as a
+    // slot-only record: a page that silently omits it leaves the requester
+    // unable to chain the record that follows.
+    var kinds = std.ArrayListUnmanaged(bool).empty;
+    defer kinds.deinit(test_alloc);
+    var off: usize = 0;
+    while (off < page.records.len) {
+        const rec = try segment.decodeRecord(page.records[off..]);
+        try kinds.append(test_alloc, rec.entry != null);
+        off += rec.next_offset;
+    }
+    try std.testing.expectEqualSlices(bool, &.{ true, false, true }, kinds.items);
+    try std.testing.expectEqual(slot.Position{ .epoch = 1, .seq = 4 }, page.next);
+}
+
+test "a compacted slot on a sync page advances the fold head, not the connection" {
+    // Bug 2026-08-28-sweep3-backfill-compacted-chain-loop, client half.
+    // `onSyncPage`
+    // refused any slot-only record outright, so even a correctly served page
+    // could not carry the gap across.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    var capture = FrameCapture{};
+    defer capture.deinit();
+    try cn.conns.put(test_alloc, 9, .{ .conn = capture.conn() });
+
+    const control_id = node.control.journal_id;
+    const head = cn.headFor(control_id);
+
+    // The next control slot, signed by this member (the only member, and
+    // the fold's leader), with no entry: the `retain = none` shape.
+    var sl = slot.Slot{
+        .epoch = head.epoch,
+        .seq = head.seq + 1,
+        .slot_ts_ms = cn.nowMs(),
+        .entry_hash = [_]u8{0xAB} ** 32,
+        .prev_slot_hash = cn.headHashFor(control_id),
+        .leader = node.member_id,
+        .signature = undefined,
+    };
+    sl.signature = (try slot.sign(node.keypair, &sl)).toBytes();
+    const record = try test_alloc.alloc(u8, segment.slotOnlyRecordSize());
+    defer test_alloc.free(record);
+    segment.encodeSlotOnlyRecord(&sl, record);
+
+    cn.syncing = true;
+    try cn.sync_cursors.put(test_alloc, control_id, sl.position());
+    try cn.onSyncPage(9, .{
+        .journal_id = control_id,
+        .next = sl.position().next(),
+        .records = record,
+    });
+
+    // The head moved over the gap and the connection survived, so the
+    // backfill can go on; the bytes are in the store too, or a reopen would
+    // refuse the record that chains to this slot.
+    try std.testing.expect(!cn.conns.getPtr(9).?.closing);
+    try std.testing.expectEqual(sl.position(), cn.headFor(control_id));
+    try std.testing.expectEqual(sl.position().next(), cn.sync_cursors.get(control_id).?);
+
+    var counted: usize = 0;
+    try node.store.scanFrom(control_id, sl.position(), &counted, struct {
+        fn cb(c: *usize, s: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
+            _ = s;
+            if (en == null) c.* += 1;
+        }
+    }.cb);
+    try std.testing.expectEqual(@as(usize, 1), counted);
 }
 
 test "a replicated slot whose store write is refused stops the member" {
