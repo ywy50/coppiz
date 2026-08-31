@@ -31,6 +31,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- `Node.changeSettings` refuses a journal the chain names and the store lost,
+  instead of aborting. A journal name resolves through the folded registry
+  while the fold map is built from the store's directories, and `init`,
+  `createJournal` and `applyReplicated` all record the `create_journal`
+  before creating the directory - so a crash in that window leaves the two
+  disagreeing, and the reopen is clean. Every sibling method already returned
+  `unknown_journal` for the same lookup. The same unwrap on the wire path
+  (`onSettings`) is recorded in the report and not yet fixed.
+
 - A refused `Store.open` closes the data directory handle it was given. The
   call documents that it takes ownership, but only `deinit` closed the
   handle, so every refusal - including `AlreadyOpen`, which is how the CLI
