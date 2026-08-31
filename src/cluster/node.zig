@@ -2760,6 +2760,21 @@ pub const ClusterNode = struct {
     /// The survivor's side: the loser offered its branch. Verify the
     /// survivor computation, then fetch the branch and re-slot it.
     fn onMergeOffer(self: *ClusterNode, conn_id: u64, offer: message.MergeOffer) !void {
+        // A branch led by my own current leader is not a partition branch,
+        // it is my own chain - the guard `onDivergence` carries and this
+        // entry point did not. `epoch.survivor` compares the peer's branch
+        // against mine through `election.compareRank`, which answers `.eq`
+        // for one leader against itself, and `.eq` maps to "I survive": the
+        // member began a merge against its own branch, and `onSlot` drops
+        // every broadcast while `merging_from` is set. One frame from any
+        // admitted peer therefore froze a healthy member's fold for the life
+        // of the connection, while it kept heartbeating and serving reads
+        // (bug 2026-08-31-merge-offer-names-my-own-leader).
+        const my_epoch = self.node.control.epoch orelse {
+            self.closeConn(conn_id);
+            return;
+        };
+        if (std.mem.eql(u8, &offer.branch_leader, &my_epoch.leader)) return;
         const winner = self.survivorVs(offer.branch_leader) orelse {
             self.closeConn(conn_id);
             return;
@@ -5765,6 +5780,105 @@ test "a chainless member drops a peer's merge_offer instead of aborting" {
     try std.testing.expectEqual(@as(?u64, null), cn.merging_to);
     try std.testing.expect(cn.node.control.epoch == null);
     try std.testing.expect(cn.conns.getPtr(9).?.closing);
+}
+
+test "a merge_offer naming my own leader is dropped, not begun as a merge" {
+    // Bug 2026-08-31-merge-offer-names-my-own-leader. `onDivergence` guards
+    // "a record from my own current leader is a redelivery, not a partition
+    // branch"; `onMergeOffer` had no such check. `epoch.survivor` ranks the
+    // peer's branch leader against mine through `election.compareRank`,
+    // which answers `.eq` for one leader against itself, and `.eq` maps to
+    // `.a` - "I survive". So the member began a merge against its own
+    // branch: `beginMerge` sent one `sync_req` and set `merging_from`, and
+    // `onSlot` returns early for every broadcast while that is set. There is
+    // no watchdog on it, unlike `sync_in_flight`; it clears only when the
+    // conn dies or a merge completes. `frameAllowed` admits `.merge_offer`
+    // from any member connection, so one 32-byte frame froze a healthy
+    // member's fold for the life of the connection while it went on
+    // heartbeating and serving reads.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    const Sink = struct {
+        fn send(_: *anyopaque, _: std.Io, _: []const u8) net.transport.SendError!void {}
+        fn recv(
+            _: *anyopaque,
+            _: std.Io,
+            _: std.mem.Allocator,
+        ) net.transport.RecvError![]u8 {
+            return error.EndOfStream;
+        }
+        fn nop(_: *anyopaque, _: std.Io) void {}
+    };
+    var sink_ctx: u8 = 0;
+    const sink = net.transport.Conn{
+        .ctx = &sink_ctx,
+        .recv_frame = Sink.recv,
+        .send_frame = Sink.send,
+        .shutdown_fn = Sink.nop,
+        .close_fn = Sink.nop,
+    };
+    try cn.conns.put(test_alloc, 9, .{ .conn = sink });
+    try cn.conns.put(test_alloc, 11, .{ .conn = sink });
+
+    // The founder leads epoch 1 and has a data slot of its own.
+    var jit = node.control.journals.keyIterator();
+    const data_id = (jit.next() orelse return error.NoDataJournal).*;
+    {
+        const en = try cn.signedEntry(.data, data_id, "one", 0);
+        try cn.noteBuilt(data_id, en.author_seq);
+        _ = try cn.slotAndBroadcast(&en, false);
+    }
+    const my_leader = cn.node.control.epoch.?.leader;
+    try std.testing.expectEqualSlices(u8, &cn.node.member_id, &my_leader);
+
+    // The offer names this member's own current leader.
+    try cn.onMergeOffer(9, .{
+        .branch_leader = my_leader,
+        .branch_head = .{ .epoch = 1, .seq = 1 },
+    });
+
+    // Dropped: no merge began, no sync went out, and the connection is left
+    // alone - the offer is a peer's confusion, not a protocol violation.
+    try std.testing.expectEqual(@as(?u64, null), cn.merging_from);
+    try std.testing.expectEqual(@as(?u64, null), cn.merging_to);
+    try std.testing.expect(!cn.sync_in_flight);
+    try std.testing.expect(!cn.conns.getPtr(9).?.closing);
+    try std.testing.expect(!cn.syncing);
+
+    // The guard is not a blanket drop: an offer naming a leader this member
+    // has never folded is still a forged chain, and still costs the
+    // connection.
+    try cn.onMergeOffer(11, .{
+        .branch_leader = [_]u8{0xC3} ** 16,
+        .branch_head = .{ .epoch = 2, .seq = 1 },
+    });
+    try std.testing.expect(cn.conns.getPtr(11).?.closing);
+    try std.testing.expectEqual(@as(?u64, null), cn.merging_from);
 }
 
 test "a merge data re-slot is broadcast as a re-slot, not as a live record" {
