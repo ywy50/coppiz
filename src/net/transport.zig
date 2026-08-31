@@ -457,6 +457,12 @@ pub const Hub = struct {
     /// Directed edges currently partitioned, keyed "from\x00to".
     dropped: std.StringHashMapUnmanaged(void) = .empty,
     pipes: std.ArrayListUnmanaged(*Pipe) = .empty,
+    /// Endpoints whose listener has closed. They leave `endpoints` so the
+    /// address can be listened on again, but they are not destroyed there:
+    /// `connectFn` releases the hub lock before calling `pushConn`, so a
+    /// dial that looked one up a moment earlier may still be inside it.
+    /// The hub outlives every dial, so it frees them at `deinit`.
+    retired: std.ArrayListUnmanaged(*Endpoint) = .empty,
 
     pub const Endpoint = struct {
         allocator: std.mem.Allocator,
@@ -516,6 +522,11 @@ pub const Hub = struct {
             self.allocator.free(kv.key_ptr.*);
         }
         self.endpoints.deinit(self.allocator);
+        for (self.retired.items) |ep| {
+            ep.deinit(io);
+            self.allocator.destroy(ep);
+        }
+        self.retired.deinit(self.allocator);
         var dit = self.dropped.keyIterator();
         while (dit.next()) |key| self.allocator.free(key.*);
         self.dropped.deinit(self.allocator);
@@ -668,9 +679,29 @@ const HubListener = struct {
     /// Called exactly once; see `Listener.close`.
     fn closeFn(ctx: *anyopaque, io: std.Io) void {
         const self: *HubListener = @ptrCast(@alignCast(ctx));
+        // Unregister first, so the address can be listened on again — a
+        // node restarting in the fabric re-listens on the address it had,
+        // and leaving the entry behind answered that with `AddressInUse`
+        // for the life of the hub. The endpoint is retired rather than
+        // destroyed: a dial that looked it up before the removal may still
+        // be inside `pushConn`, which runs without the hub lock.
+        retire: {
+            self.hub.mutex.lockUncancelable(io);
+            defer self.hub.mutex.unlock(io);
+            const e = self.hub.endpoints.getEntry(self.address) orelse break :retire;
+            const key = e.key_ptr.*;
+            // Take the retirement slot before unregistering. If it cannot
+            // be taken the endpoint stays in the map, owned by it, and the
+            // address stays taken — the behaviour before this change, and
+            // better than an endpoint owned by nothing.
+            self.hub.retired.append(self.hub.allocator, e.value_ptr.*) catch break :retire;
+            _ = self.hub.endpoints.remove(self.address);
+            self.hub.allocator.free(key);
+        }
         // The endpoint's `closed` is read under the endpoint mutex by pushConn and
         // acceptConn; a close racing an accept/dial must not be a data race.
-        // Capture the mutex before `self` is destroyed below.
+        // Capture the mutex before `self` is destroyed below. The hub lock is
+        // released above: it is never held across an `Endpoint` call.
         const ep_mutex = &self.endpoint.mutex;
         ep_mutex.lockUncancelable(io);
         defer ep_mutex.unlock(io);
@@ -1071,5 +1102,34 @@ test "a TCP conn keeps the bytes its socket read past the current frame" {
     defer test_alloc.free(second);
     try std.testing.expectEqualSlices(u8, "frame-one", first);
     try std.testing.expectEqualSlices(u8, "frame-two", second);
+    try group.await(tio);
+}
+
+test "closing a hub listener frees its address for a new one" {
+    // A node restarting in the in-memory fabric re-listens on the address
+    // it had. `closeFn` marked the endpoint closed but left it registered,
+    // so `listen` answered `AddressInUse` for the life of the hub and no
+    // scenario could restart a member.
+    var hub = Hub.init(test_alloc);
+    defer hub.deinit(tio);
+
+    var first = try hub.listen(tio, test_alloc, "node-a");
+    try std.testing.expectError(error.AddressInUse, hub.listen(tio, test_alloc, "node-a"));
+    first.close(tio);
+
+    // Taken again by a second listener, which accepts and echoes like any
+    // other: the address is genuinely free, not merely absent from the map.
+    var second = try hub.listen(tio, test_alloc, "node-a");
+    defer second.close(tio);
+    var dialer = try hub.dialer(test_alloc, "node-b");
+    defer dialer.deinit();
+    var group: std.Io.Group = .init;
+    group.async(tio, acceptAndEcho, .{&second});
+    var conn = try dialer.connect(tio, test_alloc, "node-a");
+    defer conn.close(tio);
+    try conn.send(tio, "ping");
+    const reply = try conn.recv(tio, test_alloc);
+    defer test_alloc.free(reply);
+    try std.testing.expectEqualStrings("pong", reply);
     try group.await(tio);
 }
