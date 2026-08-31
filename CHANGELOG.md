@@ -16,6 +16,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A `join` control entry's address length is checked in `usize` rather than
+  in the `u16` the prefix was read into. `50 + addr_len` overflowed for any
+  value within 50 of the type's maximum, so the record panicked the fold in
+  Debug and ReleaseSafe instead of being refused - on every member, and again
+  on replay from disk, leaving the control chain unopenable.
+
 - An allocation failure while folding a `genesis` or a `create_journal` is
   fatal again rather than a settings refusal. Three apply-side call sites
   flattened every failure into `invalid_settings`, `OutOfMemory` included,
