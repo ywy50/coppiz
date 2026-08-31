@@ -7,6 +7,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- `Node.readByAuthor` and `Node.readByKind`: the two reads PRD 0001's *Read
+  path* has always listed beside the range read and the by-id read, and which
+  did not exist. Both are entry facts the chain walk already holds, so they
+  are one comparison inside the walk the three reads now share rather than a
+  second pass. The author matched is the entry's, not the slot leader's, so a
+  re-slotted entry still answers to whoever wrote it. Library calls only:
+  `coppiz read` gains no flag, because the `read_req` wire message carries no
+  filter and a flag that worked only on an unserved directory would be worse
+  than none.
+
 - Fuzz tests for the control-entry and settings payload decoders. The entry,
   slot, segment-record and wire-message decoders each had one; the payloads a
   control entry carries did not, although a `settings`, `genesis` or

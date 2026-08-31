@@ -15,6 +15,22 @@ tier-0 CLI).
 The format magics are coppiz-derived (`CPPZ` entry, `CPSG`
 segment, `CPST` seal, `CPPQ` queue), not the draft's `SPNE`.
 
+The *Read path*'s "by author" and "by kind" landed on 2026-08-31 as
+`Node.readByAuthor` and `Node.readByKind` (`src/journal/journal.zig`). Until
+then that paragraph named two reads the tree did not have: only the range
+read, the by-id read and the follow cursor existed. Both filters are entry
+facts the chain walk already holds the header for, so they are one comparison
+inside `readWhere` - the single walk `readRange`, `readByAuthor` and
+`readByKind` now share - and never a second pass or a sort of the fold's
+entries map. The author matched is the *entry's*, not the slot leader's, so a
+re-slotted entry still answers to whoever wrote it.
+
+They are library calls only. `coppiz read` gains no `--author`/`--kind` flag,
+because a served directory answers reads over the wire and the `read_req`
+message carries no filter field; adding one is a change to `src/net/` and
+`src/cluster/`, and a CLI flag that worked on an idle directory and silently
+did nothing on a served one would be worse than no flag.
+
 Phase 1's "fuzz test on the decoders" reached the rest of the untrusted-input
 surface on 2026-08-31. The entry, slot, segment-record and wire-message
 decoders had one each; the payload decoders a control entry carries did not,
