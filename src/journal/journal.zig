@@ -400,6 +400,7 @@ pub const Node = struct {
         var js = try self.allocator.create(JournalState);
         errdefer self.allocator.destroy(js);
         js.fold = try chain.FoldState.init(self.allocator, false, journal_id);
+        errdefer js.fold.deinit();
         try self.journals.put(journal_id, js);
         return journal_id;
     }
@@ -707,6 +708,7 @@ pub const Node = struct {
                     var js = try self.allocator.create(JournalState);
                     errdefer self.allocator.destroy(js);
                     js.fold = try chain.FoldState.init(self.allocator, false, payload.journal_id);
+                    errdefer js.fold.deinit();
                     try self.journals.put(payload.journal_id, js);
                 }
             }
@@ -809,6 +811,13 @@ pub const Node = struct {
             const js = try self.allocator.create(JournalState);
             errdefer self.allocator.destroy(js);
             js.fold = try chain.FoldState.init(self.allocator, false, journal_id);
+            // The fold allocates as soon as it is initialised (a settings
+            // state per key) and again for every record it folds, so the box
+            // is not the only thing to give back: a `foldJournal` refusal or
+            // an OOM in `put` used to leak the whole fold, which `Node.open`'s
+            // own errdefer cannot reach because this one is not in the map
+            // yet (bug 2026-08-31-journal-state-fold-leaks-before-the-put).
+            errdefer js.fold.deinit();
             try self.foldJournal(&js.fold, journal_id);
             try self.journals.put(journal_id, js);
         }
@@ -2308,6 +2317,53 @@ test "a failure after the store opens leaves the data directory usable" {
     var node = try openNode(&env);
     defer node.deinit();
     try std.testing.expect(node.leader() != null);
+}
+
+test "an open refused part-way through a journal's fold owns nothing" {
+    // Bug 2026-08-31-journal-state-fold-leaks-before-the-put: the three sites
+    // that build a `JournalState` had `errdefer self.allocator.destroy(js)`
+    // and nothing for `js.fold`, which allocates a settings state the moment
+    // it is initialised and again for every record it folds. A `foldJournal`
+    // refusal or an OOM in `journals.put` therefore leaked the whole fold, and
+    // `Node.open`'s own errdefer cannot reach it - the in-flight state is not
+    // in the map yet, which is what 2026-08-30-node-open-leaks-folded-journals
+    // covered instead.
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    // Two data journals with records in them, so an open has several folds to
+    // build and the failure index lands inside one of them.
+    {
+        const node = try openNode(&env);
+        defer node.deinit();
+        const main_id = node.journalIdByName("main").?;
+        _ = try node.append(main_id, "one", 0);
+        const second = try node.createJournal("second", &.{});
+        _ = try node.append(second, "two", 0);
+    }
+
+    // Sweep the failure index over the whole open. Every refusal must have
+    // given back everything it took; the first index that gets through means
+    // there are no more failures to induce.
+    for (0..400) |i| {
+        var fa = std.testing.FailingAllocator.init(test_alloc, .{ .fail_index = i });
+        const node = Node.open(
+            fa.allocator(),
+            tio,
+            try env.dataDir(),
+            .{ .now = &fakeClock },
+        ) catch {
+            try std.testing.expectEqual(fa.allocations, fa.deallocations);
+            continue;
+        };
+        node.deinit();
+        break;
+    }
 }
 
 test "a chainless node reports no epoch and refuses to slot instead of panicking" {
