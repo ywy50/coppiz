@@ -4,11 +4,23 @@
 
 - **What failed:** `onReadReq` answers an unknown journal name with an empty `read_page` and exit 0; `coppiz read` against an unlocked dir returns `error.UnknownJournal`. Same command, different behavior depending on whether the node is serving.
 - **Impact:** A typo'd journal name in `coppiz read` over the wire produces silent empty output instead of an error.
-- **Resolution:** Still open. Statically validated.
+- **Resolution:** Fixed. Re-verified in the tree 2026-08-31: `read_page` carries a `refusal` field, `onReadReq` sets `unknown_journal`, and the client maps it to `error.UnknownJournal`.
 
 ## Status
 
 Resolved.
+
+**Verified in the tree 2026-08-31.** This record was one of the 29 flipped
+to `Resolved` by `8893ae1` ("docs(reports): mark the sweep fixes resolved
+(#116)"), a commit that touched 29 report files and no source file, and it
+kept a TL;DR reading "Still open" and a `Fix: none` reference line. Both
+were stale, not evidence: the fix is present.
+
+`onReadReq` (`src/cluster/node.zig`) answers an unknown name with
+`read_page{ .refusal = "unknown_journal" }`, naming this report;
+`net/client.zig` returns `error.UnknownJournal` for any non-empty refusal,
+also naming it; `message.zig`'s "read_req and read_page round-trip" test
+asserts the field both ways.
 
 ## Symptom and impact
 
@@ -37,4 +49,4 @@ None. Low severity.
 ## References
 
 - Code: `src/cluster/node.zig:2413-2420` (`onReadReq`), `src/main.zig:392-393` (`cmdRead`)
-- Fix: none
+- Fix: in the tree - `src/cluster/node.zig` `onReadReq`; `src/net/message.zig` `ReadPage.refusal`; `src/net/client.zig`

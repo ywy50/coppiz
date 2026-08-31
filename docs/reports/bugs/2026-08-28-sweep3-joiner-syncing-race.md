@@ -4,11 +4,22 @@
 
 - **What failed:** `init` sets `syncing = true` for a chainless member; `driveBackfill` clears it on the first tick whenever the cursor map is empty - and it is empty until the first `hello_ack` seeds it. The seed is gated on `syncing`, so a joiner whose first tick (100 ms) beats its handshake stays `syncing = false` forever with no cursor and never syncs.
 - **Impact:** A permanent, silent join failure - the member connects, but never folds genesis, never becomes leader-eligible, and never forwards. Exactly the "admitter comes up late" case the seed-retry design documents.
-- **Resolution:** Still open. Statically validated (corroborated by two independent reviews).
+- **Resolution:** Fixed. Re-verified in the tree 2026-08-31: `driveBackfill` returns without clearing `syncing` when the control fold has no head.
 
 ## Status
 
 Resolved.
+
+**Verified in the tree 2026-08-31.** This record was one of the 29 flipped
+to `Resolved` by `8893ae1` ("docs(reports): mark the sweep fixes resolved
+(#116)"), a commit that touched 29 report files and no source file, and it
+kept a TL;DR reading "Still open" and a `Fix: none` reference line. Both
+were stale, not evidence: the fix is present.
+
+`driveBackfill` (`src/cluster/node.zig`) reaches `if (self.node.control.head
+== null) return;` before `setSyncing(false)`, naming this report in the
+comment. A chainless joiner whose first tick beats its handshake therefore
+stays `syncing`, and the `hello_ack` seed still fires.
 
 ## Symptom and impact
 
@@ -44,4 +55,4 @@ Related join-path defects reported separately: the follower-admitter failure (20
 ## References
 
 - Code: `src/cluster/node.zig:337` (`init`), `:945-967` (`driveBackfill`), `:1438-1446` (`onHelloAck`)
-- Fix: none
+- Fix: in the tree - `src/cluster/node.zig` `driveBackfill` (the chainless guard before clearing `syncing`)

@@ -4,11 +4,23 @@
 
 - **What failed:** `viewsFor` sets `last_ack = self.node.control.head` for *every* member (peers included), so under `combined`/`freshest` all members compare equal and the tiebreak always falls to seniority. The heartbeat carries a real `last_ack` that the sender populates and the receiver drops. The merge survivor path (`viewOf`) feeds the node's own head as both branches' `last_ack`.
 - **Impact:** `tiebreak = freshest` never elects the more complete authority; and because the simulator computes survivors from per-branch heads, the node and the simulator can pick different survivors for the same two branches - breaking the deterministic-merge invariant between the two implementations.
-- **Resolution:** Still open. Statically validated.
+- **Resolution:** Fixed. Re-verified in the tree 2026-08-31: `viewsFor` and `viewOf` both take each member's own advertised head, and `onHeartbeat` is what populates it.
 
 ## Status
 
 Resolved.
+
+**Verified in the tree 2026-08-31.** This record was one of the 29 flipped
+to `Resolved` by `8893ae1` ("docs(reports): mark the sweep fixes resolved
+(#116)"), a commit that touched 29 report files and no source file, and it
+kept a TL;DR reading "Still open" and a `Fix: none` reference line. Both
+were stale, not evidence: the fix is present.
+
+`viewsFor` and `viewOf` (`src/cluster/node.zig`) set `last_ack` from
+`self.node.control.head` for this member and from
+`self.members.get(id).?.head` for a peer, both naming this report in the
+comment. `onHeartbeat` assigns `ms.head = hb.head`, so the wire field the
+sender populated is no longer dropped.
 
 ## Symptom and impact
 
@@ -48,4 +60,4 @@ None beyond the fix. Deterministic-merge divergence between the node and the sim
 ## References
 
 - Code: `src/cluster/node.zig:2571-2592` (`viewsFor`), `:2202-2215` (`viewOf`), `:1149` (`sendHeartbeat`), `:1862-1878` (`onHeartbeat`), `src/sim/sim.zig:362-373, 667`
-- Fix: none
+- Fix: in the tree - `src/cluster/node.zig` `viewsFor`, `viewOf`, `onHeartbeat`

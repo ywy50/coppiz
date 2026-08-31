@@ -4,11 +4,31 @@
 
 - **What failed:** The sweep-1 fix routed reslotted `create_journal` to a variant that skips the author check - but the reslotted/live decision is author-based inference (`chain.zig:311-312`), and `onForward` lets any member forward any entry. A member's self-signed `create_journal` is now accepted by every fold; before the fix it was refused `NotLeader`.
 - **Impact:** The leader-only `create_journal` authorization ([PRD 0003](../../prds/0003-membership-and-leadership.md)) is bypassed: any member can grow the journal registry (bounded only by `max_journals` and the name/payload checks). Same inference silently converts a live non-leader control `settings`/`stale`/`checkpoint` into a no-op instead of a refusal.
-- **Resolution:** Still open. Statically validated (fix regression).
+- **Resolution:** Fixed. Re-verified in the tree 2026-08-31: `onForward` refuses every non-`data` kind. The "joins excepted" clause below described work that did not exist until 2026-08-31; it does now, and behind the leader's own admission policy - see the Status note.
 
 ## Status
 
 Resolved. Introduced by `f401606` (`applyCreateJournalReslotted`).
+
+**Verified in the tree 2026-08-31.** This record was one of the 29 flipped
+to `Resolved` by `8893ae1` ("docs(reports): mark the sweep fixes resolved
+(#116)"), a commit that touched 29 report files and no source file, and it
+kept a TL;DR reading "Still open" and a `Fix: none` reference line. Both
+were stale, not evidence: the fix is present.
+
+`onForward` (`src/cluster/node.zig`) refuses any entry whose kind is not
+`data`, naming this report in the comment, so a member's self-signed
+`create_journal` never reaches the fold's re-slot inference.
+
+One clause of the Resolution below was ahead of the tree: joins were **not**
+excepted when this record was written, and were still refused as of
+`34404d5`. The follower-admitter defect that needs the exception
+(2026-08-28-sweep3-follower-admitter-join-fails) was fixed on 2026-08-31,
+and `.join` is now excepted - but only behind `joinAdmissible`, which
+re-runs the leader's own admission policy over the forwarded payload. A
+regression test, "the forward path's join exception admits nothing the
+leader's policy refuses", pins that a forwarded `create_journal` still
+closes the connection.
 
 ## Symptom and impact
 
@@ -57,4 +77,4 @@ The same inference gap weakens `settings`/`stale`/`checkpoint` authorization on 
 ## References
 
 - Code: `src/journal/chain.zig:311-313`, `:374-381`, `:595-601`; `src/cluster/node.zig:1592-1607`
-- Fix: none
+- Fix: in the tree - `src/cluster/node.zig` `onForward` (the kind filter) and `joinAdmissible` (the `.join` exception, 2026-08-31)
