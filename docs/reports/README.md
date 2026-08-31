@@ -140,6 +140,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-30 - an already-removed entry re-enters every later removal set, so an idle journal emits a checkpoint per interval](bugs/2026-08-30-removed-entries-re-enter-the-removal-set.md) - **open**
 - [2026-08-31 - an allocation failure while judging an epoch is read as a partition](bugs/2026-08-31-epoch-oom-reads-as-disagreement.md)
 - [2026-08-31 - a merge re-slot on a data journal cannot be read back off disk](bugs/2026-08-31-data-reslot-cannot-be-replayed.md)
+- [2026-08-31 - a `merge_ack` that fails part-way strands the member silently](bugs/2026-08-31-merge-ack-fails-into-silence.md)
 
 ### Investigations
 

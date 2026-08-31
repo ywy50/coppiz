@@ -7,6 +7,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A `merge_ack` whose handling fails part-way no longer strands the member
+  on its dead branch. The handler truncates, re-folds and re-arms the sync
+  cursors, but it was the one frame handler whose error the dispatch
+  discarded, and it consumed the pending merge offer before doing any of
+  that work - so a failure was invisible and the survivor's retry was
+  refused. The error now closes the connection, as every other handler's
+  does, and the offer is consumed only once the merge has succeeded.
+
 - A merge that re-slots a losing branch's journal-scoped `settings` or
   `checkpoint` records no longer leaves the surviving member unable to
   reopen its own data directory. The re-slot was represented on the wire and
