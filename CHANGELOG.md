@@ -67,6 +67,19 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The simulator's `heal` folds pending inbox broadcasts into the branches it
+  merges. It read each side's branch off a member's *folded* chain and then
+  cleared every inbox, so a message the side's leader had broadcast but no
+  tick had delivered was treated as if it had never been sent: a scenario
+  that wrote on a side and healed without an intervening tick lost that
+  write, and `assertConverged` could not see it, because every node re-folds
+  the same merged chain. Whether the loss showed up depended on the order the
+  partition set happened to list the side's nodes in. The drain runs
+  `processInbox` while the links are still closed, which is exactly what a
+  `tick` does, so a pending `epoch` entry meets the same liveness check on
+  both paths and a heal cannot admit an entry a tick would have dropped.
+  Harness fidelity only.
+
 - The simulator's `heal` reads a side's leader and branch from a live node
   instead of from whichever node the partition set happens to list first.
   `sideLeader` and `tailOf` took `partition_sides[side].items[0]` with no
