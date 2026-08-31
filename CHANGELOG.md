@@ -67,6 +67,18 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- One un-slotable entry in the durable queue no longer stops the whole node.
+  The leader's queue sweep, `slotQueuedEntries`, wrapped its slot step in a
+  bare `try`, so any per-entry refusal - too large after `max_entry_bytes` was
+  lowered, a duplicate seq consumed while the entry sat queued, a journal the
+  member no longer has a fold for - left the queue scan, reached the tick's
+  `catch self.fatal()`, and stopped the loop. The other queue-drain path,
+  `reforwardQueue`, has always answered the entry's waiter with the refusal
+  and moved on; both paths now do, and the entry stays in the durable queue
+  the way `reforwardQueue` leaves it. Its bug report was marked resolved on
+  2026-08-29 by a docs-only status sweep while the defect was still in the
+  tree; the record now carries that correction with its evidence.
+
 - A refused open no longer leaks the journal fold it was building. The three
   sites that construct a `JournalState` guarded the box and not `js.fold`,
   which allocates the moment it is initialised and again per folded record, so

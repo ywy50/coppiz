@@ -1338,7 +1338,23 @@ pub const ClusterNode = struct {
                     c.self.completePendingFor(en);
                     return;
                 }
-                _ = try c.self.slotAndBroadcast(en, false);
+                _ = c.self.slotAndBroadcast(en, false) catch |err| {
+                    // A refusal is this entry's, not the node's: a bare
+                    // `try` here left the queue scan and reached `onTick`'s
+                    // `catch self.fatal()`, so one un-slotable queued entry
+                    // (too large after `max_entry_bytes` was lowered, a seq
+                    // consumed while it sat queued) stopped the whole loop.
+                    // `reforwardQueue`'s branch acks the waiters and moves
+                    // on; both queue-drain paths now do (bug
+                    // 2026-08-28-sweep3-slotqueued-refusal-fatal).
+                    if (c.self.pending_clients.fetchRemove(en.id())) |kv| {
+                        c.self.ackClient(kv.value, en.id(), clientRefusalName(err)) catch {};
+                    }
+                    if (c.self.pending_locals.fetchRemove(en.id())) |kv| {
+                        completeLocal(kv.value, c.self.io, undefined, clientRefusalName(err));
+                    }
+                    return;
+                };
                 if (c.self.pending_clients.fetchRemove(en.id())) |kv| {
                     c.self.ackClient(kv.value, en.id(), "") catch {};
                 }
@@ -6728,4 +6744,75 @@ test "a merge_ack that fails part-way leaves the offer outstanding" {
     // meant the retry - the survivor re-offering after the connection drops
     // - was refused by the `orelse return` on the first line.
     try std.testing.expectEqual(@as(?u64, 7), cn.merging_to);
+}
+
+test "one un-slotable queued entry refuses that entry, not the whole node" {
+    // Bug 2026-08-28-sweep3-slotqueued-refusal-fatal: `slotQueuedEntries`
+    // wrapped `slotAndBroadcast` in a bare `try`, so a refusal on one
+    // queued entry propagated out of the queue scan to `onTick` and into
+    // `fatal()` - a single un-slotable entry stopped the whole loop.
+    // `reforwardQueue`'s equivalent branch acks the waiters and continues;
+    // the two queue-drain paths have to agree.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+    // The founder is the epoch-1 leader straight out of genesis, so the
+    // leader-side sweep is the one under test.
+    try std.testing.expect(cn.isLeader());
+
+    const main_id = node.journalIdByName("main").?;
+    // One slotted entry so the good queued entry below gets author_seq 2 and
+    // cannot share an id with the bad one (whose unknown journal has no
+    // fold to raise the floor from).
+    _ = try node.append(main_id, "seed", 0);
+
+    // A queued entry naming a journal this member does not have: the slot
+    // step refuses it with `UnknownJournal` every time it is swept.
+    const unknown_jid = [_]u8{0xAB} ** 16;
+    const bad = try cn.signedEntry(.data, unknown_jid, "bad", 0);
+    try cn.node.queue.append(&bad);
+    var bad_waiter = LocalCompletion{};
+    try cn.pending_locals.put(test_alloc, bad.id(), &bad_waiter);
+
+    // A slotable entry queued behind it, so the sweep has to continue
+    // rather than merely swallow the refusal.
+    const good = try cn.signedEntry(.data, main_id, "good", 0);
+    try cn.noteBuilt(main_id, good.author_seq);
+    try cn.node.queue.append(&good);
+    try std.testing.expect(bad.author_seq != good.author_seq);
+
+    // On the parent this returns `error.UnknownJournal`, which is exactly
+    // what `onTick` hands to `fatal()`.
+    try cn.slotQueuedEntries();
+
+    // The refused entry's waiter was answered, not stranded ...
+    try std.testing.expectEqual(@as(usize, 1), bad_waiter.sem.permits);
+    try std.testing.expectEqualStrings("unknown_journal", bad_waiter.refusal);
+    // ... and the entry behind it still reached its slot.
+    try std.testing.expect(
+        cn.node.journals.get(main_id).?.fold.entries.contains(good.id()),
+    );
 }
