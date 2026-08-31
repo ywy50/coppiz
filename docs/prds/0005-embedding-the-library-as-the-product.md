@@ -32,6 +32,15 @@ partition that elects a second leader does not yet merge reliably in the
 node loop (its two-member merge is e2e-tested; the three-member case is
 reported in PRD 0003's status).
 
+The *Failure modes* row for a host that never calls `run()`/`tick()` is
+carried by `coppiz doctor` since 2026-08-31. A directory whose chain names
+more than one member, with no node serving it, is the state in which
+nothing replicates and no member is watched, and it produces no error
+anywhere else - `Node.open` succeeds, appends succeed, reads succeed.
+`doctor` now names it, and names an unset `listen` beside it, because a
+member peers cannot reach will not replicate once it does serve. At size 1
+it stays quiet: a stopped single member is the ordinary resting state.
+
 ## Problem
 
 The bar is the one the brief names: SQLite, dqlite, rqlite - "you can just
