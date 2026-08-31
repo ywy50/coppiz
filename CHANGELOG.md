@@ -85,6 +85,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- `ClusterNode.syncing` is a `std.atomic.Value(bool)` rather than a plain
+  `bool`, read and written through `isSyncing`/`setSyncing` with `monotonic`
+  ordering. The suite's backfill waits poll it from the test thread while the
+  node loop writes it, which was a data race - undefined behaviour however
+  benign it looks on a given target. The node loop remains the only writer.
+  Consumer-visible only as the field's type: nothing else about the flag
+  changed. Reported as `2026-08-28-sweep3-test-waits-cross-thread-race`, whose
+  earlier "resolved" status credited a fix that was never written, and whose
+  remaining half - the settings-landing poll, which reads a fold the loop can
+  free under it - is still open and recorded there.
+
 - A journal-scoped `settings` or `checkpoint` record written before a failover
   survives the next restart. A data journal is folded against the control fold
   as it stands at the *end* of the control chain, so every record of every

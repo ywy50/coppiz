@@ -339,8 +339,14 @@ pub const ClusterNode = struct {
     /// requestSync is a silent no-op while the flag is set (bug
     /// 2026-08-30-sync-in-flight-stuck).
     sync_started_at_ms: u64 = 0,
-    /// Whether this member is backfilling (never leader-eligible).
-    syncing: bool = false,
+    /// Whether this member is backfilling (never leader-eligible). Atomic
+    /// because the suite's waits observe it from the test thread while the
+    /// node loop writes it, and a plain `bool` made that a data race - UB,
+    /// however benign it looks on a given target (bug
+    /// 2026-08-28-sweep3-test-waits-cross-thread-race). The loop is the only
+    /// writer and nothing is ordered against it, so `monotonic` is enough;
+    /// read and write it through `isSyncing`/`setSyncing`.
+    syncing: std.atomic.Value(bool) = .init(false),
 
     next_conn_id: u64 = 1,
     /// The first slot of my current branch (the epoch that opened it), and
@@ -424,7 +430,7 @@ pub const ClusterNode = struct {
         try self.syncMembersFromFold();
         try self.resetMySeq();
         // A member with no chain is a joiner: it syncs before it may lead.
-        self.syncing = node.control.head == null;
+        self.setSyncing(node.control.head == null);
         return self;
     }
 
@@ -1267,7 +1273,7 @@ pub const ClusterNode = struct {
     }
 
     fn runElection(self: *ClusterNode) !void {
-        if (self.syncing) {
+        if (self.isSyncing()) {
             return; // never eligible, never elected
         }
         const fold = &self.node.control;
@@ -1289,7 +1295,7 @@ pub const ClusterNode = struct {
     }
 
     fn driveBackfill(self: *ClusterNode) !void {
-        if (!self.syncing or self.sync_in_flight) return;
+        if (!self.isSyncing() or self.sync_in_flight) return;
         // Pick the next journal to sync, control first, then each data
         // journal the fold knows.
         const control_id = self.node.control.journal_id;
@@ -1313,7 +1319,7 @@ pub const ClusterNode = struct {
         // a tick that beats the handshake must not clear syncing and strand
         // it permanently (bug 2026-08-28-sweep3-joiner-syncing-race).
         if (self.node.control.head == null) return;
-        self.syncing = false;
+        self.setSyncing(false);
         try self.reforwardQueue();
     }
 
@@ -1643,7 +1649,7 @@ pub const ClusterNode = struct {
     /// queued on other grounds.
     fn electsNobody(self: *ClusterNode) !bool {
         if (self.node.control.epoch == null) return false;
-        if (self.syncing) return false;
+        if (self.isSyncing()) return false;
         const inputs = self.electionInputs();
         const views = try self.viewsFor();
         defer self.allocator.free(views);
@@ -1723,7 +1729,7 @@ pub const ClusterNode = struct {
             // chainless joiner holds a member entry for the peer that
             // admitted it long before that peer is in its own fold, and
             // "not in my fold" must not make it try to admit the founder.
-            if (!self.syncing and
+            if (!self.isSyncing() and
                 self.node.control.memberById(self.node.member_id) != null and
                 self.node.control.memberById(h.member_id) == null)
             {
@@ -1906,7 +1912,7 @@ pub const ClusterNode = struct {
             });
         }
         // A chainless member was admitted: backfill from the responder.
-        if (self.syncing) {
+        if (self.isSyncing()) {
             if (!self.sync_cursors.contains(self.node.control.journal_id)) {
                 try self.sync_cursors.put(
                     self.allocator,
@@ -2417,7 +2423,7 @@ pub const ClusterNode = struct {
         // record no later record chains onto. Leave a cursor behind so the
         // very next `driveBackfill` fetches it (bug
         // 2026-08-29-syncing-drops-the-newest-broadcast).
-        if (self.syncing) {
+        if (self.isSyncing()) {
             try self.noteBackfillGap(jid);
             return;
         }
@@ -2526,6 +2532,14 @@ pub const ClusterNode = struct {
         if (self.pending_locals.fetchRemove(en.scopedId())) |kv| {
             completeLocal(kv.value, self.io, en.id(), "");
         }
+    }
+
+    fn isSyncing(self: *const ClusterNode) bool {
+        return self.syncing.load(.monotonic);
+    }
+
+    fn setSyncing(self: *ClusterNode, value: bool) void {
+        self.syncing.store(value, .monotonic);
     }
 
     fn nextHead(self: *ClusterNode) slot.Position {
@@ -2787,7 +2801,7 @@ pub const ClusterNode = struct {
             self.completePendingFor(&e);
             off += rec.next_offset;
         }
-        if (self.syncing) {
+        if (self.isSyncing()) {
             // Advance the cursor; a page that served nothing marks the
             // journal done.
             if (p.records.len > 0) {
@@ -2981,7 +2995,7 @@ pub const ClusterNode = struct {
                 if (slot.Position.order(ms.head, my_head) != .lt) ms.state = .member;
             }
         }
-        self.syncing = true;
+        self.setSyncing(true);
         try self.sync_cursors.put(
             self.allocator,
             self.node.control.journal_id,
@@ -3008,7 +3022,7 @@ pub const ClusterNode = struct {
         }
         try self.node.refold();
         try self.resetMySeq();
-        self.syncing = true;
+        self.setSyncing(true);
         var dit = self.node.control.journals.iterator();
         while (dit.next()) |kv| {
             const jid = kv.key_ptr.*;
@@ -3614,7 +3628,7 @@ pub const ClusterNode = struct {
         en: *const entry.Entry,
         sl: *const slot.Slot,
     ) error{OutOfMemory}!bool {
-        if (self.syncing) return true;
+        if (self.isSyncing()) return true;
         if (sl.epoch == self.node.control.epoch.?.number) return true;
         const payload = epoch.decodeEpochPayload(en.payload) catch return false;
         const inputs = self.electionInputs();
@@ -3652,7 +3666,7 @@ pub const ClusterNode = struct {
         for (fold.members.items, 0..) |member, i| {
             const is_me = std.mem.eql(u8, &member.id, &self.node.member_id);
             const state: election.State = if (is_me)
-                if (self.syncing) .syncing else .member
+                if (self.isSyncing()) .syncing else .member
             else if (self.members.get(member.id)) |ms|
                 ms.state
             else
@@ -4212,7 +4226,7 @@ test "e2e (b): partition a 2-member seniority cluster, write on both sides, heal
         const deadline = wallMs(tio) + 10_000;
         var synced = false;
         while (wallMs(tio) < deadline) {
-            if (!cn_b.syncing) {
+            if (!cn_b.isSyncing()) {
                 synced = true;
                 break;
             }
@@ -4815,7 +4829,10 @@ fn ttlTrioInit(
         const deadline = wallMs(tio) + 10_000;
         var settled = false;
         while (wallMs(tio) < deadline) {
-            if (!trio.a.cn.syncing and !trio.b.cn.syncing and !trio.c.cn.syncing) {
+            if (!trio.a.cn.isSyncing() and
+                !trio.b.cn.isSyncing() and
+                !trio.c.cn.isSyncing())
+            {
                 settled = true;
                 break;
             }
@@ -5151,7 +5168,7 @@ test "e2e: a newly elected leader slots its own queued entries" {
         const deadline = wallMs(tio) + 10_000;
         var synced = false;
         while (wallMs(tio) < deadline) {
-            if (!b.cn.syncing) {
+            if (!b.cn.isSyncing()) {
                 synced = true;
                 break;
             }
@@ -5237,7 +5254,7 @@ test "e2e: a newcomer whose only reachable peer is a follower is still admitted"
         const deadline = wallMs(tio) + 20_000;
         var ready = false;
         while (wallMs(tio) < deadline) {
-            if (a.node.control.memberCount() == 2 and !b.cn.syncing) {
+            if (a.node.control.memberCount() == 2 and !b.cn.isSyncing()) {
                 ready = true;
                 break;
             }
@@ -5330,7 +5347,7 @@ test "embedded host appends through the loop from its own thread (PRD 0005)" {
         const settle_deadline = wallMs(tio) + 10_000;
         var settled = false;
         while (wallMs(tio) < settle_deadline) {
-            if (!b.cn.syncing and !c.cn.syncing) {
+            if (!b.cn.isSyncing() and !c.cn.isSyncing()) {
                 settled = true;
                 break;
             }
@@ -5421,7 +5438,7 @@ test "embedded host reads through the loop from its own thread (PRD 0005)" {
         const settle_deadline = wallMs(tio) + 10_000;
         var settled = false;
         while (wallMs(tio) < settle_deadline) {
-            if (!b.cn.syncing) {
+            if (!b.cn.isSyncing()) {
                 settled = true;
                 break;
             }
@@ -5758,19 +5775,19 @@ test "an unsolicited merge_ack truncates nothing: the ack is bound to the offer"
     // No merge_offer was ever sent, and conn 4242 is nobody.
     try cn.onMergeAck(4242);
     try std.testing.expectEqual(head_before, cn.headFor(data_id));
-    try std.testing.expect(!cn.syncing);
+    try std.testing.expect(!cn.isSyncing());
 
     // An offer is outstanding on conn 7, and 4242 is still nobody.
     cn.merging_to = 7;
     try cn.onMergeAck(4242);
     try std.testing.expectEqual(head_before, cn.headFor(data_id));
-    try std.testing.expect(!cn.syncing);
+    try std.testing.expect(!cn.isSyncing());
 
     // The survivor this member offered its branch to does truncate it: the
     // epoch-2 branch goes, the epoch-1 common prefix stays.
     try cn.onMergeAck(7);
     try std.testing.expectEqual(@as(u64, 1), cn.headFor(data_id).epoch);
-    try std.testing.expect(cn.syncing);
+    try std.testing.expect(cn.isSyncing());
     // One ack per offer: a replay of it is inert.
     try std.testing.expectEqual(@as(?u64, null), cn.merging_to);
 }
@@ -5843,7 +5860,7 @@ test "an ordinary failover is not a branch: becomeLoser truncates nothing" {
     // reached: I am behind, not branched.
     try cn.becomeLoser(9, 3);
     try std.testing.expectEqual(head_before, cn.node.control.head.?);
-    try std.testing.expect(!cn.syncing);
+    try std.testing.expect(!cn.isSyncing());
     try std.testing.expectEqual(@as(?u64, null), cn.merging_to);
 
     // A real partition still truncates. The peer's branch epoch is 1 here,
@@ -5851,7 +5868,7 @@ test "an ordinary failover is not a branch: becomeLoser truncates nothing" {
     // leading the epoch both sides shared.
     try cn.becomeLoser(9, 1);
     try std.testing.expectEqual(@as(u64, 1), cn.node.control.head.?.epoch);
-    try std.testing.expect(cn.syncing);
+    try std.testing.expect(cn.isSyncing());
     try std.testing.expectEqual(@as(?u64, 9), cn.merging_to);
 }
 
@@ -6019,7 +6036,7 @@ test "a broadcast dropped while backfilling leaves a cursor behind" {
     // The backfill has already drained every cursor but `syncing` is still
     // set - the window between the empty sync page and the next tick's
     // `driveBackfill`. A broadcast landing here is dropped.
-    cn.syncing = true;
+    cn.setSyncing(true);
     cn.sync_cursors.clearRetainingCapacity();
     const en2 = try cn.signedEntry(.data, data_id, "two", 0);
     const sl2 = slot.Slot{
@@ -6121,7 +6138,7 @@ test "a sync page whose cursor does not advance is refused, not looped on" {
     }
 
     // Backfilling, with the cursor a page would answer.
-    cn.syncing = true;
+    cn.setSyncing(true);
     const cursor = slot.Position{ .epoch = 1, .seq = 3 };
     try cn.sync_cursors.put(test_alloc, control_id, cursor);
 
@@ -6292,7 +6309,7 @@ test "a compacted slot on a sync page advances the fold head, not the connection
     defer test_alloc.free(record);
     segment.encodeSlotOnlyRecord(&sl, record);
 
-    cn.syncing = true;
+    cn.setSyncing(true);
     try cn.sync_cursors.put(test_alloc, control_id, sl.position());
     try cn.onSyncPage(9, .{
         .journal_id = control_id,
@@ -6716,7 +6733,7 @@ test "a merge_offer naming my own leader is dropped, not begun as a merge" {
     try std.testing.expectEqual(@as(?u64, null), cn.merging_to);
     try std.testing.expect(!cn.sync_in_flight);
     try std.testing.expect(!cn.conns.getPtr(9).?.closing);
-    try std.testing.expect(!cn.syncing);
+    try std.testing.expect(!cn.isSyncing());
 
     // The guard is not a blanket drop: an offer naming a leader this member
     // has never folded is still a forged chain, and still costs the
