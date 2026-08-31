@@ -111,6 +111,8 @@ than a leader-authority one and was not touched here.
   `Build Summary: 25/25 steps succeeded; 373/373 tests passed`, exit 0.
   Baseline on the base commit `c6983b9`:
   `Build Summary: 25/25 steps succeeded; 372/372 tests passed`, exit 0.
+  Gated again after merging `ed78c69` (`origin/main` had moved):
+  `Build Summary: 25/25 steps succeeded; 375/375 tests passed`, exit 0.
 - Not reproduced end to end through a real failover of a running cluster;
   the reproduction is at the fold layer, which is where the rule lives.
 
