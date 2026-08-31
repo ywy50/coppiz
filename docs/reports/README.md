@@ -164,6 +164,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-31 - a cancelled `localReadRange` leaks the whole range the loop copied for it](bugs/2026-08-31-local-read-cancel-leak.md)
 - [2026-08-31 - `Direction.push`/`pushFramed` swallow `OutOfMemory`: a hub send reports success for a frame that was never queued](bugs/2026-08-31-hub-push-drops-frame-on-oom.md)
 - [2026-08-31 - two journals share entry ids, so one member's pending acks and completions collide](bugs/2026-08-31-entry-id-not-journal-scoped.md)
+- [2026-08-31 - `Hub.listen`/`Hub.dialer` allocate from the caller's allocator and free through the hub's (latent)](bugs/2026-08-31-hub-listen-dialer-allocator-mismatch.md)
 
 ### Investigations
 

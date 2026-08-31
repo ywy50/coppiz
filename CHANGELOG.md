@@ -67,6 +67,21 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- `Hub.listen` and `Hub.dialer` allocate from the hub's own allocator rather
+  than from their `allocator` parameter. Seven allocations per listen+dial
+  pair - the endpoint, the listener, its address, the `endpoints` key and the
+  map's growth, the dialer and its address copy - came from the parameter,
+  while `Hub.deinit`, `HubListener.closeFn` and `HubDialer.deinitFn` all free
+  them through `hub.allocator`. Everything a hub hands out is hub-owned and
+  outlives the call, so the parameter was a choice the implementation could
+  not honour; `HubDialer.connectFn` had already decided the other way and
+  said so. Latent: every caller in the tree passes the allocator it built the
+  hub with. Not benign when it is not - an arena as the hub's allocator
+  aborts inside its own `free` rather than leaking. The parameter stays in
+  both signatures, ignored and documented as ignored, so no call site
+  changes. Test and simulator fabric only: the served path is
+  `TcpConn`/`tcpListen`, which takes no such parameter.
+
 - A hub send that cannot allocate is refused instead of reported as sent.
   `Direction.push` and `pushFramed` caught both of their allocation failures
   with `catch return` and returned `void`, so `PipeConn.sendFrame` - and
