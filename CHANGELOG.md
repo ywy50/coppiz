@@ -16,6 +16,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- An entry payload whose last 38 bytes spell a seal trailer no longer bricks
+  the store. A segment record ends with its entry's payload, and the seal
+  check read the file's last 38 bytes without cross-checking them against the
+  record structure a trailer is supposed to follow - so one ordinary append
+  made every later open refuse with `Corrupt`, on every member, because
+  replication writes the same record bytes everywhere. A trailer that does
+  not verify is now believed only when the records region excluding it
+  decodes as a whole number of records; a segment whose seal really was
+  damaged still refuses.
+
 - A malformed `leadership.authorities` value no longer sizes an allocation
   from a count nothing has checked. A `string_list` value begins with a u16
   item count, and the value decoder allocated for it before establishing that
