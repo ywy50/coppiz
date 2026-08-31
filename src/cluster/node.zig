@@ -1067,7 +1067,7 @@ pub const ClusterNode = struct {
             .read_page => {},
             .settings => |s| try self.onSettings(conn_id, s),
             .merge_offer => |o| try self.onMergeOffer(conn_id, o),
-            .merge_ack => self.onMergeAck(conn_id) catch {},
+            .merge_ack => try self.onMergeAck(conn_id),
             .members_req => try self.onMembersReq(conn_id),
             .members_page => {},
             .ack => {},
@@ -2659,7 +2659,6 @@ pub const ClusterNode = struct {
         // (bug 2026-08-29-merge-ack-unauthenticated).
         const offered_to = self.merging_to orelse return;
         if (offered_to != conn_id) return;
-        self.merging_to = null;
         const tail = self.common_tail orelse return;
         var it = self.node.control.journals.iterator();
         while (it.next()) |kv| {
@@ -2684,6 +2683,14 @@ pub const ClusterNode = struct {
         // this member had is gone, so the facts describing it must go too,
         // or the next divergence would truncate to them again (bug
         // 2026-08-29-branch-facts-never-reset).
+        //
+        // The pending offer clears here rather than at the top, so a failure
+        // part-way through leaves it outstanding and answerable instead of
+        // consumed. One ack per offer still holds: this runs on the loop
+        // thread, so nothing can answer the same offer twice (bug
+        // 2026-08-29-merge-ack-unauthenticated, bug
+        // 2026-08-31-merge-ack-fails-into-silence).
+        self.merging_to = null;
         self.branch_start = null;
         self.common_tail = null;
     }
@@ -6244,4 +6251,70 @@ test "a re-slotted journal-scoped entry replays from the store it was written to
     // Reading the very same record back must reach the very same fold.
     try node.refold();
     try std.testing.expectEqual(sl.position(), node.head(main_id).?);
+}
+
+test "a merge_ack that fails part-way leaves the offer outstanding" {
+    // `.merge_ack => self.onMergeAck(conn_id) catch {}` was the one handler
+    // in the dispatch that discarded its error, and the handler is not
+    // advisory: it truncates every data journal, re-folds, and re-arms the
+    // sync cursors. It also consumed the pending offer on its first line, so
+    // a failure part-way through left the member half-merged *and* unable to
+    // accept the ack again - stranded on a dead branch, silently.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    var jit = node.control.journals.keyIterator();
+    const data_id = (jit.next() orelse return error.NoDataJournal).*;
+
+    // The shape a losing branch has while it waits for the ack: a slot in
+    // epoch 1, a failover, a slot in epoch 2.
+    {
+        const en = try cn.signedEntry(.data, data_id, "one", 0);
+        try cn.noteBuilt(data_id, en.author_seq);
+        _ = try cn.slotAndBroadcast(&en, false);
+    }
+    try cn.appendEpoch(.leader_lost);
+    {
+        const en = try cn.signedEntry(.data, data_id, "two", 0);
+        try cn.noteBuilt(data_id, en.author_seq);
+        _ = try cn.slotAndBroadcast(&en, false);
+    }
+
+    // An offer is outstanding on conn 7, and answering it runs out of
+    // memory.
+    cn.merging_to = 7;
+    const saved = cn.allocator;
+    cn.allocator = std.testing.failing_allocator;
+    const result = cn.onMergeAck(7);
+    cn.allocator = saved;
+
+    try std.testing.expectError(error.OutOfMemory, result);
+    // The offer is still there to be answered. Consuming it on the way in
+    // meant the retry - the survivor re-offering after the connection drops
+    // - was refused by the `orelse return` on the first line.
+    try std.testing.expectEqual(@as(?u64, 7), cn.merging_to);
 }
