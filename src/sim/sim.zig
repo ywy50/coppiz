@@ -1789,3 +1789,45 @@ test "LoopWorld: the failure detector and eviction run on the world's clock" {
     // The founder still leads, now of a one-member cluster.
     try std.testing.expectEqualSlices(u8, &world.memberId(0), &world.leaderOf(0).?);
 }
+
+test "LoopWorld: a joiner adopts the cluster's heartbeat cadence before it is suspected" {
+    // Bug 2026-08-31-heartbeat-schedule-stale-interval. `onTick` reads
+    // `cluster.heartbeat_ms` from the fold, and a joiner has no chain on
+    // its first tick, so it read the schema default of 1000 ms and armed
+    // its next heartbeat a second out. It folds the chain on the next tick
+    // and the setting drops to 100 ms - but the armed instant did not move,
+    // so the joiner stayed silent towards its admitter for the rest of the
+    // old interval. This cluster's suspect window is 500 ms, so the
+    // admitter suspected the member it had just admitted, closed the
+    // connection, and the joiner lost the peer it was backfilling from.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(8) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    const admission = schema.keyIndex("cluster.admission").?;
+    const genesis = [_]validate.Change{
+        .{
+            .key = admission,
+            .value = .{ .enum_value = schema.enumValue(admission, "open").? },
+        },
+        .{ .key = schema.keyIndex("cluster.heartbeat_ms").?, .value = .{ .u64 = 100 } },
+        .{ .key = schema.keyIndex("cluster.suspect_after_ms").?, .value = .{ .u64 = 500 } },
+    };
+    var world = try LoopWorld.init(test_alloc, oio, 2, &genesis);
+    defer world.deinit();
+
+    // One tick is one heartbeat interval, and five are one suspect window.
+    world.tick_advance_ms = 100;
+    try world.connect(1, 0);
+
+    // Forty ticks is eight suspect windows. Neither side ever goes quiet
+    // for one, so neither is suspected and the member table is untouched.
+    for (0..40) |_| {
+        try world.tick();
+        try std.testing.expect(!world.regardsLost(0, 1));
+        try std.testing.expect(!world.regardsLost(1, 0));
+    }
+    try std.testing.expectEqual(@as(usize, 2), world.memberCount(0));
+    try std.testing.expectEqual(@as(usize, 2), world.memberCount(1));
+    try world.assertConverged();
+}
