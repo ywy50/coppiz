@@ -67,6 +67,19 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- The simulator's `heal` reads a side's leader and branch from a live node
+  instead of from whichever node the partition set happens to list first.
+  `sideLeader` and `tailOf` took `partition_sides[side].items[0]` with no
+  `alive` check, so a leader that crashed mid-partition supplied both: the
+  survivor was named from its frozen fold and the merged branch was sliced
+  out of its frozen chain. A side that then re-elected and wrote lost that
+  epoch and every write after it, while the heal still succeeded and every
+  live node still converged - the loss was invisible to `assertConverged`,
+  and swapping the two indices inside the set changed the outcome. A side
+  with no live node left now contributes no branch, which is what `heal`
+  already assumed by re-folding only live nodes. Harness fidelity only: the
+  simulator is the test and scenario surface, not a served path.
+
 - A refused open no longer leaks the journal fold it was building. The three
   sites that construct a `JournalState` guarded the box and not `js.fold`,
   which allocates the moment it is initialised and again per folded record, so
