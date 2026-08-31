@@ -821,7 +821,14 @@ pub const Store = struct {
                 sub.deleteFile(self.io, f.name) catch {};
                 continue;
             }
-            try names.append(self.allocator, try self.allocator.dupe(u8, f.name));
+            // The dupe is its own step: as an argument it is evaluated
+            // before the call, so an OutOfMemory in the list's growth left it
+            // owned by nobody - the `defer` above frees `names.items`, which
+            // a failed append never joined (bug
+            // 2026-08-31-segment-name-dupe-leaks-on-append).
+            const dup = try self.allocator.dupe(u8, f.name);
+            errdefer self.allocator.free(dup);
+            try names.append(self.allocator, dup);
         }
         std.mem.sort([]u8, names.items, {}, struct {
             fn lt(_: void, a: []u8, b: []u8) bool {

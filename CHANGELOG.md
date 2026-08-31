@@ -52,6 +52,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A refused open no longer leaks the journal fold it was building. The three
+  sites that construct a `JournalState` guarded the box and not `js.fold`,
+  which allocates the moment it is initialised and again per folded record, so
+  any refusal between the init and the map insert lost the whole fold -
+  and `Node.open`'s own errdefer cannot reach it, because the in-flight state
+  is not in the map yet. The same failure-index sweep found a second leak on
+  the same path: `loadJournal` duped each segment file name as an argument to
+  `names.append`, so an allocation failure in the list's growth orphaned it.
+
 - A merge no longer aborts on a re-slotted `join` for a member the survivor
   already holds. `applyJoinReslotted` delegated verbatim to the live rule, so
   it answered `already_member` - and `doMergeControl` appends the `merge`
