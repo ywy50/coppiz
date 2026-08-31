@@ -645,6 +645,10 @@ pub const ClusterNode = struct {
         comptime on_entry: fn (@TypeOf(ctx), *const slot.Slot, ?*const entry.Entry) anyerror!void,
     ) !void {
         var completion = LocalReadCompletion{ .allocator = self.allocator };
+        // Armed before the wait, not after it: the wait's own cancellation
+        // path returns, and by then the loop may already have copied the
+        // whole range in (bug 2026-08-31-local-read-cancel-leak).
+        defer deinitLocalRead(&completion, self.allocator);
         if (!self.mailbox.post(io, .{ .local_read = .{
             .journal_id = journal_id,
             .from = from,
@@ -657,7 +661,6 @@ pub const ClusterNode = struct {
         } else {
             completion.sem.wait(io) catch return error.Canceled;
         }
-        defer deinitLocalRead(&completion, self.allocator);
         if (completion.err) |err| return err;
         for (completion.records.items) |*rec| {
             try on_entry(ctx, &rec.slot, if (rec.entry) |*en| en else null);
@@ -6815,4 +6818,106 @@ test "one un-slotable queued entry refuses that entry, not the whole node" {
     try std.testing.expect(
         cn.node.journals.get(main_id).?.fold.entries.contains(good.id()),
     );
+}
+
+test "a cancelled localReadRange frees the records the loop already copied" {
+    // Bug 2026-08-31-local-read-cancel-leak: the
+    // `defer deinitLocalRead(&completion, ...)` sat *after*
+    // `completion.sem.wait(io) catch return error.Canceled`, so the one exit
+    // that does not run it is the one where the loop may already have filled
+    // the completion. `records` (and every entry payload in it) is the
+    // waiter's to free - nobody else has the pointer once the host returns.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+    const main_id = node.journalIdByName("main").?;
+
+    // The host's read runs on its own task so it can be cancelled while it
+    // is parked on the completion, which is the only way out of that wait.
+    const Host = struct {
+        err: ?anyerror = null,
+        fn run(h: *@This(), c: *ClusterNode, io: std.Io, jid: [16]u8) void {
+            c.localReadRange(io, jid, null, null, false, false, {}, onEntry) catch |e| {
+                h.err = e;
+            };
+        }
+        fn onEntry(_: void, _: *const slot.Slot, _: ?*const entry.Entry) anyerror!void {}
+    };
+    var host = Host{};
+    var group: std.Io.Group = .init;
+    try group.concurrent(oio, Host.run, .{ &host, cn, oio, main_id });
+
+    // Take the event off the mailbox the way the loop does, so nothing
+    // reaches the host's frame after it has returned.
+    var event: ?LocalRead = null;
+    {
+        const deadline = wallMs(oio) + 10_000;
+        while (wallMs(oio) < deadline) {
+            cn.mailbox.mutex.lockUncancelable(oio);
+            if (cn.mailbox.events.items.len > 0) {
+                event = cn.mailbox.events.orderedRemove(0).local_read;
+                cn.mailbox.mutex.unlock(oio);
+                break;
+            }
+            cn.mailbox.mutex.unlock(oio);
+            std.Io.sleep(oio, std.Io.Duration.fromMilliseconds(5), .awake) catch {};
+        }
+    }
+    const read = event orelse {
+        group.cancel(oio);
+        group.await(oio) catch {};
+        return error.ReadNeverPosted;
+    };
+
+    // `onLocalRead`'s copy step, without its post: one record with a payload
+    // the completion owns. This is the state the loop leaves behind when the
+    // host's wait loses the race to a cancellation.
+    {
+        const rec = try read.completion.records.addOne(read.completion.allocator);
+        rec.slot = std.mem.zeroes(slot.Slot);
+        rec.entry = .{
+            .kind = .data,
+            .journal = main_id,
+            .author = node.member_id,
+            .author_seq = 1,
+            .author_ts_ms = 0,
+            .ttl_ms = 0,
+            .payload_hash = [_]u8{0} ** 32,
+            .signature = [_]u8{0} ** 64,
+            .payload_len = 1,
+            .payload_omitted = false,
+            .payload = try read.completion.allocator.dupe(u8, "x"),
+        };
+    }
+
+    group.cancel(oio);
+    group.await(oio) catch {};
+
+    // The host reports the cancellation, and the testing allocator's leak
+    // check is the assertion that it freed on the way out: on the parent the
+    // record list and its payload are both still allocated here.
+    try std.testing.expectEqual(@as(?anyerror, error.Canceled), host.err);
 }
