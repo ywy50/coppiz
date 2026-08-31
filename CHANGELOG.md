@@ -67,6 +67,19 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A hub send that cannot allocate is refused instead of reported as sent.
+  `Direction.push` and `pushFramed` caught both of their allocation failures
+  with `catch return` and returned `void`, so `PipeConn.sendFrame` - and
+  therefore `Conn.send`, whose signature has always been `SendError!void` -
+  told the sender a frame had been sent while nothing was queued. No retry
+  ran, nothing logged, and the symptom surfaced somewhere else as a peer
+  inexplicably behind or a receiver timing out on a frame nobody would send.
+  Both paths now return `error.OutOfMemory` and `sendFrame` maps it to
+  `error.SendFailed`, which is already what the TCP path reports for a failed
+  write. A push to a *closed* direction is still a silent no-op: that is the
+  documented close semantics, and a peer learns about a close from its own
+  read. Test and simulator fabric only - the served path is `TcpConn`.
+
 - A member appending to two journals no longer loses one of the two writes'
   answers. `author_seq` is a per-(author, journal) counter, so an entry id
   `(author, author_seq)` repeats across journals - a member's first entry in
