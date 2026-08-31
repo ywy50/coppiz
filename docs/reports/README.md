@@ -153,6 +153,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-31 - a `join` entry's address length is added in its own u16, so a large value panics every member](bugs/2026-08-31-join-payload-len-overflow.md)
 - [2026-08-31 - a joiner heartbeats at the schema default, so a cluster with a short suspect window disconnects every member it admits](bugs/2026-08-31-heartbeat-schedule-stale-interval.md)
 - [2026-08-31 - a re-slotted `join` for a member the survivor already holds refuses `AlreadyMember`, and the heal can never complete](bugs/2026-08-31-reslotted-join-already-member.md)
+- [2026-08-31 - three wire decoders orphan their first allocation when the second one fails](bugs/2026-08-31-wire-decoder-first-dupe-leak.md)
 
 ### Investigations
 

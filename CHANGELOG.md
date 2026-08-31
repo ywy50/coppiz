@@ -62,6 +62,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   a `leave` and then a rejoin, whose leaves the merge defers. The re-slot is
   now idempotent for a present member, like a re-slotted `leave`, and still
   refuses a payload whose member id does not derive from its key.
+- `message.decode` frees what it has already taken when a later allocation
+  fails. `decodeAppend`, `decodeReadPage` and `decodeSettings` each returned a
+  struct literal holding two `dupe` calls, and a literal is not a scope: the
+  first allocation had nowhere to register an `errdefer` and was orphaned
+  outright when the second failed. `decodeReadPage`'s was a whole page of
+  records - up to a frame - stranded by a refusal name of a few bytes. Both
+  shipped callers decode through an arena, so no live path leaked; the
+  guarantee the public signature makes did not hold.
 
 - `Node.changeSettings` refuses a journal the chain names and the store lost,
   instead of aborting. A journal name resolves through the folded registry
