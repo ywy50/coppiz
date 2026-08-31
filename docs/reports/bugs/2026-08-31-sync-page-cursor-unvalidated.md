@@ -84,14 +84,17 @@ trusted.
 
 The test `a sync page whose cursor does not advance is refused, not looped on`
 in `src/cluster/node.zig`: a founder with a chain, a stub connection,
-`syncing` set with a cursor at `(1, 1)`, and a `sync_page` carrying the
+`syncing` set with a cursor at `(1, 3)`, and a `sync_page` carrying the
 genesis record (already folded, so the record loop skips it as a redelivery
-and reaches the cursor bookkeeping) with `next` also `(1, 1)`.
+and reaches the cursor bookkeeping). Two pages are delivered: one whose
+`next` is `(1, 2)` - behind the cursor - and one whose `next` is `(1, 3)`,
+standing still.
 
-- Expected: the page is refused, the cursor is left alone, the connection is
-  dropped.
-- Actual (before the fix): the cursor is rewritten with `(1, 1)` and the
-  connection stays up, so the next tick asks the same question again.
+- Expected: both pages are refused, the cursor keeps `(1, 3)`, and the
+  connection is dropped.
+- Actual (before the fix): the cursor is rewritten - `expected 3, found 2` on
+  the first page - and the connection stays up, so the next tick asks the
+  same question again. Verified by removing the check alone on this branch.
 
 ## Root cause
 

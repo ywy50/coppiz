@@ -5566,25 +5566,35 @@ test "a sync page whose cursor does not advance is refused, not looped on" {
 
     // Backfilling, with the cursor a page would answer.
     cn.syncing = true;
-    const cursor = slot.Position{ .epoch = 1, .seq = 1 };
+    const cursor = slot.Position{ .epoch = 1, .seq = 3 };
     try cn.sync_cursors.put(test_alloc, control_id, cursor);
 
-    // The peer answers with records and a cursor that has not moved.
+    // The peer answers with records and a cursor that moved backwards.
+    try cn.onSyncPage(9, .{
+        .journal_id = control_id,
+        .next = .{ .epoch = 1, .seq = 2 },
+        .records = records.items,
+    });
+
+    // Refused: the cursor keeps the value it had rather than the one that
+    // cannot make progress, and the connection is dropped - the peer is not
+    // following the protocol.
+    try std.testing.expectEqual(cursor, cn.sync_cursors.get(control_id).?);
+    try std.testing.expect(cn.conns.getPtr(9).?.closing);
+
+    // The same for a cursor that merely stands still.
+    cn.conns.getPtr(9).?.closing = false;
     try cn.onSyncPage(9, .{
         .journal_id = control_id,
         .next = cursor,
         .records = records.items,
     });
-
-    // Refused: the cursor is left alone rather than rewritten with a value
-    // that cannot make progress, and the connection is dropped - the peer
-    // is not following the protocol.
     try std.testing.expectEqual(cursor, cn.sync_cursors.get(control_id).?);
     try std.testing.expect(cn.conns.getPtr(9).?.closing);
 
     // Not a blanket refusal: a cursor that does advance is stored.
     cn.conns.getPtr(9).?.closing = false;
-    const ahead = slot.Position{ .epoch = 1, .seq = 4 };
+    const ahead = slot.Position{ .epoch = 1, .seq = 5 };
     try cn.onSyncPage(9, .{
         .journal_id = control_id,
         .next = ahead,
