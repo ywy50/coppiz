@@ -627,32 +627,42 @@ pub const Hub = struct {
     /// address; a second registration is refused with `AddressInUse` (a
     /// `put` overwrite would leak the first endpoint and orphan its
     /// listener).
+    ///
+    /// The allocator parameter is ignored, the way `HubDialer.connectFn`
+    /// ignores its own: everything allocated here is the hub's, and
+    /// `Hub.deinit` and `HubListener.closeFn` free all of it through
+    /// `self.allocator`. Taking it from the caller instead handed a
+    /// scratch allocator's memory to the wrong free (bug
+    /// 2026-08-31-hub-listen-dialer-allocator-mismatch). It stays in the
+    /// signature so no call site has to change, and because the shape - a
+    /// hub owning what it hands out - is not something a caller can opt
+    /// out of.
     pub fn listen(
         self: *Hub,
         io: std.Io,
-        allocator: std.mem.Allocator,
+        _: std.mem.Allocator,
         address: []const u8,
     ) !Listener {
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
         if (self.endpoints.contains(address)) return error.AddressInUse;
-        const ep = try allocator.create(Endpoint);
-        errdefer allocator.destroy(ep);
-        ep.* = .{ .allocator = allocator };
-        const l = try allocator.create(HubListener);
-        errdefer allocator.destroy(l);
-        const l_address = try allocator.dupe(u8, address);
-        errdefer allocator.free(l_address);
+        const ep = try self.allocator.create(Endpoint);
+        errdefer self.allocator.destroy(ep);
+        ep.* = .{ .allocator = self.allocator };
+        const l = try self.allocator.create(HubListener);
+        errdefer self.allocator.destroy(l);
+        const l_address = try self.allocator.dupe(u8, address);
+        errdefer self.allocator.free(l_address);
         l.* = .{
             .hub = self,
             .address = l_address,
             .endpoint = ep,
         };
-        const key = try allocator.dupe(u8, address);
-        errdefer allocator.free(key);
+        const key = try self.allocator.dupe(u8, address);
+        errdefer self.allocator.free(key);
         // Last fallible step: once the map owns `ep` no errdefer above may
         // fire, or `Hub.deinit` would destroy an endpoint already freed.
-        try self.endpoints.put(allocator, key, ep);
+        try self.endpoints.put(self.allocator, key, ep);
         return .{
             .ctx = l,
             .accept_fn = HubListener.acceptFn,
@@ -665,10 +675,13 @@ pub const Hub = struct {
     }
 
     /// The dial side bound to `from`: connects to any endpoint by name.
-    pub fn dialer(self: *Hub, allocator: std.mem.Allocator, from: []const u8) !Transport {
-        const d = try allocator.create(HubDialer);
-        errdefer allocator.destroy(d);
-        const from_dup = try allocator.dupe(u8, from);
+    /// The allocator parameter is ignored for the same reason `listen`
+    /// ignores its own - `HubDialer.deinitFn` frees through
+    /// `hub.allocator`.
+    pub fn dialer(self: *Hub, _: std.mem.Allocator, from: []const u8) !Transport {
+        const d = try self.allocator.create(HubDialer);
+        errdefer self.allocator.destroy(d);
+        const from_dup = try self.allocator.dupe(u8, from);
         d.* = .{ .hub = self, .from = from_dup };
         return .{
             .ctx = d,
@@ -1035,6 +1048,32 @@ test "pipe reader returns EndOfStream when the peer closes" {
 fn acceptAndClose(listener: *Listener) error{Canceled}!void {
     var conn = listener.accept(tio) catch return;
     conn.close(tio);
+}
+
+test "hub listen and dialer allocate from the hub's allocator, not the caller's" {
+    // Bug 2026-08-31-hub-listen-dialer-allocator-mismatch: `listen`
+    // allocated the endpoint, the listener, its address and the map key -
+    // and grew the `endpoints` map - from its `allocator` parameter, while
+    // `Hub.deinit` and `HubListener.closeFn` free all of it through
+    // `hub.allocator`. `dialer` had the same split against
+    // `HubDialer.deinitFn`. Every in-tree caller happens to pass the hub's
+    // own allocator, so the mismatch has never fired; a host that passes a
+    // scratch allocator has its memory handed to the wrong free.
+    //
+    // A `FailingAllocator` configured never to fail is a counter: the hub is
+    // on `test_alloc` and the two calls are handed the counter instead, so
+    // whether the hub takes anything from its caller is directly observable
+    // rather than inferred from a crash. Both pointers end up in
+    // `test_alloc` either way, which is what keeps this test graceful
+    // instead of a panic inside somebody else's `free`.
+    var counting = std.testing.FailingAllocator.init(test_alloc, .{});
+    var hub = Hub.init(test_alloc);
+    var listener = try hub.listen(tio, counting.allocator(), "node-a");
+    var dialer = try hub.dialer(counting.allocator(), "node-b");
+    try std.testing.expectEqual(@as(usize, 0), counting.allocations);
+    dialer.deinit();
+    listener.close(tio);
+    hub.deinit(tio);
 }
 
 test "hub listen refuses a duplicate address" {
