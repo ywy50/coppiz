@@ -4,9 +4,11 @@
 //! fold, storage), the settings schema, the cluster node loop (election,
 //! replication, the embedded-host write path), and the wire. The design
 //! lives in docs/: start at docs/README.md, then docs/prds/ for what each
-//! part is meant to be and docs/open-questions.md for what is still
-//! undecided. This file is also the library's test root: it gives `zig
-//! build test` its library half and claims the module name `coppiz`.
+//! part is meant to be and docs/rfcs/ for what is still undecided - there is
+//! no open-questions register, and the `docs/open-questions.md` this comment
+//! used to name was deleted. This file is also the library's test root: it
+//! gives `zig build test` its library half and claims the module name
+//! `coppiz`.
 
 const std = @import("std");
 const build_options = @import("build_options");
