@@ -75,7 +75,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - the re-slotted `create_journal` variant is reachable live: any member can create journals via the forward path](bugs/2026-08-29-live-create-journal-bypass.md)
 - [2026-08-29 - `parsePeerKey` frees the old `public_key` before validating the new one: a malformed second key is a double-free](bugs/2026-08-29-parse-peer-key-double-free.md)
 - [2026-08-29 - `Node.createJournal` is a dead public API with a latent compile error](bugs/2026-08-29-node-createjournal-compile-error.md)
-- [2026-08-29 - control/checkpoint writes fold before the store write: an I/O error leaves the fold one record ahead and the chain unreopenable](bugs/2026-08-29-fold-before-store-order.md)
+- [2026-08-29 - control/checkpoint writes fold before the store write: an I/O error leaves the fold one record ahead and the chain unreopenable](bugs/2026-08-29-fold-before-store-order.md) - **reopened**
 - [2026-08-29 - wire reads silently drop compacted (retain=none) records; the local read shows them as `(removed)`](bugs/2026-08-29-wire-read-drops-compacted-slots.md)
 - [2026-08-29 - merge re-slots do not clamp the slot timestamp: a clock regression stalls the heal with `BadTimestamp`](bugs/2026-08-29-merge-reslot-timestamp-unclamped.md)
 - [2026-08-29 - TCP accept/connect leak the OS socket when the `TcpConn` allocation fails](bugs/2026-08-29-tcp-conn-fd-leak-on-oom.md)
@@ -153,6 +153,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-31 - a `join` entry's address length is added in its own u16, so a large value panics every member](bugs/2026-08-31-join-payload-len-overflow.md)
 - [2026-08-31 - a joiner heartbeats at the schema default, so a cluster with a short suspect window disconnects every member it admits](bugs/2026-08-31-heartbeat-schedule-stale-interval.md)
 - [2026-08-31 - a re-slotted `join` for a member the survivor already holds refuses `AlreadyMember`, and the heal can never complete](bugs/2026-08-31-reslotted-join-already-member.md)
+- [2026-08-31 - three wire decoders orphan their first allocation when the second one fails](bugs/2026-08-31-wire-decoder-first-dupe-leak.md)
 - [2026-08-31 - one `merge_offer` naming a member's own leader freezes its replication for the life of the connection](bugs/2026-08-31-merge-offer-names-my-own-leader.md)
 
 ### Investigations
@@ -170,3 +171,4 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - range reads and open-time discovery on the journal read paths](investigations/2026-08-29-runtime-sweep-journal-read.md)
 - [2026-08-29 - settings key resolution and checkpoint removal sets on the control paths](investigations/2026-08-29-runtime-sweep-settings-checkpoint.md)
 - [2026-08-28 - making `zig build test` faster without dropping tests](investigations/2026-08-28-test-suite-quick-wins.md)
+- [2026-08-31 - the wire read and the local read still disagree, and one recorded fix cannot run](investigations/2026-08-31-wire-and-local-reads-still-disagree.md)

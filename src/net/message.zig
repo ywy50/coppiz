@@ -252,9 +252,19 @@ pub fn decodeAppend(allocator: std.mem.Allocator, bytes: []const u8) DecodeError
     if (payload_off + 4 + payload_len + 8 != bytes.len) return error.InvalidLength;
     var ttl_buf: [8]u8 = undefined;
     @memcpy(&ttl_buf, bytes[payload_off + 4 + payload_len ..]);
+    // Hoisted out of the struct literal so the first allocation has a
+    // failure path: fields are evaluated in written order, and a second
+    // `dupe` that fails inside a literal orphans the first one with nothing
+    // holding it (bug 2026-08-31-wire-decoder-first-dupe-leak).
+    const journal = try allocator.dupe(u8, bytes[2..payload_off]);
+    errdefer allocator.free(journal);
+    const payload = try allocator.dupe(
+        u8,
+        bytes[payload_off + 4 .. payload_off + 4 + payload_len],
+    );
     return .{
-        .journal = try allocator.dupe(u8, bytes[2..payload_off]),
-        .payload = try allocator.dupe(u8, bytes[payload_off + 4 .. payload_off + 4 + payload_len]),
+        .journal = journal,
+        .payload = payload,
         .ttl_ms = std.mem.readInt(u64, &ttl_buf, .little),
     };
 }
@@ -550,10 +560,16 @@ pub fn decodeReadPage(allocator: std.mem.Allocator, bytes: []const u8) DecodeErr
     @memcpy(&len_buf, bytes[off .. off + 2]);
     const refusal_len: usize = std.mem.readInt(u16, &len_buf, .little);
     if (off + 2 + refusal_len != bytes.len) return error.InvalidLength;
+    // See `decodeAppend`: the first allocation needs a failure path, and
+    // here it is the page itself - up to a whole frame - freed or orphaned
+    // by a two-byte refusal string's allocation.
+    const records = try allocator.dupe(u8, bytes[20..off]);
+    errdefer allocator.free(records);
+    const refusal = try allocator.dupe(u8, bytes[off + 2 ..]);
     return .{
         .next = readPosition(bytes[0..16]),
-        .records = try allocator.dupe(u8, bytes[20..off]),
-        .refusal = try allocator.dupe(u8, bytes[off + 2 ..]),
+        .records = records,
+        .refusal = refusal,
     };
 }
 
@@ -590,10 +606,11 @@ pub fn decodeSettings(allocator: std.mem.Allocator, bytes: []const u8) DecodeErr
     @memcpy(&len_buf, bytes[off .. off + 4]);
     const changes_len: usize = std.mem.readInt(u32, &len_buf, .little);
     if (off + 4 + changes_len != bytes.len) return error.InvalidLength;
-    return .{
-        .journal = try allocator.dupe(u8, bytes[2..off]),
-        .changes = try allocator.dupe(u8, bytes[off + 4 ..]),
-    };
+    // See `decodeAppend`.
+    const journal = try allocator.dupe(u8, bytes[2..off]);
+    errdefer allocator.free(journal);
+    const changes = try allocator.dupe(u8, bytes[off + 4 ..]);
+    return .{ .journal = journal, .changes = changes };
 }
 
 // -- merge_offer -------------------------------------------------------------
@@ -1328,3 +1345,44 @@ test "message decoder fuzzes over untrusted bytes" {
 }
 
 const crypto = std.crypto;
+
+test "a decoder that fails part-way frees what it had already taken" {
+    // Bug 2026-08-31-wire-decoder-first-dupe-leak: `decodeAppend`,
+    // `decodeReadPage` and `decodeSettings` each returned a struct literal
+    // holding two `try allocator.dupe` calls. Fields are evaluated in
+    // written order, so a second `dupe` that fails orphaned the first
+    // allocation - nothing held it and nothing freed it. `decodeSlot` and
+    // `decodeMembersPage` in the same file already carried the errdefer.
+    //
+    // The live callers hand `decode` an arena, which reclaims the orphan, so
+    // this is latent there; the leak is real for any caller that does not,
+    // and `decodeReadPage`'s first allocation is a whole page of records -
+    // up to a frame - stranded by a two-byte refusal string.
+    const cases = [_]Message{
+        .{ .append = .{ .journal = "main", .payload = "a payload", .ttl_ms = 5 } },
+        .{ .read_page = .{
+            .next = test_pos,
+            .records = "some records",
+            .refusal = "no_such_journal",
+        } },
+        .{ .settings = .{ .journal = "main", .changes = "changes" } },
+    };
+    for (cases) |m| {
+        const buf = try test_alloc.alloc(u8, encodedLen(m));
+        defer test_alloc.free(buf);
+        encode(m, buf);
+
+        // Both fields are non-empty, so each is one allocation and the
+        // second is the one to fail.
+        var failing = std.testing.FailingAllocator.init(test_alloc, .{ .fail_index = 1 });
+        try std.testing.expectError(
+            error.OutOfMemory,
+            decode(failing.allocator(), buf),
+        );
+        try std.testing.expectEqual(failing.allocations, failing.deallocations);
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+
+        // Not vacuous: the first allocation really happened.
+        try std.testing.expectEqual(@as(usize, 1), failing.allocations);
+    }
+}

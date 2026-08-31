@@ -71,6 +71,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   a `leave` and then a rejoin, whose leaves the merge defers. The re-slot is
   now idempotent for a present member, like a re-slotted `leave`, and still
   refuses a payload whose member id does not derive from its key.
+- `message.decode` frees what it has already taken when a later allocation
+  fails. `decodeAppend`, `decodeReadPage` and `decodeSettings` each returned a
+  struct literal holding two `dupe` calls, and a literal is not a scope: the
+  first allocation had nowhere to register an `errdefer` and was orphaned
+  outright when the second failed. `decodeReadPage`'s was a whole page of
+  records - up to a frame - stranded by a refusal name of a few bytes. Both
+  shipped callers decode through an arena, so no live path leaked; the
+  guarantee the public signature makes did not hold.
 
 - `Node.changeSettings` refuses a journal the chain names and the store lost,
   instead of aborting. A journal name resolves through the folded registry
@@ -80,6 +88,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   disagreeing, and the reopen is clean. Every sibling method already returned
   `unknown_journal` for the same lookup. The same unwrap on the wire path
   (`onSettings`) is recorded in the report and not yet fixed.
+
 - A member re-arms its heartbeat when the interval it was scheduled under
   turns out to be longer than the current one. `onTick` read
   `cluster.heartbeat_ms` from the fold at the moment it sent and honoured the
@@ -97,6 +106,7 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   decides to fall back to the wire - returned with the caller's descriptor
   open and nobody left to close it. `openPath`'s compensating errdefer and
   `init`'s ownership handover moved with the fix, so nothing closes it twice.
+
 - A `join` control entry's address length is checked in `usize` rather than
   in the `u16` the prefix was read into. `50 + addr_len` overflowed for any
   value within 50 of the type's maximum, so the record panicked the fold in
