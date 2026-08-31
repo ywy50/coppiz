@@ -4,7 +4,7 @@
 
 - **What failed:** `journal.Node.createJournal` (pub) reads `group_id.entry_hash` on a `[32]u8` - a compile error that no build gate catches, because nothing calls the function and the gate's `refAllDecls` does not analyze method bodies.
 - **Impact:** The first host (PRD 0005: the library is the product) that calls the documented journal-creation API gets a build failure. Meanwhile the error is invisible in every gate run.
-- **Resolution:** Still open. Statically validated.
+- **Resolution:** Fixed in `8c00ae8`. Originally validated statically.
 
 ## Status
 
@@ -49,4 +49,16 @@ None beyond the fix. Worth noting for the gate design: `refAllDecls` covers decl
 ## References
 
 - Code: `src/journal/journal.zig:273-303` (`createJournal`), `:90` (`group_hash` type), `:601` (correct shape)
-- Fix: none
+- Fix: `8c00ae8` (PR #79) - the line became
+  `try self.store.createJournal(journal_id, group_id);`, and the new test
+  "Node.createJournal creates and registers a journal" calls the method, so
+  the body is analyzed on every gate run.
+- Re-checked 2026-08-31: the field access is gone and the test is present. It
+  is the credited fix that closed this, not a later restructuring: `8c00ae8`
+  changes exactly the one line this report names
+  (`git show 8c00ae8 -- src/journal/journal.zig`), and the method is
+  otherwise unchanged in shape. `zig build test` would now fail to compile
+  if the typo came back, which is the point of the test.
+- The "Still open" TL;DR line and the `Fix: none` reference above were left
+  behind by `8893ae1`, which flipped 29 reports to `Resolved.` in a docs-only
+  commit and did not update either line. The fix itself is real.
