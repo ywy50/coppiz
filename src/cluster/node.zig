@@ -1709,6 +1709,26 @@ pub const ClusterNode = struct {
             ms.last_heard_ms = self.elapsedMs();
             ms.state = .member;
             noteConnected(ms);
+            // A live member entry the *fold* does not hold is an admission
+            // that never completed - the join was refused, or its forward to
+            // the leader was lost. `admission` admits such an id (the key
+            // matches the entry), and this branch never re-authored the
+            // join, so the newcomer could never be admitted again without
+            // restarting this node (bug
+            // 2026-08-28-sweep3-follower-admitter-join-fails, the phantom
+            // member). Re-authoring is safe: the join is idempotent for a
+            // member the fold already has.
+            //
+            // Guarded on this node being a settled member itself: a
+            // chainless joiner holds a member entry for the peer that
+            // admitted it long before that peer is in its own fold, and
+            // "not in my fold" must not make it try to admit the founder.
+            if (!self.syncing and
+                self.node.control.memberById(self.node.member_id) != null and
+                self.node.control.memberById(h.member_id) == null)
+            {
+                try self.admitNewcomer(h);
+            }
         } else {
             // A newcomer: the admitter appends its join, then it backfills.
             try self.members.put(self.allocator, h.member_id, .{
@@ -1718,6 +1738,12 @@ pub const ClusterNode = struct {
                 .last_heard_ms = self.elapsedMs(),
                 .state = .member,
             });
+            // A failed admit must not leave the entry behind: the branch
+            // above would then take over and, before the re-authoring it now
+            // does, nothing would ever write the join.
+            errdefer if (self.members.fetchRemove(h.member_id)) |kv| {
+                self.allocator.free(kv.value.address);
+            };
             try self.admitNewcomer(h);
         }
     }
@@ -1789,6 +1815,15 @@ pub const ClusterNode = struct {
 
     /// Writes the newcomer's `join` entry (the fold admits any member, so
     /// whoever received the hello admits — PRD 0003 *Admission*).
+    ///
+    /// Only the leader can produce a slot the fold accepts, so a follower
+    /// admitter forwards the entry instead of slotting it locally: the
+    /// leader's slot plus the fold's re-slot inference (the entry's author is
+    /// not the leader) applies it through `applyJoinReslotted`, which is the
+    /// live join's validation. Slotting it locally refused `NotLeader`, the
+    /// error closed the connection, and the joiner - already acked
+    /// `admitted` - redialed the same follower forever (bug
+    /// 2026-08-28-sweep3-follower-admitter-join-fails).
     fn admitNewcomer(self: *ClusterNode, h: message.Hello) !void {
         const payload = try self.allocator.alloc(
             u8,
@@ -1803,7 +1838,16 @@ pub const ClusterNode = struct {
             .{ .member_id = h.member_id, .public_key = h.public_key, .address = h.address },
             payload,
         );
-        _ = try self.authorControl(.join, payload);
+        if (self.isLeader()) {
+            _ = try self.authorControl(.join, payload);
+            return;
+        }
+        // No leader reachable: refuse the admission rather than acking a join
+        // nobody will slot. The joiner's seed retry brings it back.
+        if (self.leaderConnId() == null) return error.NoLeader;
+        const en = try self.signedEntry(.join, self.node.control.journal_id, payload, 0);
+        try self.noteBuilt(self.node.control.journal_id, en.author_seq);
+        try self.sendForward(&en);
     }
 
     fn recordPendingAdmit(self: *ClusterNode, h: message.Hello) !void {
@@ -2049,12 +2093,50 @@ pub const ClusterNode = struct {
             self.closeConn(conn_id);
             return;
         }
-        // Only data entries are forwarded. Control entries are
-        // leader-authored directly; accepting a member's self-signed
-        // control entry here would route it through the fold's re-slot
+        // Data entries and one control kind are forwarded. Every other
+        // control entry is leader-authored directly; accepting a member's
+        // self-signed one here would route it through the fold's re-slot
         // inference (author != leader) and bypass the leader checks — a
         // member could create journals or no-op their way past settings
         // (bug 2026-08-29-live-create-journal-bypass).
+        //
+        // `join` is the exception because admission is explicitly not
+        // leader-only (PRD 0003 *Admission*: whoever received the hello
+        // admits) while only the leader can slot. The leader re-runs its own
+        // admission policy over the payload rather than trusting the
+        // admitter, so the exception does not hand any member a write to the
+        // membership - see `joinAdmissible`.
+        if (en.kind == .join) {
+            if (!self.isLeader()) {
+                if (self.leaderConnId()) |lid| try self.sendMessage(lid, .{ .forward = f });
+                return;
+            }
+            const payload = membership.decodeJoinPayload(
+                self.allocator,
+                en.payload,
+            ) catch |err| switch (err) {
+                // An allocation failure is not a protocol error: refusing it
+                // as one would drop a healthy peer's connection.
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidLength => {
+                    self.closeConn(conn_id);
+                    return;
+                },
+            };
+            defer payload.deinit(self.allocator);
+            // Already a member: the admitter retried, or two admitters
+            // forwarded the same newcomer. Nothing to slot, and slotting it
+            // would refuse `AlreadyMember` and drop this member's connection.
+            if (self.node.control.memberById(payload.member_id) != null) return;
+            // Dropped, not closed: a refused admission is a policy verdict
+            // about a third party, and tearing down a legitimate member's
+            // replication connection over it would be the larger fault. The
+            // newcomer's own seed retry is what re-asks.
+            if (!self.joinAdmissible(payload)) return;
+            if (self.entryKnown(en.journal, en.id())) return; // already slotted
+            _ = try self.slotAndBroadcast(&en, false);
+            return;
+        }
         if (en.kind != .data) {
             self.closeConn(conn_id);
             return;
@@ -2069,6 +2151,32 @@ pub const ClusterNode = struct {
         } else if (self.leaderConnId()) |lid| {
             try self.sendMessage(lid, .{ .forward = f });
         }
+    }
+
+    /// Whether this member would admit `payload` as a newcomer: the id
+    /// derives from the key, the address is safe, the cluster has room, and
+    /// the admission mode allows it. The leader applies this to a *forwarded*
+    /// join, so a follower admitter cannot write a membership the leader's
+    /// own policy refuses. It is deliberately the same set of checks
+    /// `admission` runs on a hello, minus the two that need one (the genesis
+    /// hash the dialer sent, and the self-client case), so a newcomer gets
+    /// the same verdict whichever member it reaches. `prompt` refuses here:
+    /// the admitter already refused the hello in that mode, so no join is
+    /// authored, and a forwarded one did not come from a hello this cluster
+    /// accepted.
+    fn joinAdmissible(self: *ClusterNode, payload: membership.JoinPayload) bool {
+        const derived = chain.deriveMemberId(payload.public_key);
+        if (!std.mem.eql(u8, &payload.member_id, &derived)) return false;
+        if (!addressSafe(payload.address)) return false;
+        const max_members = self.settingU16("cluster.max_members", 32);
+        if (self.node.control.memberCount() >= max_members) return false;
+        const mode = self.settingEnum("cluster.admission", "allowlist");
+        if (std.mem.eql(u8, mode, "open")) return true;
+        if (std.mem.eql(u8, mode, "prompt")) return false;
+        for (self.options.allowlist) |key| {
+            if (std.mem.eql(u8, &key, &payload.public_key)) return true;
+        }
+        return false;
     }
 
     /// Builds a signed entry as this member (the member you talk to is
@@ -3788,6 +3896,133 @@ test "a compacted-shaped forward is refused: payload_omitted is never live" {
     try std.testing.expectEqual(@as(usize, 0), node.journals.get(jid).?.fold.entries.count());
 }
 
+test "the forward path's join exception admits nothing the leader's policy refuses" {
+    // The `.join` exception to `onForward`'s data-only rule exists for the
+    // follower admitter (bug 2026-08-28-sweep3-follower-admitter-join-fails).
+    // It must not reopen the hole the rule was added to close: the fold's
+    // re-slot inference is author-based, so a control entry reaching the
+    // leader through a forward bypasses the leader checks (bug
+    // 2026-08-29-live-create-journal-bypass). Every other kind still closes
+    // the connection, and a join is slotted only when the *leader's* own
+    // admission policy would admit it.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    const newcomer = crypto.sign.Ed25519.KeyPair.generate(oio);
+    const newcomer_key = newcomer.public_key.toBytes();
+    const allowed = [_][32]u8{newcomer_key};
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    // Default admission mode is `allowlist`, so the allowlist is the policy
+    // under test: the same forward is refused without it and slotted with it.
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+        .allowlist = &.{},
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    const control_id = node.control.journal_id;
+
+    // A helper that authors an entry as this member (the only member, so the
+    // only author the fold accepts) and forwards it over a fresh conn.
+    const Forwarder = struct {
+        fn run(c: *ClusterNode, conn_id: u64, en: *const entry.Entry) !void {
+            const bytes = try test_alloc.alloc(u8, entry.header_len + en.payload.len);
+            defer test_alloc.free(bytes);
+            try entry.encode(en, bytes);
+            try c.onForward(conn_id, .{ .entry_bytes = bytes });
+        }
+    };
+
+    var capture = FrameCapture{};
+    defer capture.deinit();
+
+    // 1. A forwarded `create_journal` still closes the connection.
+    {
+        try cn.conns.put(test_alloc, 1, .{ .conn = capture.conn() });
+        const jid = [_]u8{0x77} ** 16;
+        const payload = try test_alloc.alloc(u8, chain.createJournalPayloadLen(.{
+            .journal_id = jid,
+            .name = "sneaky",
+            .changes = &.{},
+        }));
+        defer test_alloc.free(payload);
+        try chain.encodeCreateJournalPayload(
+            .{ .journal_id = jid, .name = "sneaky", .changes = &.{} },
+            payload,
+        );
+        const en = try cn.signedEntry(.create_journal, control_id, payload, 0);
+        try Forwarder.run(cn, 1, &en);
+        try std.testing.expect(cn.conns.getPtr(1).?.closing);
+        try std.testing.expect(node.control.journals.get(jid) == null);
+    }
+
+    // 2. A join for a member id that does not derive from its key is
+    //    dropped, whatever the admitter claimed.
+    {
+        try cn.conns.put(test_alloc, 2, .{ .conn = capture.conn() });
+        const p = membership.JoinPayload{
+            .member_id = [_]u8{0xEE} ** 16,
+            .public_key = newcomer_key,
+            .address = "newcomer",
+        };
+        const payload = try test_alloc.alloc(u8, membership.joinPayloadLen(p));
+        defer test_alloc.free(payload);
+        membership.encodeJoinPayload(p, payload);
+        const en = try cn.signedEntry(.join, control_id, payload, 0);
+        try Forwarder.run(cn, 2, &en);
+        try std.testing.expectEqual(@as(usize, 1), node.control.memberCount());
+    }
+
+    // 3. A well-formed join whose key is not allowlisted is dropped - and
+    //    the member connection is left alone, because a refused admission is
+    //    a verdict about a third party.
+    const good = membership.JoinPayload{
+        .member_id = chain.deriveMemberId(newcomer_key),
+        .public_key = newcomer_key,
+        .address = "newcomer",
+    };
+    const good_payload = try test_alloc.alloc(u8, membership.joinPayloadLen(good));
+    defer test_alloc.free(good_payload);
+    membership.encodeJoinPayload(good, good_payload);
+    {
+        try cn.conns.put(test_alloc, 3, .{ .conn = capture.conn() });
+        const en = try cn.signedEntry(.join, control_id, good_payload, 0);
+        try Forwarder.run(cn, 3, &en);
+        try std.testing.expectEqual(@as(usize, 1), node.control.memberCount());
+        try std.testing.expect(!cn.conns.getPtr(3).?.closing);
+    }
+
+    // 4. The same join, with the key allowlisted: slotted, so the exception
+    //    is a real path and not a dead branch.
+    {
+        cn.options.allowlist = &allowed;
+        try cn.conns.put(test_alloc, 4, .{ .conn = capture.conn() });
+        const en = try cn.signedEntry(.join, control_id, good_payload, 0);
+        try Forwarder.run(cn, 4, &en);
+        try std.testing.expectEqual(@as(usize, 2), node.control.memberCount());
+        try std.testing.expect(node.control.memberById(good.member_id) != null);
+    }
+}
+
 test "hello whose member id does not derive from the key is refused" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -4960,6 +5195,90 @@ test "e2e: a newly elected leader slots its own queued entries" {
     const info = fold.entries.get(reply.id) orelse return error.QueueNeverSlotted;
     try std.testing.expectEqual(@as(u64, 2), info.position.epoch);
     try std.testing.expectEqual(@as(u64, 1), info.position.seq);
+}
+
+test "e2e: a newcomer whose only reachable peer is a follower is still admitted" {
+    // Bug 2026-08-28-sweep3-follower-admitter-join-fails. `onHello` acks
+    // `admitted = true`, then `admitNewcomer` authored the join *locally*, as
+    // the admitter. A follower's slot names itself as leader, which the fold
+    // refuses (`NotLeader`), the error closes the connection, and the joiner -
+    // already told it was admitted - redials the same follower forever.
+    const admission_key = schema.keyIndex("cluster.admission").?;
+    const heartbeat = schema.keyIndex("cluster.heartbeat_ms").?;
+    const genesis_changes = [_]validate.Change{
+        .{ .key = admission_key, .value = .{
+            .enum_value = schema.enumValue(admission_key, "open").?,
+        } },
+        .{ .key = heartbeat, .value = .{ .u64 = 50 } },
+    };
+    var tmp_a = std.testing.tmpDir(.{});
+    tmp_a.dir.createDir(tio, "data", .default_dir) catch {};
+    {
+        const data_dir = try tmp_a.dir.openDir(tio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, tio, data_dir, &genesis_changes, "main", &journal.wallClock);
+    }
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(tio);
+    const a = try triNodeInit("a", null, &hub, null, tmp_a, null);
+    defer triNodeStop(&a);
+    const b = try triNodeInit(
+        "b",
+        "a",
+        &hub,
+        crypto.sign.Ed25519.KeyPair.generate(tio),
+        null,
+        null,
+    );
+    defer triNodeStop(&b);
+
+    // B is a member and at head before C arrives, so C's admitter is a
+    // settled follower rather than a still-backfilling one.
+    {
+        const deadline = wallMs(tio) + 20_000;
+        var ready = false;
+        while (wallMs(tio) < deadline) {
+            if (a.node.control.memberCount() == 2 and !b.cn.syncing) {
+                ready = true;
+                break;
+            }
+            std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+        }
+        try std.testing.expect(ready);
+    }
+
+    // C is seeded only at B. Nothing tells C the leader's address, and A
+    // cannot dial a member it has never folded, so B is the only route in.
+    const c = try triNodeInit(
+        "c",
+        "b",
+        &hub,
+        crypto.sign.Ed25519.KeyPair.generate(tio),
+        null,
+        null,
+    );
+    defer triNodeStop(&c);
+
+    {
+        const deadline = wallMs(tio) + 20_000;
+        var admitted = false;
+        while (wallMs(tio) < deadline) {
+            if (a.node.control.memberCount() == 3) {
+                admitted = true;
+                break;
+            }
+            std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+        }
+        try std.testing.expect(admitted);
+    }
+
+    // The member the leader folded is C, by id, read back over the wire.
+    // The page is arena-backed by the client and freed on its next call.
+    const page = try a.client.members();
+    var found = false;
+    for (page.members) |m| {
+        if (std.mem.eql(u8, &m.id, &c.node.member_id)) found = true;
+    }
+    try std.testing.expect(found);
 }
 
 test "embedded host appends through the loop from its own thread (PRD 0005)" {
