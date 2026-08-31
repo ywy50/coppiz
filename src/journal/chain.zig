@@ -1745,6 +1745,54 @@ test "decode OutOfMemory propagates as fatal, never a refusal" {
     try std.testing.expectError(error.OutOfMemory, fold.applyControl(&sl, &en));
 }
 
+const PayloadFuzzCtx = struct {
+    fn fuzzOne(_: @This(), smith: *std.testing.Smith) anyerror!void {
+        // The control-entry payload decoders are an untrusted-input surface:
+        // a control entry arrives over the wire or off a peer's segment and
+        // every member decodes it with the same rule (AGENTS.md -
+        // untrusted-input decoders get a fuzz test; PRD 0001 phase 1). Any
+        // error is acceptable. A success must be canonical - the payload's
+        // encoded length is the input length and re-encoding reproduces the
+        // bytes - because the entry's signature pins those bytes, so a
+        // decoder that accepts two spellings of one payload lets two members
+        // fold the same signed entry differently.
+        var buf: [1024]u8 = undefined;
+        const len = smith.slice(&buf);
+        const bytes = buf[0..len];
+
+        if (decodeGenesisPayload(test_alloc, bytes)) |payload| {
+            defer payload.deinit(test_alloc);
+            try std.testing.expectEqual(len, genesisPayloadLen(payload));
+            const round = try test_alloc.alloc(u8, len);
+            defer test_alloc.free(round);
+            try encodeGenesisPayload(payload, round);
+            try std.testing.expectEqualSlices(u8, bytes, round);
+        } else |_| {}
+
+        if (decodeCreateJournalPayload(test_alloc, bytes)) |payload| {
+            defer payload.deinit(test_alloc);
+            try std.testing.expectEqual(len, createJournalPayloadLen(payload));
+            const round = try test_alloc.alloc(u8, len);
+            defer test_alloc.free(round);
+            try encodeCreateJournalPayload(payload, round);
+            try std.testing.expectEqualSlices(u8, bytes, round);
+        } else |_| {}
+
+        // The two fixed-shape payloads allocate nothing; their whole contract
+        // is that only the exact length decodes.
+        if (decodeStalePayload(bytes)) |_| {
+            try std.testing.expectEqual(@as(usize, 24), len);
+        } else |_| {}
+        if (decodeCheckpointPayload(bytes)) |_| {
+            try std.testing.expectEqual(@as(usize, 16), len);
+        } else |_| {}
+    }
+};
+
+test "the control payload decoders fuzz over untrusted bytes" {
+    try std.testing.fuzz(PayloadFuzzCtx{}, PayloadFuzzCtx.fuzzOne, .{});
+}
+
 test "an apply-side allocation failure is fatal, never a settings refusal" {
     // Bug 2026-08-31-apply-side-oom-read-as-a-refusal: three apply-side call
     // sites flattened every failure into `InvalidSettings`, OutOfMemory

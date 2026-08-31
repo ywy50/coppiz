@@ -7,6 +7,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- Fuzz tests for the control-entry and settings payload decoders. The entry,
+  slot, segment-record and wire-message decoders each had one; the payloads a
+  control entry carries did not, although a `settings`, `genesis` or
+  `create_journal` payload arrives over the wire and is decoded by every
+  member - and the two count-before-bounds bugs fixed this week both lived
+  there. Each new test asserts that a successful decode is canonical: the
+  payload's encoded length is the input length and re-encoding reproduces the
+  bytes, which is the property the fold determinism hash rests on. The
+  `coppiz.toml` parser is fuzzed for the weaker contract that any input either
+  refuses or yields a `Config` that `deinit` takes apart exactly once.
+
 - The deterministic simulator's `LoopWorld` owns elapsed time as well as the
   wire and connectivity. Every node reads its cadences - the heartbeat
   interval, the suspect and evict windows, the redial and seed backoff, the
