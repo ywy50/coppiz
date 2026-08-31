@@ -67,6 +67,25 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A journal-scoped `settings` or `checkpoint` record written before a failover
+  survives the next restart. A data journal is folded against the control fold
+  as it stands at the *end* of the control chain, so every record of every
+  past term was judged against the newest leader; the authorship test that
+  infers a merge re-slot therefore matched a member's own pre-failover
+  history, and folded it as a no-op.
+
+  The member came back up with the journal's settings reverted to the cluster
+  defaults and its peers' expiries un-applied, while every member that did
+  not restart kept them - a silent divergence in the one thing the chain is
+  supposed to make undisputable.
+
+  The control fold now keeps the leader of every term it has opened
+  (`epoch_leaders`), and a journal-scoped record is authorized against the
+  leader of the term its own slot names. A merge re-slot carries the
+  survivor's current epoch, so it is still folded as a no-op. Reported as
+  `2026-08-28-sweep3-pre-failover-settings-replay`, whose earlier "resolved"
+  status credited a fix that was never written.
+
 - `Hub.listen` and `Hub.dialer` allocate from the hub's own allocator rather
   than from their `allocator` parameter. Seven allocations per listen+dial
   pair - the endpoint, the listener, its address, the `endpoints` key and the

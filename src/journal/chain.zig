@@ -181,6 +181,16 @@ pub const EpochState = struct {
     reason: []const u8,
 };
 
+/// One term of the control chain: the epoch number and the member that led
+/// it. The control fold keeps the whole sequence, because a data journal's
+/// record has to be authorized against the leader of the term *its own slot*
+/// names, which the single `epoch` field cannot answer once the term has
+/// moved on (bug 2026-08-28-sweep3-pre-failover-settings-replay).
+pub const EpochLeader = struct {
+    number: u64,
+    leader: [16]u8,
+};
+
 pub const JournalMeta = struct {
     id: [16]u8,
     name: []const u8, // owned
@@ -232,6 +242,10 @@ pub const FoldState = struct {
     // cluster scope (control journal only):
     members: std.ArrayListUnmanaged(Member),
     epoch: ?EpochState,
+    /// Every term this control chain has opened, in chain order. Derived
+    /// from the chain (so every member that folded it agrees) and therefore
+    /// not part of `hash`, exactly as `may_expire_delete` is not.
+    epoch_leaders: std.ArrayListUnmanaged(EpochLeader),
     journals: std.AutoHashMap([16]u8, JournalMeta),
     /// The last merge entry's slot, when a merge has happened; the
     /// checkpoint settle rule (PRD 0002) refuses a checkpoint until
@@ -271,6 +285,7 @@ pub const FoldState = struct {
             .entries = std.AutoHashMap(entry.Id, EntryInfo).init(allocator),
             .members = .empty,
             .epoch = null,
+            .epoch_leaders = .empty,
             .journals = std.AutoHashMap([16]u8, JournalMeta).init(allocator),
             .last_merge = null,
             .checkpoints = .empty,
@@ -285,11 +300,36 @@ pub const FoldState = struct {
         self.entries.deinit();
         for (self.members.items) |member| self.allocator.free(member.address);
         self.members.deinit(self.allocator);
+        self.epoch_leaders.deinit(self.allocator);
         var journal_it = self.journals.valueIterator();
         while (journal_it.next()) |meta| self.allocator.free(meta.name);
         self.journals.deinit();
         self.checkpoints.deinit(self.allocator);
         self.* = undefined;
+    }
+
+    /// The member that led epoch `number`, or null for a term this fold has
+    /// not folded an epoch entry for. Null is not a refusal: the caller
+    /// treats an unknown term the conservative way it treated a non-current
+    /// leader before this list existed.
+    pub fn leaderOfEpoch(self: *const FoldState, number: u64) ?[16]u8 {
+        for (self.epoch_leaders.items) |term| {
+            if (term.number == number) return term.leader;
+        }
+        return null;
+    }
+
+    /// Records the current `epoch` as a term of this chain. Called from the
+    /// two places that open one - the genesis and a folded `epoch` entry -
+    /// so the list is exactly the chain's terms, in order. Idempotent on the
+    /// number, so a redelivered epoch entry does not duplicate a term.
+    fn recordEpochLeader(self: *FoldState) ApplyError!void {
+        const ep = self.epoch orelse return;
+        if (self.leaderOfEpoch(ep.number) != null) return;
+        try self.epoch_leaders.append(self.allocator, .{
+            .number = ep.number,
+            .leader = ep.leader,
+        });
     }
 
     pub fn memberById(self: *const FoldState, id: [16]u8) ?Member {
@@ -377,6 +417,12 @@ pub const FoldState = struct {
             // before offering the entry to the fold; a member that disagrees
             // keeps its previous view (that is a partition).
             try epoch.applyEpoch(self, sl, en);
+            // The term the entry opened, kept for the data journals: their
+            // records outlive the term that slotted them (bug
+            // 2026-08-28-sweep3-pre-failover-settings-replay). A re-slotted
+            // epoch entry is a no-op above and never reaches here, so the
+            // losing branch's terms stay out of the list.
+            try self.recordEpochLeader();
             return;
         }
         if (!std.mem.eql(u8, &sl.leader, &leader)) return error.NotLeader;
@@ -517,10 +563,11 @@ pub const FoldState = struct {
                     schema.keyIndex("journal.allow_append").?,
                 )) return error.JournalFrozen,
                 // A journal-scoped `settings` or `checkpoint` is
-                // leader-authored under the live rule below, so one whose
-                // author is *not* the leader can only be a merge re-slot:
-                // `doMergeData` gives the losing branch's entry a slot the
-                // survivor signs, and leaves the entry itself alone.
+                // leader-authored, so the record is live exactly when its
+                // author led the term *its own slot* names. `doMergeData`
+                // stamps a re-slot with the survivor's current epoch and
+                // leaves the losing branch's author alone, so a re-slot
+                // never matches.
                 //
                 // The re-slot has to be inferred here because the wire flag
                 // that carries it is not on disk. `applyReplicated` writes a
@@ -533,18 +580,37 @@ pub const FoldState = struct {
                 // infers a control re-slot the same way and for the same
                 // reason.
                 //
-                // Sound by construction, as it is there: an entry the live
-                // rule accepts is leader-authored, so it never matches. The
+                // The term, not the *current* leader, is what the test has
+                // to be against. A data journal is folded against the
+                // control fold as it stands at the end of the chain, so
+                // after a failover a record a follower wrote before it -
+                // its own history, never re-slotted by anyone - has an
+                // author who is no longer the leader. Comparing against the
+                // current leader read that as a merge re-slot and dropped
+                // it, so the settings and checkpoints of every journal
+                // silently reverted on the first restart after a failover
+                // while members that did not restart kept them (bug
+                // 2026-08-28-sweep3-pre-failover-settings-replay).
+                //
+                // A term this fold has no epoch entry for cannot be
+                // authorized at all, so it stays a no-op - the conservative
+                // side, and what the current-leader test did for it. The
                 // slot signature, the entry signature and the member check
-                // above are unchanged, so this admits nothing a re-slot
-                // could not already carry.
+                // above are unchanged, and `leaderOfEpoch` only ever names
+                // a member that led a term of this chain, so this admits
+                // nothing a re-slot could not already carry: a member that
+                // never led cannot reach the apply by self-signing a slot.
                 .settings, .checkpoint => {
-                    if (!std.mem.eql(u8, &en.author, &cluster.epoch.?.leader)) {
-                        // A re-slot: a no-op, exactly as the branch above.
-                    } else if (en.kind == .settings) {
-                        try self.applyJournalSettings(sl, en, cluster);
-                    } else {
-                        try self.applyCheckpoint(sl, en, cluster);
+                    if (cluster.leaderOfEpoch(sl.epoch)) |term_leader| {
+                        if (std.mem.eql(u8, &en.author, &term_leader)) {
+                            if (en.kind == .settings) {
+                                try self.applyJournalSettings(sl, en, cluster, term_leader);
+                            } else {
+                                try self.applyCheckpoint(sl, en, cluster, term_leader);
+                            }
+                        }
+                        // Otherwise a merge re-slot: a no-op, exactly as
+                        // the reslotted branch above.
                     }
                 },
                 .stale => try self.applyStale(sl, en),
@@ -713,6 +779,7 @@ pub const FoldState = struct {
             .address = try self.allocator.dupe(u8, ""),
         });
         self.epoch = .{ .number = 1, .leader = founder_id, .reason = "genesis" };
+        try self.recordEpochLeader();
         self.journal_id = en.journal;
         try self.registerEntry(sl, en);
     }
@@ -805,13 +872,18 @@ pub const FoldState = struct {
 
     // --- data journal kinds -------------------------------------------------
 
+    /// `term_leader` is the leader of the epoch this record's slot names,
+    /// which is the current leader for a live write and an earlier one for a
+    /// record replayed across a failover (bug
+    /// 2026-08-28-sweep3-pre-failover-settings-replay).
     fn applyJournalSettings(
         self: *FoldState,
         sl: *const slot.Slot,
         en: *const entry.Entry,
         cluster: *const FoldState,
+        term_leader: [16]u8,
     ) ApplyError!void {
-        try checkAuthorIsLeader(en, cluster.epoch.?.leader);
+        try checkAuthorIsLeader(en, term_leader);
         var payload = settings_fold.decodePayload(self.allocator, en.payload) catch |err|
             return mapSettingsDecodeError(err);
         defer payload.deinit(self.allocator);
@@ -847,13 +919,16 @@ pub const FoldState = struct {
         try self.registerEntry(sl, en);
     }
 
+    /// `term_leader` is the leader of the epoch this record's slot names -
+    /// see `applyJournalSettings`.
     fn applyCheckpoint(
         self: *FoldState,
         sl: *const slot.Slot,
         en: *const entry.Entry,
         cluster: *const FoldState,
+        term_leader: [16]u8,
     ) ApplyError!void {
-        try checkAuthorIsLeader(en, cluster.epoch.?.leader);
+        try checkAuthorIsLeader(en, term_leader);
         const payload = decodeCheckpointPayload(en.payload) catch return error.BadControlPayload;
         if (slot.Position.order(payload.expire_through, sl.position()) == .gt) {
             return error.BadCheckpoint;
@@ -2376,14 +2451,24 @@ test "a re-slotted data entry folds journal settings/checkpoint/stale as no-ops"
         .address = try test_alloc.dupe(u8, ""),
     });
     cluster.control.epoch = .{ .number = 2, .leader = second_id, .reason = "test" };
+    // The term the failover opened, as `applyEpoch` would have recorded it:
+    // the inference reads the leader of the term the *slot* names, so the
+    // fixture has to carry the term too (bug
+    // 2026-08-28-sweep3-pre-failover-settings-replay).
+    try cluster.control.epoch_leaders.append(test_alloc, .{
+        .number = 2,
+        .leader = second_id,
+    });
 
     // A slot chained from the data fold's current head (built at apply
-    // time, like `appendControl`).
+    // time, like `appendControl`). Epoch 2, because `doMergeData` re-slots
+    // into the survivor's *current* term - that is what makes the record a
+    // re-slot rather than the losing branch's own history.
     const next_data_slot = struct {
         fn of(f: *const Fix, data: *const FoldState, en: *const entry.Entry, ts: u64) !slot.Slot {
             return f.slotFor(
-                1,
-                (data.head orelse slot.Position{ .epoch = 1, .seq = 0 }).seq + 1,
+                2,
+                (data.head orelse slot.Position{ .epoch = 2, .seq = 0 }).seq + 1,
                 entry.entryHash(en),
                 data.head_slot_hash,
                 ts,
@@ -2431,9 +2516,66 @@ test "a re-slotted data entry folds journal settings/checkpoint/stale as no-ops"
     // The four re-slots chained at seqs 1..4 (the data fold was empty, so
     // the first re-slot starts the chain, as in doMergeData).
     try std.testing.expectEqual(
-        slot.Position{ .epoch = 1, .seq = 4 },
+        slot.Position{ .epoch = 2, .seq = 4 },
         cluster.data.entries.get(data_id).?.position,
     );
+}
+
+test "a pre-failover journal settings record still folds when it is replayed" {
+    // Bug 2026-08-28-sweep3-pre-failover-settings-replay: a journal-scoped
+    // `settings` record authored by the leader of a past term used to be
+    // refused on reopen (`NotLeader`), because its author was checked
+    // against the *current* epoch's leader. The live re-slot inference
+    // added for 2026-08-31-data-reslot-cannot-be-replayed removed the
+    // refusal but replaced it with silent loss: the record now looks like a
+    // merge re-slot and folds as a no-op, so a member that restarts after a
+    // failover loses the journal's settings while every member that did not
+    // restart keeps them. The discriminator is the record's own slot: a
+    // live record is authored by the leader that signed its slot, a merge
+    // re-slot is not.
+    var fix = Fix.init();
+    var cluster = try clusterWithDataJournal(&fix);
+    defer {
+        cluster.control.deinit();
+        cluster.data.deinit();
+    }
+
+    // Live: the founder is the epoch-1 leader, so the journal-scoped
+    // settings entry it authors applies.
+    const ttl = schema.keyIndex("ttl.default_ms").?;
+    const changes = [_]validate.Change{.{ .key = ttl, .value = .{ .u64 = 2000 } }};
+    const pl = SettingsPayload{ .scope = .journal, .journal_id = fix.data_id, .changes = &changes };
+    const pl_buf = try test_alloc.alloc(u8, settings_fold.payloadLen(pl));
+    defer test_alloc.free(pl_buf);
+    try settings_fold.encodePayload(pl, pl_buf);
+    const en = try fix.entryFor(.settings, fix.data_id, 2, 0, pl_buf);
+    const sl = try fix.slotFor(1, 1, entry.entryHash(&en), cluster.data.head_slot_hash, 1002);
+    try cluster.data.applyData(&cluster.control, &sl, &en);
+    try std.testing.expectEqual(@as(u64, 2000), cluster.data.settings.getU64(ttl));
+
+    // A failover: a second member takes epoch 2. The record on disk does
+    // not move, and nothing re-slots it — it is the survivor's own history.
+    var io_state = std.Io.Threaded.init(test_alloc, .{});
+    const second = crypto.sign.Ed25519.KeyPair.generate(io_state.io());
+    const second_id = deriveMemberId(second.public_key.toBytes());
+    try cluster.control.members.append(test_alloc, .{
+        .id = second_id,
+        .public_key = second.public_key.toBytes(),
+        .seniority = .{ .epoch = 1, .seq = 2 },
+        .address = try test_alloc.dupe(u8, ""),
+    });
+    cluster.control.epoch = .{ .number = 2, .leader = second_id, .reason = "test" };
+    try cluster.control.epoch_leaders.append(test_alloc, .{
+        .number = 2,
+        .leader = second_id,
+    });
+
+    // Replay, as `foldJournal` does on reopen: a fresh data fold against
+    // the *final* control fold, whose epoch has moved past the record's.
+    var replay = try FoldState.init(test_alloc, false, fix.data_id);
+    defer replay.deinit();
+    try replay.applyData(&cluster.control, &sl, &en);
+    try std.testing.expectEqual(@as(u64, 2000), replay.settings.getU64(ttl));
 }
 
 test "fold hash is deterministic over the same chain and changes with it" {
