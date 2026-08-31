@@ -16,6 +16,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A frame's body is read and committed as it arrives rather than allocated
+  from the length its header declares. A connection that announced a 17 MiB
+  frame and then sent none of it held 17 MiB until it closed, and the header
+  is read before the connection has a role. It now holds one 64 KiB chunk.
+  This is proportionality, not a defence against a hostile peer, which the
+  trust model does not claim.
+
 - Closing a listener on the in-memory hub transport now frees its address.
   The close marked the endpoint closed - so it correctly refused dials and
   woke its accept - but left it registered, and `listen` refuses an address
