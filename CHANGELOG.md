@@ -7,6 +7,24 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- The wire client bounds its reads: `net.client.Client` grows
+  `recv_timeout_ms` (default `default_recv_timeout_ms`, 120 s), and
+  `recvMessage` returns `error.Timeout` when the peer answers neither a frame
+  nor a close within it. `Client.recvMessage` previously blocked in
+  `Conn.recv` with no bound of its own - over the in-memory hub `Direction`
+  supplies one, but over TCP nothing did, so a serving node that completes
+  the handshake and then goes silent parked every CLI command that falls back
+  to the wire, in `readv` at 0% CPU with nothing naming a culprit. TCP's own
+  keepalive would not notice for two hours. The bound cannot come from the
+  socket - `std.Io.net` exposes no receive-timeout option, and `SO_RCVTIMEO`
+  set behind its back raises `EAGAIN`, which `Io.Threaded` treats as a
+  programmer bug and `Io.Kqueue` ignores - so the read runs as a concurrent
+  task and the caller waits on its completion event against an absolute
+  deadline, ending the read with `Conn.shutdown` on expiry. Where the `Io`
+  cannot run a concurrent task the read falls back to the previous unbounded
+  inline form rather than pretending to a bound. Setting `recv_timeout_ms` to
+  zero or less disables it deliberately.
+
 - `leadership.fallback = stall` now actually stalls: a write is refused
   `no_leader` while `configured` or `combined` leadership elects nobody. PRD
   0003's failure-mode table has specified that refusal from the start and
