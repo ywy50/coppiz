@@ -7,6 +7,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- `Node.readByAuthor` and `Node.readByKind`: the two reads PRD 0001's *Read
+  path* has always listed beside the range read and the by-id read, and which
+  did not exist. Both are entry facts the chain walk already holds, so they
+  are one comparison inside the walk the three reads now share rather than a
+  second pass. The author matched is the entry's, not the slot leader's, so a
+  re-slotted entry still answers to whoever wrote it. Library calls only:
+  `coppiz read` gains no flag, because the `read_req` wire message carries no
+  filter and a flag that worked only on an unserved directory would be worse
+  than none.
+
 - Fuzz tests for the control-entry and settings payload decoders. The entry,
   slot, segment-record and wire-message decoders each had one; the payloads a
   control entry carries did not, although a `settings`, `genesis` or
@@ -42,6 +52,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A merge no longer aborts on a re-slotted `join` for a member the survivor
+  already holds. `applyJoinReslotted` delegated verbatim to the live rule, so
+  it answered `already_member` - and `doMergeControl` appends the `merge`
+  entry before it re-slots the branch, so the refusal arrived with the merge
+  already committed and every retry refused in the same place. Two ordinary
+  branch shapes produce such a `join`: a newcomer that could reach both sides
+  of a partition and was admitted by each leader, and a losing branch holding
+  a `leave` and then a rejoin, whose leaves the merge defers. The re-slot is
+  now idempotent for a present member, like a re-slotted `leave`, and still
+  refuses a payload whose member id does not derive from its key.
 - `message.decode` frees what it has already taken when a later allocation
   fails. `decodeAppend`, `decodeReadPage` and `decodeSettings` each returned a
   struct literal holding two `dupe` calls, and a literal is not a scope: the
