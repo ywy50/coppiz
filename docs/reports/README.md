@@ -144,6 +144,10 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-31 - `decodeChanges` sizes its allocation from a count it has not checked](bugs/2026-08-31-settings-count-before-bounds.md)
 - [2026-08-31 - closing a hub listener leaves its address taken for the life of the hub](bugs/2026-08-31-hub-listener-never-unregisters.md)
 - [2026-08-31 - a frame body is committed from its header, before any of it arrives](bugs/2026-08-31-frame-body-committed-before-delivery.md)
+- [2026-08-31 - `decodeValue` sizes a string_list from a count it has not checked](bugs/2026-08-31-settings-value-count-before-bounds.md)
+- [2026-08-31 - an entry payload ending in seal-trailer bytes bricks every member's store](bugs/2026-08-31-payload-tail-mimics-seal-trailer.md)
+- [2026-08-31 - an allocation failure while folding genesis or create_journal is read as a settings refusal](bugs/2026-08-31-apply-side-oom-read-as-a-refusal.md)
+- [2026-08-31 - a `create_journal` fold leaks the journal name when the registry insert fails](bugs/2026-08-31-create-journal-name-leaks-on-put-failure.md)
 
 ### Investigations
 

@@ -969,8 +969,46 @@ pub const Store = struct {
         defer self.allocator.free(records);
         const m = try file.readPositionalAll(self.io, records, segment.header_len);
         if (m != records.len) return .absent;
-        if (!std.mem.eql(u8, &hash, &segment.recordsHash(records))) return .corrupt;
+        if (!std.mem.eql(u8, &hash, &segment.recordsHash(records))) {
+            // A trailer that does not verify is only evidence of damage if
+            // it is a trailer at all. A record ends with its entry's
+            // payload, and payload bytes are author-chosen, so an unsealed
+            // segment whose last entry ends in 38 bytes spelling `CPST |
+            // version | 32` is byte-identical here to a sealed segment
+            // whose seal was corrupted. Calling that damage refuses the
+            // open forever - and, since replication writes the same record
+            // bytes everywhere, on every member of the group.
+            //
+            // A genuine trailer is written *past* the last record, so the
+            // records region excluding it decodes as a whole number of
+            // records and the region including it does not. A payload tail
+            // is the other way round: the whole region decodes exactly and
+            // the region short of 38 bytes cuts the last record. That is
+            // the discriminator.
+            if (try self.recordsDecodeExactly(file, file_len - segment.header_len)) {
+                return .absent;
+            }
+            return .corrupt;
+        }
         return .valid;
+    }
+
+    /// Whether `len` bytes of records, read from just past the segment
+    /// header, decode as a whole number of records. `decodeRecord` bounds
+    /// every step against the slice it is given, so a walk that never
+    /// refuses has consumed exactly `len`.
+    fn recordsDecodeExactly(self: *Store, file: std.Io.File, len: u64) !bool {
+        if (len == 0) return true;
+        const records = try self.allocator.alloc(u8, @intCast(len));
+        defer self.allocator.free(records);
+        const n = try file.readPositionalAll(self.io, records, segment.header_len);
+        if (n != records.len) return false;
+        var off: usize = 0;
+        while (off < records.len) {
+            const rec = segment.decodeRecord(records[off..]) catch return false;
+            off += rec.next_offset;
+        }
+        return true;
     }
 
     /// Whether the file's first record starts the chain (its prev hash is
@@ -1020,16 +1058,7 @@ pub const Store = struct {
         const records_len = len - segment.header_len -
             if (sealed) @as(u64, segment.seal_len) else 0;
         if (records_len == 0) return true; // an empty head: nothing to lose
-        const records = try self.allocator.alloc(u8, @intCast(records_len));
-        defer self.allocator.free(records);
-        const n = try file.readPositionalAll(self.io, records, segment.header_len);
-        if (n != records.len) return false;
-        var off: usize = 0;
-        while (off < records.len) {
-            const rec = segment.decodeRecord(records[off..]) catch return false;
-            off += rec.next_offset;
-        }
-        return true;
+        return self.recordsDecodeExactly(file, records_len);
     }
 };
 
@@ -1290,6 +1319,48 @@ test "a sealed segment whose seal hash does not verify refuses to open" {
     try file.writePositionalAll(tio, &one, len - 10);
 
     try std.testing.expectError(error.Corrupt, env.openStore());
+}
+
+test "an entry payload ending in seal-trailer bytes does not brick the open" {
+    // Bug 2026-08-31-payload-tail-mimics-seal-trailer: sealStatus decided
+    // "sealed" from the file's last 38 bytes alone, and a record ends with
+    // its entry's payload. A payload whose tail spells `CPST | version |
+    // 32 bytes` therefore read as a seal whose hash does not verify, which
+    // the open reports as Corrupt - permanently, and on every member,
+    // because replication writes the same record bytes everywhere.
+    var env = TestEnv.init();
+    defer env.deinit();
+    const journal_id = "0123456789abcdef".*;
+
+    var payload = [_]u8{0} ** 64;
+    var seal_buf: [segment.seal_len]u8 = undefined;
+    segment.encodeSeal([_]u8{0xCD} ** 32, &seal_buf);
+    @memcpy(payload[payload.len - segment.seal_len ..], &seal_buf);
+
+    {
+        const store = try env.openStore();
+        defer store.deinit();
+        try store.createJournal(journal_id, [_]u8{0} ** 32);
+        const sl = testSlot(1);
+        const en = testEntry(1, &payload);
+        try store.append(journal_id, &sl, &en);
+    }
+
+    const store = try env.openStore();
+    defer store.deinit();
+    const Seen = struct {
+        count: usize = 0,
+        payload_len: usize = 0,
+    };
+    var seen = Seen{};
+    try store.scanFrom(journal_id, .{ .epoch = 1, .seq = 1 }, &seen, struct {
+        fn cb(s: *Seen, _: *const slot.Slot, en: ?*const entry.Entry) anyerror!void {
+            s.count += 1;
+            if (en) |e| s.payload_len = e.payload.len;
+        }
+    }.cb);
+    try std.testing.expectEqual(@as(usize, 1), seen.count);
+    try std.testing.expectEqual(payload.len, seen.payload_len);
 }
 
 test "mid-file corruption refuses the open and names the journal (G3)" {

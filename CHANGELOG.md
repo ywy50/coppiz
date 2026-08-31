@@ -31,6 +31,38 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- An allocation failure while folding a `genesis` or a `create_journal` is
+  fatal again rather than a settings refusal. Three apply-side call sites
+  flattened every failure into `invalid_settings`, `OutOfMemory` included,
+  so one member short of memory rejected an entry every other member
+  accepted and diverged from them silently. The decode side of the same two
+  entry kinds was fixed for this in
+  `2026-08-28-sweep3-decode-oom-mapped-to-refusal`; the apply side now uses
+  the mapper that was already written for it.
+  The same fold no longer leaks the journal name when the registry insert
+  fails: the dupe was evaluated as an argument to `put`, so an allocation
+  failure in the map's own growth orphaned it.
+
+- An entry payload whose last 38 bytes spell a seal trailer no longer bricks
+  the store. A segment record ends with its entry's payload, and the seal
+  check read the file's last 38 bytes without cross-checking them against the
+  record structure a trailer is supposed to follow - so one ordinary append
+  made every later open refuse with `Corrupt`, on every member, because
+  replication writes the same record bytes everywhere. A trailer that does
+  not verify is now believed only when the records region excluding it
+  decodes as a whole number of records; a segment whose seal really was
+  damaged still refuses.
+
+- A malformed `leadership.authorities` value no longer sizes an allocation
+  from a count nothing has checked. A `string_list` value begins with a u16
+  item count, and the value decoder allocated for it before establishing that
+  the value could hold that many items - so two bytes claiming 65,535 items
+  committed 65,535 slices for a decode that was refused on its first
+  iteration. This is the sibling of the change-list count fixed alongside it:
+  that bound is in `fold.decodeChanges`, this one in `schema.decodeValue`, and
+  the two are reached by every settings decode - a `settings` entry, a
+  genesis's initial settings, and a `create_journal`'s journal settings.
+
 - A frame's body is read and committed as it arrives rather than allocated
   from the length its header declares. A connection that announced a 17 MiB
   frame and then sent none of it held 17 MiB until it closed, and the header
