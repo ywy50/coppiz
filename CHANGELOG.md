@@ -46,6 +46,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   decides to fall back to the wire - returned with the caller's descriptor
   open and nobody left to close it. `openPath`'s compensating errdefer and
   `init`'s ownership handover moved with the fix, so nothing closes it twice.
+- A `join` control entry's address length is checked in `usize` rather than
+  in the `u16` the prefix was read into. `50 + addr_len` overflowed for any
+  value within 50 of the type's maximum, so the record panicked the fold in
+  Debug and ReleaseSafe instead of being refused - on every member, and again
+  on replay from disk, leaving the control chain unopenable.
 
 - An allocation failure while folding a `genesis` or a `create_journal` is
   fatal again rather than a settings refusal. Three apply-side call sites
