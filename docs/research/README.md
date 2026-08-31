@@ -30,3 +30,4 @@ project's research says so and keeps that project's read date.
 | [0007](0007-tier-number-measurements.md) | Open - measurement pending (OQ 54) | Which measurements replace the intent tier numbers? |
 | [0008](0008-merge-settle-default.md) | Open - measurement pending (OQ 60) | What is the right `merge.settle_ms` default? |
 | [0009](0009-memory-bound.md) | Open - measurement pending (OQ 61) | What bounds per-process memory, and what does a member do at the bound? |
+| [0010](0010-sweep-report-audit.md) | Resolved | How reliable is a report's `Status` line, and is the "Still open" / `Fix: none` contradiction a usable signal? |
