@@ -162,6 +162,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-31 - a sync page whose cursor does not advance pins a member in `syncing` forever](bugs/2026-08-31-sync-page-cursor-unvalidated.md)
 - [2026-08-31 - `Direction.readInto` waits for a frame with no deadline, so a hub read that never arrives hangs the whole test binary](bugs/2026-08-31-hub-read-has-no-deadline.md)
 - [2026-08-31 - a cancelled `localReadRange` leaks the whole range the loop copied for it](bugs/2026-08-31-local-read-cancel-leak.md)
+- [2026-08-31 - `Direction.push`/`pushFramed` swallow `OutOfMemory`: a hub send reports success for a frame that was never queued](bugs/2026-08-31-hub-push-drops-frame-on-oom.md)
 
 ### Investigations
 

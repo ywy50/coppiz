@@ -311,34 +311,43 @@ pub const Direction = struct {
         self.chunks.deinit(self.allocator);
     }
 
-    /// Pushes a body, copying it into the hub's memory. No-op once closed.
-    pub fn push(self: *Direction, io: std.Io, body: []const u8) void {
+    /// Pushes a body, copying it into the hub's memory. No-op once closed -
+    /// a closed direction is a closed connection, and the peer learns that
+    /// from its own read, not from here.
+    ///
+    /// Reports `OutOfMemory` rather than dropping the frame. Both failure
+    /// points used to `catch return`, so a frame the sender was told had
+    /// been sent was never queued: no retry ran, and the receiver simply
+    /// never saw it (bug 2026-08-31-hub-push-drops-frame-on-oom).
+    pub fn push(self: *Direction, io: std.Io, body: []const u8) error{OutOfMemory}!void {
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
         if (self.closed) return;
-        const copy = self.allocator.dupe(u8, body) catch return;
-        self.chunks.append(self.allocator, copy) catch {
-            self.allocator.free(copy);
-            return;
-        };
+        const copy = try self.allocator.dupe(u8, body);
+        errdefer self.allocator.free(copy);
+        try self.chunks.append(self.allocator, copy);
         self.wake(io);
     }
 
     /// Pushes a header immediately followed by a body as one chunk: one
     /// lock, one copy, one wake, where two `push` calls would each pay
     /// all three. The reader already handles a combined chunk (a partial
-    /// `readInto` re-bases the remainder).
-    pub fn pushFramed(self: *Direction, io: std.Io, header: []const u8, body: []const u8) void {
+    /// `readInto` re-bases the remainder). Reports `OutOfMemory` for the
+    /// same reason `push` does.
+    pub fn pushFramed(
+        self: *Direction,
+        io: std.Io,
+        header: []const u8,
+        body: []const u8,
+    ) error{OutOfMemory}!void {
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
         if (self.closed) return;
-        const copy = self.allocator.alloc(u8, header.len + body.len) catch return;
+        const copy = try self.allocator.alloc(u8, header.len + body.len);
+        errdefer self.allocator.free(copy);
         @memcpy(copy[0..header.len], header);
         @memcpy(copy[header.len..], body);
-        self.chunks.append(self.allocator, copy) catch {
-            self.allocator.free(copy);
-            return;
-        };
+        try self.chunks.append(self.allocator, copy);
         self.wake(io);
     }
 
@@ -474,7 +483,10 @@ pub const PipeConn = struct {
         if (body.len > framing.max_body_bytes) return error.OversizedFrame;
         var header: [framing.len_bytes]u8 = undefined;
         std.mem.writeInt(u32, &header, @intCast(body.len), .little);
-        self.out.pushFramed(io, &header, body);
+        // A frame the hub cannot hold is a failed send, not a sent frame:
+        // `SendError` has no OutOfMemory, and a real socket write would
+        // surface the same class of failure as `SendFailed`.
+        self.out.pushFramed(io, &header, body) catch return error.SendFailed;
     }
 
     fn shutdownFn(ctx: *anyopaque, io: std.Io) void {
@@ -1078,10 +1090,38 @@ test "hub connect and listen never double-free on allocation failure" {
     }
 }
 
+test "a hub send that cannot allocate is refused, not reported as sent" {
+    // Bug 2026-08-31-hub-push-drops-frame-on-oom: `Direction.push` and
+    // `pushFramed` caught the allocation failure and returned, so
+    // `Conn.send` reported success for a frame that was never queued - the
+    // sender's retry and error paths never ran and the receiver simply never
+    // saw the message, with nothing anywhere reporting a failure.
+    //
+    // Two failure points, both of which used to swallow: the frame copy, and
+    // the chunk-list growth that stores it (which freed the copy and
+    // returned just the same).
+    for ([_]usize{ 0, 1 }) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(test_alloc, .{
+            .fail_index = fail_index,
+        });
+        var out = Direction{ .allocator = failing.allocator() };
+        defer out.deinit();
+        var in = Direction{ .allocator = failing.allocator() };
+        defer in.deinit();
+        // Stack-owned on purpose, so it is never closed: `closeFn` destroys
+        // the conn through its allocator. Only `send` is exercised here.
+        var pc = PipeConn{ .allocator = test_alloc, .in = &in, .out = &out };
+        var c = pc.conn();
+        try std.testing.expectError(error.SendFailed, c.send(tio, "hello"));
+        // A refused send queues no frame: nothing half-landed.
+        try std.testing.expectEqual(@as(usize, 0), out.chunks.items.len);
+    }
+}
+
 test "a partial read leaves a freeable remainder" {
     var dir = Direction{ .allocator = test_alloc };
     defer dir.deinit();
-    dir.push(tio, "hello");
+    try dir.push(tio, "hello");
     var first: [4]u8 = undefined;
     var second: [4]u8 = undefined;
     try std.testing.expectEqual(@as(usize, 4), try dir.readInto(tio, &first));
@@ -1096,7 +1136,9 @@ test "a partial read leaves a freeable remainder" {
 /// reader is already parked in the wait when it lands.
 fn pushAfter(dir: *Direction, delay_ms: i64, body: []const u8) void {
     std.Io.sleep(tio, std.Io.Duration.fromMilliseconds(delay_ms), .awake) catch {};
-    dir.push(tio, body);
+    // The reader is what this asserts on; an OOM here would fail the test
+    // through the missing frame either way.
+    dir.push(tio, body) catch {};
 }
 
 test "a read with no data and no close times out rather than blocking forever" {
@@ -1110,7 +1152,7 @@ test "a read with no data and no close times out rather than blocking forever" {
     try std.testing.expectError(error.Timeout, dir.readInto(tio, &buf));
     // A timeout is not a close: the direction still delivers what arrives
     // after it.
-    dir.push(tio, "ok");
+    try dir.push(tio, "ok");
     try std.testing.expectEqual(@as(usize, 2), try dir.readInto(tio, &buf));
     try std.testing.expectEqualStrings("ok", buf[0..2]);
 }
@@ -1144,8 +1186,8 @@ test "an empty pushed body is data, not a close" {
     defer dir.deinit();
     // A zero-length frame body is legal on the wire (framing.zig); reading
     // it must consume it and continue, not report a close.
-    dir.push(tio, "");
-    dir.push(tio, "abc");
+    try dir.push(tio, "");
+    try dir.push(tio, "abc");
     var buf: [3]u8 = undefined;
     try std.testing.expectEqual(@as(usize, 3), try dir.readInto(tio, &buf));
     try std.testing.expectEqualStrings("abc", &buf);
