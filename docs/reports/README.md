@@ -150,10 +150,15 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-31 - a `create_journal` fold leaks the journal name when the registry insert fails](bugs/2026-08-31-create-journal-name-leaks-on-put-failure.md)
 - [2026-08-31 - a refused `Store.open` leaks the data directory descriptor it was handed](bugs/2026-08-31-store-open-leaks-the-data-dir-on-refusal.md)
 - [2026-08-31 - `changeSettings` unwraps a journal the chain names and the store lost](bugs/2026-08-31-change-settings-unwraps-a-missing-journal.md)
+- [2026-08-31 - a journal's fold leaks when the open is refused while building it](bugs/2026-08-31-journal-state-fold-leaks-before-the-put.md)
+- [2026-08-31 - a segment name leaks when the name list's growth fails](bugs/2026-08-31-segment-name-dupe-leaks-on-append.md)
+- [2026-08-31 - the generation recovery re-slices its name list, so `deinit` frees an interior pointer](bugs/2026-08-31-generation-recovery-frees-an-interior-pointer.md) - **open**
+- [2026-08-31 - the queue's `remove` renames the temp file before its bytes are durable, and leaks its handle](bugs/2026-08-31-queue-remove-publishes-before-durability.md) - **open**
 - [2026-08-31 - a `join` entry's address length is added in its own u16, so a large value panics every member](bugs/2026-08-31-join-payload-len-overflow.md)
 - [2026-08-31 - a joiner heartbeats at the schema default, so a cluster with a short suspect window disconnects every member it admits](bugs/2026-08-31-heartbeat-schedule-stale-interval.md)
 - [2026-08-31 - a re-slotted `join` for a member the survivor already holds refuses `AlreadyMember`, and the heal can never complete](bugs/2026-08-31-reslotted-join-already-member.md)
 - [2026-08-31 - three wire decoders orphan their first allocation when the second one fails](bugs/2026-08-31-wire-decoder-first-dupe-leak.md)
+- [2026-08-31 - one `merge_offer` naming a member's own leader freezes its replication for the life of the connection](bugs/2026-08-31-merge-offer-names-my-own-leader.md)
 - [2026-08-31 - a sync page whose cursor does not advance pins a member in `syncing` forever](bugs/2026-08-31-sync-page-cursor-unvalidated.md)
 
 ### Investigations

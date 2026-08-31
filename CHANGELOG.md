@@ -52,6 +52,23 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A refused open no longer leaks the journal fold it was building. The three
+  sites that construct a `JournalState` guarded the box and not `js.fold`,
+  which allocates the moment it is initialised and again per folded record, so
+  any refusal between the init and the map insert lost the whole fold -
+  and `Node.open`'s own errdefer cannot reach it, because the in-flight state
+  is not in the map yet. The same failure-index sweep found a second leak on
+  the same path: `loadJournal` duped each segment file name as an argument to
+  `names.append`, so an allocation failure in the list's growth orphaned it.
+
+- A `merge_offer` naming a member's own current leader is dropped instead of
+  starting a merge against its own branch. `onDivergence` carried that guard
+  and `onMergeOffer` did not, and `epoch.survivor` answers "I survive" when it
+  ranks one leader against itself - so the member set `merging_from`, and
+  `onSlot` returns early for every broadcast while that is set, with no
+  watchdog to release it. One 32-byte frame from any admitted peer therefore
+  stopped a healthy member folding anything for as long as the connection
+  stayed open, while it went on heartbeating and serving reads.
 - A backfill page whose cursor does not advance is refused instead of stored.
   `onSyncPage` took the peer's `next` on trust, so a page at or behind the
   position it answered made the member re-issue exactly the same `sync_req`
