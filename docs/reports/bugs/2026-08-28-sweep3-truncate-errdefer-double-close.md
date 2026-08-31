@@ -4,7 +4,7 @@
 
 - **What failed:** `truncate` registers `errdefer file.close(self.io)` for the fresh head file and never disarms it; the segment is adopted into `jd.segments` before `rebuildIndex`, whose failure runs the errdefer and closes a file the journal now owns - `Store.deinit` closes it again (double-close).
 - **Impact:** Error-path only: an OOM/IO failure in `rebuildIndex` during a merge truncate leaves the journal with a closed head handle and a deinit panic.
-- **Resolution:** Still open. Statically validated.
+- **Resolution:** Fixed in `773af4d`. Originally validated statically.
 
 ## Status
 
@@ -49,4 +49,15 @@ Related storage defects reported separately: `hasSeal` conflation and the interr
 ## References
 
 - Code: `src/journal/store.zig:553-586` (`truncate`), `:404-410` (`compact`'s adopted guard)
-- Fix: none
+- Fix: `773af4d` - `Store.truncate` gained the `adopted` flag
+  (`var adopted = false; errdefer if (!adopted) file.close(self.io);`), armed
+  over the fresh head file and disarmed once it is in `jd.segments`, matching
+  `compact`.
+- Re-checked 2026-08-31: the guard is present. `truncate` has since been
+  restructured by `f9ec38c` (crash-atomicity), so the fresh head is written
+  before anything is touched and `adopted = true` follows the in-memory swap
+  rather than preceding `rebuildIndex`; the errdefer still cannot fire after
+  adoption, which is what this report asked for.
+- The "Still open" TL;DR line and the `Fix: none` reference above were left
+  behind by `8893ae1`, which flipped 29 reports to `Resolved.` in a docs-only
+  commit and did not update either line. The fix itself is real.
