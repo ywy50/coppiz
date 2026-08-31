@@ -52,6 +52,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A backfill page whose cursor does not advance is refused instead of stored.
+  `onSyncPage` took the peer's `next` on trust, so a page at or behind the
+  position it answered made the member re-issue exactly the same `sync_req`
+  on every tick - and because `syncing` clears only once every cursor has
+  drained, it stayed ineligible for leadership and never drained its durable
+  queue, silently, for the life of the process. The wire client's own copy of
+  this cursor was already checked; the node's was not.
+
 - A merge no longer aborts on a re-slotted `join` for a member the survivor
   already holds. `applyJoinReslotted` delegated verbatim to the live rule, so
   it answered `already_member` - and `doMergeControl` appends the `merge`
