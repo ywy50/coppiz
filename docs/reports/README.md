@@ -191,6 +191,7 @@ nobody has looked, not that it is fine.
 - [2026-08-31 - two journals share entry ids, so one member's pending acks and completions collide](bugs/2026-08-31-entry-id-not-journal-scoped.md)
 - [2026-08-31 - `Hub.listen`/`Hub.dialer` allocate from the caller's allocator and free through the hub's (latent)](bugs/2026-08-31-hub-listen-dialer-allocator-mismatch.md)
 - [2026-08-31 - the wire client's `recvMessage` has no deadline over TCP: a peer that accepts and then answers nothing parks the caller forever](bugs/2026-08-31-client-recv-has-no-deadline.md)
+- [2026-08-31 - a `Hub` listener is destroyed under an in-flight accept: `zig build test` segfaults in `acceptFn` about 1% of runs](bugs/2026-08-31-hub-listener-freed-under-accept.md)
 
 ### Investigations
 
