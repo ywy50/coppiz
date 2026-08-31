@@ -75,7 +75,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - the re-slotted `create_journal` variant is reachable live: any member can create journals via the forward path](bugs/2026-08-29-live-create-journal-bypass.md)
 - [2026-08-29 - `parsePeerKey` frees the old `public_key` before validating the new one: a malformed second key is a double-free](bugs/2026-08-29-parse-peer-key-double-free.md)
 - [2026-08-29 - `Node.createJournal` is a dead public API with a latent compile error](bugs/2026-08-29-node-createjournal-compile-error.md)
-- [2026-08-29 - control/checkpoint writes fold before the store write: an I/O error leaves the fold one record ahead and the chain unreopenable](bugs/2026-08-29-fold-before-store-order.md)
+- [2026-08-29 - control/checkpoint writes fold before the store write: an I/O error leaves the fold one record ahead and the chain unreopenable](bugs/2026-08-29-fold-before-store-order.md) - **reopened**
 - [2026-08-29 - wire reads silently drop compacted (retain=none) records; the local read shows them as `(removed)`](bugs/2026-08-29-wire-read-drops-compacted-slots.md)
 - [2026-08-29 - merge re-slots do not clamp the slot timestamp: a clock regression stalls the heal with `BadTimestamp`](bugs/2026-08-29-merge-reslot-timestamp-unclamped.md)
 - [2026-08-29 - TCP accept/connect leak the OS socket when the `TcpConn` allocation fails](bugs/2026-08-29-tcp-conn-fd-leak-on-oom.md)
@@ -170,3 +170,4 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - range reads and open-time discovery on the journal read paths](investigations/2026-08-29-runtime-sweep-journal-read.md)
 - [2026-08-29 - settings key resolution and checkpoint removal sets on the control paths](investigations/2026-08-29-runtime-sweep-settings-checkpoint.md)
 - [2026-08-28 - making `zig build test` faster without dropping tests](investigations/2026-08-28-test-suite-quick-wins.md)
+- [2026-08-31 - the wire read and the local read still disagree, and one recorded fix cannot run](investigations/2026-08-31-wire-and-local-reads-still-disagree.md)
