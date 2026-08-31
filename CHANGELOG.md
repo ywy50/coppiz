@@ -7,6 +7,21 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Added
 
+- The deterministic simulator's `LoopWorld` owns elapsed time as well as the
+  wire and connectivity. Every node reads its cadences - the heartbeat
+  interval, the suspect and evict windows, the redial and seed backoff, the
+  sync watchdog - off one counter the world advances, through the new
+  `cluster.ElapsedClock` seam on `cluster.Options`. A scenario states how far
+  a tick moves it (`tick_advance_ms`, 0 by default), so a window that means
+  to exercise a cadence reaches it instead of silently testing nothing: the
+  simulator's ticks span microseconds of real time, and every window written
+  against the real clock had been measuring the interval rather than the
+  protocol. Two recorded results turned out to be artefacts of exactly that -
+  a healed cluster with no writer does converge - and the failure detector
+  and eviction now have a scenario that walks a member from live through
+  suspected to evicted on the world's clock. The default is unchanged for
+  every other caller: a `ClusterNode` reads the real monotonic clock.
+
 - `coppiz doctor` names a directory whose chain has peers but which no node
   is serving. That is PRD 0005's "host never calls `run()`/`tick()`" failure
   mode - nothing replicates, no member is watched - and it produced no error
@@ -16,6 +31,12 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A refused `Store.open` closes the data directory handle it was given. The
+  call documents that it takes ownership, but only `deinit` closed the
+  handle, so every refusal - including `AlreadyOpen`, which is how the CLI
+  decides to fall back to the wire - returned with the caller's descriptor
+  open and nobody left to close it. `openPath`'s compensating errdefer and
+  `init`'s ownership handover moved with the fix, so nothing closes it twice.
 - A `join` control entry's address length is checked in `usize` rather than
   in the `u16` the prefix was read into. `50 + addr_len` overflowed for any
   value within 50 of the type's maximum, so the record panicked the fold in

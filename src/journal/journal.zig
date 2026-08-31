@@ -1145,9 +1145,10 @@ pub fn init(
     first_journal: ?[]const u8,
     now: *const fn (std.Io) i64,
 ) !void {
-    // Until `Store.open` succeeds the handle is this function's; after it,
-    // `st.deinit()` closes it on every path, so the flag disarms the errdefer
-    // rather than closing the same descriptor twice.
+    // Until `Store.open` is *called* the handle is this function's; from the
+    // call on, the store owns it - `st.deinit()` closes it on success and
+    // `Store.open` closes it on every refusal - so the flag disarms the
+    // errdefer rather than closing the same descriptor twice.
     var dir_owned = true;
     errdefer if (dir_owned) data_dir.close(io);
 
@@ -1162,8 +1163,8 @@ pub fn init(
     // own control fold records, and nothing can restore the old key.
     if (try memberKeyExists(io, data_dir)) return error.AlreadyInitialized;
 
-    const st = try store.Store.open(allocator, io, data_dir, .{});
     dir_owned = false;
+    const st = try store.Store.open(allocator, io, data_dir, .{});
     defer st.deinit();
     // A key-less directory can still hold journals (a key removed by hand, a
     // partially rolled-back init): a second genesis would put two control

@@ -254,6 +254,39 @@ const ConnState = struct {
 // ClusterNode
 // ---------------------------------------------------------------------------
 
+/// The elapsed-time source the cadences read: the failure-detection
+/// windows, the heartbeat interval, the redial and seed retries, and the
+/// sync-response watchdog. It is a seam for the same reason the transport
+/// and the wall clock are: a deterministic harness cannot wait real
+/// milliseconds, and a cadence measured against a clock it cannot move is a
+/// cadence its scenarios never reach (investigation
+/// 2026-08-31-no-writer-heal-window-proved-nothing).
+///
+/// It carries a context pointer rather than being a bare function, because
+/// several nodes in one process each need their own reading - one simulated
+/// world drives every member of its cluster off one counter.
+pub const ElapsedClock = struct {
+    ctx: *anyopaque,
+    read_fn: *const fn (*anyopaque, std.Io) u64,
+
+    fn read(self: ElapsedClock, io: std.Io) u64 {
+        return self.read_fn(self.ctx, io);
+    }
+};
+
+/// The default elapsed-time source: the real monotonic clock.
+fn monotonicElapsedMs(_: *anyopaque, io: std.Io) u64 {
+    return @intCast(std.Io.Timestamp.now(io, .awake).toMilliseconds());
+}
+
+/// `ElapsedClock` needs a non-null `ctx` even when the reading ignores it.
+var monotonic_clock_ctx: u8 = 0;
+
+pub const monotonic_elapsed_clock = ElapsedClock{
+    .ctx = &monotonic_clock_ctx,
+    .read_fn = monotonicElapsedMs,
+};
+
 pub const Options = struct {
     /// The dial side of the transport.
     transport: net.transport.Transport,
@@ -266,6 +299,9 @@ pub const Options = struct {
     /// Additional addresses to dial (config `[[peers]]`), for the joiner
     /// that is not a member of anything yet.
     seed_peers: []const []const u8 = &.{},
+    /// Where elapsed time comes from. The real monotonic clock unless a
+    /// harness owns it.
+    elapsed_clock: ElapsedClock = monotonic_elapsed_clock,
 };
 
 pub const ClusterNode = struct {
@@ -492,6 +528,15 @@ pub const ClusterNode = struct {
         while (sit.next()) |at| at.* = std.math.maxInt(u64);
     }
 
+    /// The failure detector's verdict on `member_id`: whether this member
+    /// currently regards it as lost. A harness that drives the suspect
+    /// window off its own clock needs to read the answer, and a member the
+    /// table does not hold is not reachable either.
+    pub fn simPeerLost(self: *ClusterNode, member_id: [16]u8) bool {
+        const ms = self.members.get(member_id) orelse return true;
+        return ms.state == .lost;
+    }
+
     /// Whether the loop has shut this connection down and is waiting for
     /// the reader's peer-gone notice to destroy it.
     pub fn simConnClosing(self: *ClusterNode, conn_id: u64) bool {
@@ -511,9 +556,10 @@ pub const ClusterNode = struct {
     }
 
     /// Backdates the last heartbeat heard from `member_id`, which is what a
-    /// severed link does. `elapsedMs` reads the real monotonic clock and has
-    /// no seam, so this is how the simulator reaches the suspect branch
-    /// without waiting `cluster.suspect_after_ms` in real time.
+    /// severed link does. It reaches the suspect branch on the next tick
+    /// whatever the clock says, so a scenario that only needs a member gone
+    /// does not have to advance `options.elapsed_clock` past
+    /// `cluster.suspect_after_ms` first.
     pub fn simExpireHeartbeat(self: *ClusterNode, member_id: [16]u8) void {
         const ms = self.members.getPtr(member_id) orelse return;
         ms.last_heard_ms = 1;
@@ -1500,8 +1546,11 @@ pub const ClusterNode = struct {
     /// compares against another local reading — no instant crosses members —
     /// so the stamps and instants that do (slot, author, checkpoint) stay on
     /// the real clock via `nowMs`.
+    ///
+    /// Which monotonic clock is `options.elapsed_clock`: the real one unless
+    /// a harness owns it (`ElapsedClock`).
     fn elapsedMs(self: *ClusterNode) u64 {
-        return @intCast(std.Io.Timestamp.now(self.io, .awake).toMilliseconds());
+        return self.options.elapsed_clock.read(self.io);
     }
 
     fn settingU64(self: *ClusterNode, comptime name: []const u8, default: u64) u64 {

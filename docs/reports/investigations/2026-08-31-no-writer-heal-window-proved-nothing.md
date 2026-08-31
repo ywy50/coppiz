@@ -16,10 +16,12 @@
 
 ## Status
 
-Resolved as an investigation 2026-08-31. The narrowed question it leaves -
-why the sync the head comparison requests does not carry the divergence
-through to a merge - is open, and recorded in PRD 0003 beside the existing
-three-member issue.
+Resolved as an investigation 2026-08-31. The narrowed question it left - why
+the sync the head comparison requests does not carry the divergence through
+to a merge - was answered the same day: it does carry it through, and the
+window was inside a *second* cadence artefact, the joiners' heartbeat
+schedule armed from the schema default before they had a chain. See
+[the writer-less heal was a stale heartbeat schedule](2026-08-31-writer-less-heal-was-a-stale-heartbeat-schedule.md).
 
 ## Symptom
 
@@ -104,6 +106,9 @@ record fails `prev_slot_hash`, which is why a write is what starts the heal.
 - The window runs 200 ticks with `cluster.heartbeat_ms = 0` and asserts
   non-convergence, so it fails if the heartbeat path ever does converge a
   writer-less heal - which is the behaviour the sentence was reaching for.
+  It does converge, once elapsed time moves; the assertion was flipped when
+  the simulator took the clock over (see the follow-on investigation linked
+  under Status).
 - The comment and PRD 0003's status say what is true: the comparison exists,
   and what is missing is the step from it to a merge.
 

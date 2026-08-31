@@ -105,14 +105,21 @@ pub const Store = struct {
 
     /// Opens the data directory and locks it to this process. Takes
     /// ownership of the already-open directory (the caller opens it, e.g.
-    /// via `openDirAbsolute` from a CLI path, or `openDir` in tests);
-    /// `deinit` closes it.
+    /// via `openDirAbsolute` from a CLI path, or `openDir` in tests) from
+    /// the moment it is called: `deinit` closes it on success, and every
+    /// refusal here closes it too.
     pub fn open(
         allocator: std.mem.Allocator,
         io: std.Io,
         data_dir: std.Io.Dir,
         options: OpenOptions,
     ) anyerror!*Store {
+        // Ownership starts here, not at the successful return: every refusal
+        // below left the caller's handle open with nobody left to close it,
+        // and `Node.open` (which documents the same ownership) has no
+        // fallback of its own (bug
+        // 2026-08-31-store-open-leaks-the-data-dir-on-refusal).
+        errdefer data_dir.close(io);
         const lock_file = data_dir.createFile(io, "LOCK", .{
             .read = true,
             .truncate = false,
@@ -149,8 +156,11 @@ pub const Store = struct {
         data_dir_path: []const u8,
         options: OpenOptions,
     ) anyerror!*Store {
-        var data_dir = try std.Io.Dir.openDirAbsolute(io, data_dir_path, .{ .iterate = true });
-        errdefer data_dir.close(io);
+        // No errdefer here: `open` owns the handle from the moment it is
+        // handed over, on its refusal paths too, so closing it again would
+        // close a descriptor the allocator's own file operations may already
+        // have recycled.
+        const data_dir = try std.Io.Dir.openDirAbsolute(io, data_dir_path, .{ .iterate = true });
         return open(allocator, io, data_dir, options);
     }
 
@@ -1466,6 +1476,34 @@ test "the directory lock excludes a second opener and releases on close" {
 
     const reopened = try env.openStore();
     defer reopened.deinit();
+}
+
+test "a refused open closes the data directory handle it was handed" {
+    // Bug 2026-08-31-store-open-leaks-the-data-dir-on-refusal: `open`
+    // documents that it takes ownership of the handle, but only `deinit`
+    // ever closed it, so every refusal - the LOCK open, `AlreadyOpen`, the
+    // struct allocation, any `loadAll` failure - returned with the caller's
+    // descriptor still open and nobody left to close it. `Node.open`
+    // documents the same ownership and has no fallback of its own, and
+    // `error.AlreadyOpen` is a first-class outcome the CLI matches on, so
+    // every `coppiz append`/`head`/`read` against a served directory leaked
+    // one directory descriptor.
+    //
+    // POSIX hands out the lowest free descriptor, so the leak is observable
+    // without counting fds: if the refused open closed what it was given,
+    // the next open of the same directory gets the same number back.
+    var env = TestEnv.init();
+    defer env.deinit();
+    const holder = try env.openStore();
+    defer holder.deinit();
+
+    const first = try env.dataDir();
+    const handle = first.handle;
+    try std.testing.expectError(error.AlreadyOpen, Store.open(test_alloc, tio, first, .{}));
+
+    const second = try env.dataDir();
+    defer second.close(tio);
+    try std.testing.expectEqual(handle, second.handle);
 }
 
 test "a small seal threshold spans segments and reopens cleanly" {

@@ -148,6 +148,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-31 - an entry payload ending in seal-trailer bytes bricks every member's store](bugs/2026-08-31-payload-tail-mimics-seal-trailer.md)
 - [2026-08-31 - an allocation failure while folding genesis or create_journal is read as a settings refusal](bugs/2026-08-31-apply-side-oom-read-as-a-refusal.md)
 - [2026-08-31 - a `create_journal` fold leaks the journal name when the registry insert fails](bugs/2026-08-31-create-journal-name-leaks-on-put-failure.md)
+- [2026-08-31 - a refused `Store.open` leaks the data directory descriptor it was handed](bugs/2026-08-31-store-open-leaks-the-data-dir-on-refusal.md)
 - [2026-08-31 - a `join` entry's address length is added in its own u16, so a large value panics every member](bugs/2026-08-31-join-payload-len-overflow.md)
 
 ### Investigations
@@ -158,6 +159,7 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - the leader encodes each replicated slot twice](investigations/2026-08-29-leader-encode-once.md)
 - [2026-08-29 - verification of the test-build speedup reports and their remaining open topics](investigations/2026-08-29-test-build-sweep-verification.md)
 - [2026-08-31 - the post-heal window in the three-member scenario proved nothing](investigations/2026-08-31-no-writer-heal-window-proved-nothing.md)
+- [2026-08-31 - the writer-less heal was a stale heartbeat schedule, not a missing merge step](investigations/2026-08-31-writer-less-heal-was-a-stale-heartbeat-schedule.md)
 - [2026-08-29 - runtime speedup sweep: findings and disposition](investigations/2026-08-29-runtime-sweep-findings.md)
 - [2026-08-29 - simulator leader evaluation and TCP page writes](investigations/2026-08-29-runtime-sweep-sim-micro.md)
 - [2026-08-29 - write-path data flow: queue drains, replication re-encodes, and per-frame overhead](investigations/2026-08-29-runtime-sweep-queue-wire.md)
