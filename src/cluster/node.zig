@@ -326,10 +326,10 @@ pub const ClusterNode = struct {
     /// member_id -> runtime state.
     members: std.AutoHashMapUnmanaged([16]u8, MemberState) = .empty,
     /// CLI clients awaiting their entry's slot: entry id -> conn_id.
-    pending_clients: std.AutoHashMapUnmanaged(entry.Id, u64) = .empty,
+    pending_clients: std.AutoHashMapUnmanaged(entry.ScopedId, u64) = .empty,
     /// Embedded hosts awaiting their entry's slot (PRD 0005): entry id ->
     /// the completion the host's thread is blocked on.
-    pending_locals: std.AutoHashMapUnmanaged(entry.Id, *LocalCompletion) = .empty,
+    pending_locals: std.AutoHashMapUnmanaged(entry.ScopedId, *LocalCompletion) = .empty,
     /// The next position to request per journal during backfill.
     sync_cursors: std.AutoHashMapUnmanaged([16]u8, slot.Position) = .empty,
     /// Whether a sync request is in flight (one at a time).
@@ -764,17 +764,17 @@ pub const ClusterNode = struct {
                     // ack are resolved on both outcomes, with the refusal on
                     // the error path — otherwise the host hangs (bug
                     // 2026-08-29-reforward-queue-loses-local-completion).
-                    if (self.pending_clients.fetchRemove(en.id())) |kv| {
-                        self.ackClient(kv.value, en.id(), clientRefusalName(err)) catch {};
+                    if (self.pending_clients.fetchRemove(en.scopedId())) |kv| {
+                        self.ackClient(kv.value, en.scopedId(), clientRefusalName(err)) catch {};
                     }
-                    if (self.pending_locals.fetchRemove(en.id())) |kv| {
+                    if (self.pending_locals.fetchRemove(en.scopedId())) |kv| {
                         completeLocal(kv.value, self.io, undefined, clientRefusalName(err));
                     }
                     continue;
                 };
                 self.completePendingFor(&en);
-                if (self.pending_clients.fetchRemove(en.id())) |kv| {
-                    self.ackClient(kv.value, en.id(), "") catch {};
+                if (self.pending_clients.fetchRemove(en.scopedId())) |kv| {
+                    self.ackClient(kv.value, en.scopedId(), "") catch {};
                 }
             } else {
                 self.sendForward(&en) catch continue;
@@ -1350,18 +1350,18 @@ pub const ClusterNode = struct {
                     // `reforwardQueue`'s branch acks the waiters and moves
                     // on; both queue-drain paths now do (bug
                     // 2026-08-28-sweep3-slotqueued-refusal-fatal).
-                    if (c.self.pending_clients.fetchRemove(en.id())) |kv| {
-                        c.self.ackClient(kv.value, en.id(), clientRefusalName(err)) catch {};
+                    if (c.self.pending_clients.fetchRemove(en.scopedId())) |kv| {
+                        c.self.ackClient(kv.value, en.scopedId(), clientRefusalName(err)) catch {};
                     }
-                    if (c.self.pending_locals.fetchRemove(en.id())) |kv| {
+                    if (c.self.pending_locals.fetchRemove(en.scopedId())) |kv| {
                         completeLocal(kv.value, c.self.io, undefined, clientRefusalName(err));
                     }
                     return;
                 };
-                if (c.self.pending_clients.fetchRemove(en.id())) |kv| {
-                    c.self.ackClient(kv.value, en.id(), "") catch {};
+                if (c.self.pending_clients.fetchRemove(en.scopedId())) |kv| {
+                    c.self.ackClient(kv.value, en.scopedId(), "") catch {};
                 }
-                if (c.self.pending_locals.fetchRemove(en.id())) |kv| {
+                if (c.self.pending_locals.fetchRemove(en.scopedId())) |kv| {
                     completeLocal(kv.value, c.self.io, en.id(), "");
                 }
             }
@@ -1932,7 +1932,7 @@ pub const ClusterNode = struct {
             completeLocal(a.completion, self.io, en.id(), "");
         } else {
             self.sendForward(&en) catch {};
-            self.pending_locals.put(self.allocator, en.id(), a.completion) catch {
+            self.pending_locals.put(self.allocator, en.scopedId(), a.completion) catch {
                 refuse(self, a.completion, "internal");
                 return;
             };
@@ -2025,12 +2025,12 @@ pub const ClusterNode = struct {
                 try self.ackClient(conn_id, null, clientRefusalName(err));
                 return;
             };
-            try self.ackClient(conn_id, en.id(), "");
+            try self.ackClient(conn_id, en.scopedId(), "");
         } else {
             // Keep the client waiting on the durable queue; a send miss is
             // retried when a leader is reachable (reforwardQueue).
             self.sendForward(&en) catch {};
-            try self.pending_clients.put(self.allocator, en.id(), conn_id);
+            try self.pending_clients.put(self.allocator, en.scopedId(), conn_id);
         }
     }
 
@@ -2251,26 +2251,39 @@ pub const ClusterNode = struct {
         };
     }
 
-    fn ackClient(self: *ClusterNode, conn_id: u64, id: ?entry.Id, refusal: []const u8) !void {
+    /// Acks a client. `scoped` carries the journal because the position is
+    /// looked up in that journal's fold: an entry id repeats across journals
+    /// (bug 2026-08-31-entry-id-not-journal-scoped). The wire `ack` still
+    /// carries the bare id, which is what it always carried - the request it
+    /// answers named the journal.
+    fn ackClient(
+        self: *ClusterNode,
+        conn_id: u64,
+        scoped: ?entry.ScopedId,
+        refusal: []const u8,
+    ) !void {
         const zero_id = entry.Id{ .author = [_]u8{0} ** 16, .author_seq = 0 };
-        const position = if (id) |i|
-            self.positionOf(i)
+        const position = if (scoped) |sc|
+            self.positionOf(sc)
         else
             slot.Position{ .epoch = 0, .seq = 0 };
         try self.sendMessage(conn_id, .{ .ack = .{
-            .id = id orelse zero_id,
+            .id = if (scoped) |sc| sc.id else zero_id,
             .position = position,
             .refusal = refusal,
         } });
     }
 
-    fn positionOf(self: *ClusterNode, id: entry.Id) slot.Position {
-        if (self.node.control.entries.get(id)) |info| return info.position;
-        var it = self.node.journals.valueIterator();
-        while (it.next()) |js| {
-            if (js.*.fold.entries.get(id)) |info| return info.position;
-        }
-        return .{ .epoch = 0, .seq = 0 };
+    /// Where an entry sits, in its own journal's fold. Walking every fold for
+    /// a bare id answered from whichever chain happened to hold that
+    /// `(author, author_seq)` first - the control journal's genesis, for the
+    /// founder's first data write.
+    fn positionOf(self: *ClusterNode, scoped: entry.ScopedId) slot.Position {
+        const fold = self.foldFor(scoped.journal) orelse
+            return .{ .epoch = 0, .seq = 0 };
+        const info = fold.entries.get(scoped.id) orelse
+            return .{ .epoch = 0, .seq = 0 };
+        return info.position;
     }
 
     // -- replication in ------------------------------------------------------
@@ -2399,10 +2412,10 @@ pub const ClusterNode = struct {
     /// (bug 2026-08-28-localappend-completion-lost).
     fn completePendingFor(self: *ClusterNode, en: *const entry.Entry) void {
         if (!std.mem.eql(u8, &en.author, &self.node.member_id)) return;
-        if (self.pending_clients.fetchRemove(en.id())) |kv| {
-            self.ackClient(kv.value, en.id(), "") catch {};
+        if (self.pending_clients.fetchRemove(en.scopedId())) |kv| {
+            self.ackClient(kv.value, en.scopedId(), "") catch {};
         }
-        if (self.pending_locals.fetchRemove(en.id())) |kv| {
+        if (self.pending_locals.fetchRemove(en.scopedId())) |kv| {
             completeLocal(kv.value, self.io, en.id(), "");
         }
     }
@@ -3364,7 +3377,10 @@ pub const ClusterNode = struct {
                     return;
                 },
             };
-        try self.ackClient(conn_id, authored.id, "");
+        try self.ackClient(conn_id, .{
+            .journal = if (is_control) self.node.control.journal_id else jid,
+            .id = authored.id,
+        }, "");
         if (is_control) try self.handOverAfterSettings(changes);
     }
 
@@ -6283,7 +6299,10 @@ test "shutdown wakes every host thread parked on the loop" {
     var parked = LocalCompletion{};
     try cn.pending_locals.put(
         test_alloc,
-        .{ .author = node.member_id, .author_seq = 1 },
+        .{
+            .journal = node.control.journal_id,
+            .id = .{ .author = node.member_id, .author_seq = 1 },
+        },
         &parked,
     );
 
@@ -6798,7 +6817,7 @@ test "one un-slotable queued entry refuses that entry, not the whole node" {
     const bad = try cn.signedEntry(.data, unknown_jid, "bad", 0);
     try cn.node.queue.append(&bad);
     var bad_waiter = LocalCompletion{};
-    try cn.pending_locals.put(test_alloc, bad.id(), &bad_waiter);
+    try cn.pending_locals.put(test_alloc, bad.scopedId(), &bad_waiter);
 
     // A slotable entry queued behind it, so the sweep has to continue
     // rather than merely swallow the refusal.
@@ -6920,4 +6939,103 @@ test "a cancelled localReadRange frees the records the loop already copied" {
     // check is the assertion that it freed on the way out: on the parent the
     // record list and its payload are both still allocated here.
     try std.testing.expectEqual(@as(?anyerror, error.Canceled), host.err);
+}
+
+test "two journals' appends by one author do not share a pending-completion key" {
+    // Bug 2026-08-31-entry-id-not-journal-scoped: `author_seq` is a
+    // per-(author, journal) counter (PRD 0001, glossary), so an entry id
+    // `(author, author_seq)` repeats across journals. `pending_locals` and
+    // `pending_clients` were keyed on it alone, so a member's first append to
+    // a second journal overwrote the first journal's waiter: one host thread
+    // parked forever and the other woke with the wrong entry's id.
+    var owned = std.Io.Threaded.init(test_alloc, .{ .async_limit = .limited(16) });
+    defer owned.deinit();
+    const oio = owned.io();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    tmp.dir.createDir(oio, "data", .default_dir) catch {};
+    {
+        const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+        try journal.init(test_alloc, oio, dd, &.{}, "main", &journal.wallClock);
+    }
+    const dd = try tmp.dir.openDir(oio, "data", .{ .iterate = true });
+    var node = try journal.Node.open(test_alloc, oio, dd, .{ .fsync = .never });
+    defer node.deinit();
+
+    var hub = net.transport.Hub.init(test_alloc);
+    defer hub.deinit(oio);
+    const dialer = try hub.dialer(test_alloc, "solo");
+    var cn = try ClusterNode.init(test_alloc, oio, node, .{
+        .transport = dialer,
+        .address = "solo",
+    });
+    defer {
+        dialer.deinit_fn(dialer.ctx);
+        cn.deinit();
+    }
+
+    const main_id = node.journalIdByName("main").?;
+    _ = try node.createJournal("other", &.{});
+
+    // A follower with a leader it cannot reach: both appends are queued
+    // durably and parked, which is the state that holds two waiters at once.
+    cn.node.control.epoch.?.leader = [_]u8{0x5A} ** 16;
+    try std.testing.expect(!cn.isLeader());
+    try std.testing.expect(!try cn.electsNobody());
+
+    var main_waiter = LocalCompletion{};
+    cn.onLocalAppend(.{
+        .journal = "main",
+        .payload = "m",
+        .ttl_ms = 0,
+        .completion = &main_waiter,
+    });
+    var other_waiter = LocalCompletion{};
+    cn.onLocalAppend(.{
+        .journal = "other",
+        .payload = "o",
+        .ttl_ms = 0,
+        .completion = &other_waiter,
+    });
+
+    // Both are the author's author_seq 1 - in different journals - so on the
+    // parent the second `put` replaced the first and the count is 1.
+    try std.testing.expectEqual(@as(usize, 2), cn.pending_locals.count());
+    try std.testing.expectEqual(@as(usize, 0), main_waiter.sem.permits);
+    try std.testing.expectEqual(@as(usize, 0), other_waiter.sem.permits);
+
+    // And the slot that folds back resolves its own journal's waiter only.
+    const folded = entry.Entry{
+        .kind = .data,
+        .journal = main_id,
+        .author = node.member_id,
+        .author_seq = 1,
+        .author_ts_ms = 0,
+        .ttl_ms = 0,
+        .payload_hash = [_]u8{0} ** 32,
+        .signature = [_]u8{0} ** 64,
+        .payload_len = 0,
+        .payload_omitted = false,
+        .payload = "",
+    };
+    cn.completePendingFor(&folded);
+    try std.testing.expectEqual(@as(usize, 1), main_waiter.sem.permits);
+    try std.testing.expectEqual(@as(usize, 0), other_waiter.sem.permits);
+    try std.testing.expectEqual(@as(usize, 1), cn.pending_locals.count());
+
+    // The same scoping in the ack's position lookup: nothing is slotted in
+    // "main" yet, so the answer is "nowhere". The bare-id walk this replaced
+    // checked the control fold first and would have answered with the
+    // position of `genesis`, which is the founder's own author_seq 1.
+    try std.testing.expectEqual(
+        slot.Position{ .epoch = 0, .seq = 0 },
+        cn.positionOf(.{
+            .journal = main_id,
+            .id = .{ .author = node.member_id, .author_seq = 1 },
+        }),
+    );
+    try std.testing.expect(cn.node.control.entries.contains(
+        .{ .author = node.member_id, .author_seq = 1 },
+    ));
 }

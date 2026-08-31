@@ -80,6 +80,18 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   documented close semantics, and a peer learns about a close from its own
   read. Test and simulator fabric only - the served path is `TcpConn`.
 
+- A member appending to two journals no longer loses one of the two writes'
+  answers. `author_seq` is a per-(author, journal) counter, so an entry id
+  `(author, author_seq)` repeats across journals - a member's first entry in
+  every journal it writes to is `(author, 1)`. The node's pending-ack and
+  pending-completion maps were keyed on that id alone, so the second journal's
+  append replaced the first journal's waiter: an embedded host's `localAppend`
+  blocked until shutdown while the other host woke naming the wrong entry, and
+  a wire client's ack went to the other client's connection. Both maps, and
+  the ack's position lookup, now key on the journal and the id together.
+  Nothing on the wire or on disk changes - the `ack` still carries the bare
+  id, and every encoded form already names the journal beside it.
+
 - The simulator's `heal` folds pending inbox broadcasts into the branches it
   merges. It read each side's branch off a member's *folded* chain and then
   cleared every inbox, so a message the side's leader had broadcast but no
