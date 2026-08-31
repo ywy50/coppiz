@@ -134,6 +134,11 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-30 - the survivor broadcasts its merge re-slots as live records, so every other member refuses them](bugs/2026-08-30-merge-data-broadcast-reslotted-false.md)
 - [2026-08-30 - shutting the loop down strands every host thread parked on it](bugs/2026-08-30-shutdown-strands-local-completions.md)
 - [2026-08-30 - a three-member merge strands the losing branch's follower (open)](bugs/2026-08-30-three-member-merge-strands-the-losing-follower.md)
+- [2026-08-30 - a scalar `coppiz.toml` value with unbalanced quotes is stored verbatim, quote included](bugs/2026-08-30-toml-scalar-unbalanced-quote.md)
+- [2026-08-30 - an allowlist-only `[[peers]]` entry is dialed forever at the empty address](bugs/2026-08-30-allowlist-only-peer-dialed-forever.md)
+- [2026-08-30 - a refused `Store.open` leaks the journal state it had already built](bugs/2026-08-30-store-open-refusal-leaks-journal-state.md)
+- [2026-08-30 - an already-removed entry re-enters every later removal set, so an idle journal emits a checkpoint per interval](bugs/2026-08-30-removed-entries-re-enter-the-removal-set.md) - **open**
+- [2026-08-31 - an allocation failure while judging an epoch is read as a partition](bugs/2026-08-31-epoch-oom-reads-as-disagreement.md)
 
 ### Investigations
 
@@ -148,7 +153,3 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-29 - range reads and open-time discovery on the journal read paths](investigations/2026-08-29-runtime-sweep-journal-read.md)
 - [2026-08-29 - settings key resolution and checkpoint removal sets on the control paths](investigations/2026-08-29-runtime-sweep-settings-checkpoint.md)
 - [2026-08-28 - making `zig build test` faster without dropping tests](investigations/2026-08-28-test-suite-quick-wins.md)
-- [2026-08-30 - a scalar `coppiz.toml` value with unbalanced quotes is stored verbatim, quote included](bugs/2026-08-30-toml-scalar-unbalanced-quote.md)
-- [2026-08-30 - an allowlist-only `[[peers]]` entry is dialed forever at the empty address](bugs/2026-08-30-allowlist-only-peer-dialed-forever.md)
-- [2026-08-30 - a refused `Store.open` leaks the journal state it had already built](bugs/2026-08-30-store-open-refusal-leaks-journal-state.md)
-- [2026-08-30 - an already-removed entry re-enters every later removal set, so an idle journal emits a checkpoint per interval](bugs/2026-08-30-removed-entries-re-enter-the-removal-set.md) - **open**

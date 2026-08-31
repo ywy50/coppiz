@@ -7,6 +7,15 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A member that runs out of memory while judging an `epoch` entry no longer
+  declares a partition against a peer it agrees with. The check that asks
+  whether the claimed leader is the one this member's own liveness view
+  elects allocates a view list, and that allocation's failure was answered
+  with the same `false` a genuine disagreement returns - which the callers
+  resolve by diverging, the path that truncates a committed suffix of this
+  member's chain. The failure now propagates instead of being reported as a
+  protocol fact.
+
 - A refused open of a damaged data directory no longer leaks the journal
   state it had already built. Refusing a corrupt, truncated or
   wrong-version segment lost the journal's index table, its segment list,
