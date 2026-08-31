@@ -42,6 +42,17 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A merge no longer aborts on a re-slotted `join` for a member the survivor
+  already holds. `applyJoinReslotted` delegated verbatim to the live rule, so
+  it answered `already_member` - and `doMergeControl` appends the `merge`
+  entry before it re-slots the branch, so the refusal arrived with the merge
+  already committed and every retry refused in the same place. Two ordinary
+  branch shapes produce such a `join`: a newcomer that could reach both sides
+  of a partition and was admitted by each leader, and a losing branch holding
+  a `leave` and then a rejoin, whose leaves the merge defers. The re-slot is
+  now idempotent for a present member, like a re-slotted `leave`, and still
+  refuses a payload whose member id does not derive from its key.
+
 - `Node.changeSettings` refuses a journal the chain names and the store lost,
   instead of aborting. A journal name resolves through the folded registry
   while the fold map is built from the store's directories, and `init`,

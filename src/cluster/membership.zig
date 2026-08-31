@@ -143,11 +143,30 @@ pub fn applyJoin(
 /// *Partition and merge*: a member admitted on the losing side ends up
 /// junior to everyone admitted on the winning side during the partition,
 /// deterministically.
+///
+/// Idempotent for a member the fold already holds, like
+/// `applyLeaveReslotted`. A newcomer that could reach both sides of a
+/// partition is admitted by both leaders, so the losing branch carries a
+/// second, distinct `join` for an id the survivor already has; a branch that
+/// held `leave X` then `join X` replays the join first, because
+/// `doMergeControl` defers the leaves. Both refused `AlreadyMember`, and the
+/// refusal arrives after the `merge` entry is already on the survivor's
+/// chain, so the heal could never complete and never stop retrying (bug
+/// 2026-08-31-reslotted-join-already-member). The seniority that survives is
+/// the one the merged chain gives, which every member computes identically.
 pub fn applyJoinReslotted(
     fold: *chain.FoldState,
     sl: *const slot.Slot,
     en: *const entry.Entry,
 ) ApplyError!void {
+    const payload = decodeJoinPayload(fold.allocator, en.payload) catch |err|
+        return chain.decodeCatch(err, error.BadControlPayload);
+    defer payload.deinit(fold.allocator);
+    // Checked before the no-op: a re-slot must not smuggle an id that does
+    // not derive from its key past the live rule, present member or not.
+    const derived = chain.deriveMemberId(payload.public_key);
+    if (!std.mem.eql(u8, &payload.member_id, &derived)) return error.BadJoin;
+    if (fold.memberById(payload.member_id) != null) return;
     try applyJoin(fold, sl, en);
 }
 
@@ -973,6 +992,78 @@ test "re-slots validate like live entries: join bad id refused, leave idempotent
         const again = try fix.entryFor(fix.founder, .leave, fix.control_id, 4, &buf);
         const again_sl = try fix.nextSlot(&fold, entry.entryHash(&again), 1003);
         try fold.applyControlReslotted(&again_sl, &again);
+    }
+}
+
+test "a re-slotted join for a member the fold already holds is a no-op" {
+    // Bug 2026-08-31-reslotted-join-already-member: `applyJoinReslotted`
+    // delegated verbatim to `applyJoin`, so a second join for an id already
+    // in the table returned `AlreadyMember`. Two branch shapes produce one:
+    // a newcomer that reached both sides of a partition is admitted by both
+    // leaders, and a branch holding `leave X` then `join X` replays the join
+    // first because `doMergeControl` defers the leaves. The refusal lands
+    // after the `merge` entry is already on the survivor's chain, so the
+    // heal aborts, and the retry refuses identically forever.
+    var fix = Fix.init();
+    var fold = try fix.cluster();
+    defer fold.deinit();
+
+    const info = JoinPayload{
+        .member_id = fix.second_id,
+        .public_key = fix.second.public_key.toBytes(),
+        .address = "10.0.0.2:3939",
+    };
+    const payload = try test_alloc.alloc(u8, joinPayloadLen(info));
+    defer test_alloc.free(payload);
+    encodeJoinPayload(info, payload);
+
+    // The survivor's own admission of the newcomer, live.
+    {
+        const en = try fix.entryFor(fix.founder, .join, fix.control_id, 2, payload);
+        const sl = try fix.nextSlot(&fold, entry.entryHash(&en), 1001);
+        try fold.applyControl(&sl, &en);
+    }
+    const seniority = fold.memberById(fix.second_id).?.seniority;
+    try std.testing.expectEqual(@as(usize, 2), fold.memberCount());
+
+    // The losing branch's own `join` for the same newcomer, re-slotted: a
+    // different admitter sequence and a different advertised address, so it
+    // is a distinct entry rather than a redelivery of the one above.
+    const other = JoinPayload{
+        .member_id = fix.second_id,
+        .public_key = fix.second.public_key.toBytes(),
+        .address = "10.0.0.9:3939",
+    };
+    const other_payload = try test_alloc.alloc(u8, joinPayloadLen(other));
+    defer test_alloc.free(other_payload);
+    encodeJoinPayload(other, other_payload);
+    const en = try fix.entryFor(fix.founder, .join, fix.control_id, 3, other_payload);
+    const sl = try fix.nextSlot(&fold, entry.entryHash(&en), 1002);
+    try fold.applyControlReslotted(&sl, &en);
+
+    // Accepted as a no-op: one member, and the seniority the merged chain
+    // gave it is untouched - every member computes the same one.
+    try std.testing.expectEqual(@as(usize, 2), fold.memberCount());
+    try std.testing.expectEqual(seniority, fold.memberById(fix.second_id).?.seniority);
+    try std.testing.expectEqualStrings(
+        "10.0.0.2:3939",
+        fold.memberById(fix.second_id).?.address,
+    );
+
+    // A forged pairing is still refused, present member or not: the id the
+    // payload names does not derive from the key it carries.
+    {
+        const forged = JoinPayload{
+            .member_id = fix.second_id,
+            .public_key = fix.founder.public_key.toBytes(),
+            .address = "10.0.0.9:3939",
+        };
+        const buf = try test_alloc.alloc(u8, joinPayloadLen(forged));
+        defer test_alloc.free(buf);
+        encodeJoinPayload(forged, buf);
+        const f_en = try fix.entryFor(fix.founder, .join, fix.control_id, 4, buf);
+        const f_sl = try fix.nextSlot(&fold, entry.entryHash(&f_en), 1003);
+        try std.testing.expectError(error.BadJoin, fold.applyControlReslotted(&f_sl, &f_en));
     }
 }
 
