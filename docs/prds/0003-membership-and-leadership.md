@@ -69,8 +69,15 @@ the issue is now pinned rather than intermittent: the losing branch's
 not, keeping its dead branch and its old leader
 ([report](../reports/bugs/2026-08-30-three-member-merge-strands-the-losing-follower.md)).
 The cause is not yet established. The same scenario also records that a
-healed cluster with no writer stays forked: the merge is broadcast-driven,
-and heartbeats carry the peer's head without anything comparing it.
+healed cluster with no writer stays forked - shown since 2026-08-31 by
+running that window with a heartbeat due on every tick and finding two
+branches still standing after 200 of them. The reason first recorded here,
+that heartbeats carry the peer's head without anything comparing it, was
+wrong: `onHeartbeat` compares it and requests a sync when the peer is
+ahead. What is missing is the step from that sync to a merge, so the
+divergence is still only caught when a record fails `prev_slot_hash` -
+which is why a write is what starts the heal (investigation
+[2026-08-31](../reports/investigations/2026-08-31-no-writer-heal-window-proved-nothing.md)).
 Reported rather than silently worked around: the embed-cluster example's
 partition stays short enough to avoid the election.
 

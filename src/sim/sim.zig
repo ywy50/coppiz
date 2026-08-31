@@ -1530,10 +1530,18 @@ test "LoopWorld: a three-member partition elects a second leader and heals" {
     const oio = owned.io();
 
     const admission = schema.keyIndex("cluster.admission").?;
-    const genesis = [_]validate.Change{.{
-        .key = admission,
-        .value = .{ .enum_value = schema.enumValue(admission, "open").? },
-    }};
+    const genesis = [_]validate.Change{
+        .{
+            .key = admission,
+            .value = .{ .enum_value = schema.enumValue(admission, "open").? },
+        },
+        // A heartbeat is due every tick. `onTick` gates sending on
+        // `cluster.heartbeat_ms` of *real* elapsed time and the sim drives
+        // ticks as fast as it can, so at the 1000 ms default a scenario can
+        // run its whole length without one member ever heartbeating
+        // another - which is what the post-heal window below used to do.
+        .{ .key = schema.keyIndex("cluster.heartbeat_ms").?, .value = .{ .u64 = 0 } },
+    };
     var world = try LoopWorld.init(test_alloc, oio, 3, &genesis);
     defer world.deinit();
 
@@ -1581,13 +1589,31 @@ test "LoopWorld: a three-member partition elects a second leader and heals" {
 
     try world.restore(0, 1);
     try world.restore(0, 2);
-    for (0..10) |_| try world.tick();
 
-    // Reconnecting is not enough on its own: after ten ticks with the links
-    // back up, node 0 is still on its epoch-1 branch and nodes 1 and 2 on
-    // their epoch-2 one. Heartbeats carry the peer's head and nothing
-    // compares it, so nothing detects the divergence until a record fails
-    // `prev_slot_hash`.
+    // Reconnecting is not enough on its own, and this window is what says
+    // so. It runs 200 ticks with the links back up and a heartbeat due on
+    // every one of them, and the three nodes are still on two branches at
+    // the end: node 0 on its epoch-1 chain, 1 and 2 on their epoch-2 one.
+    //
+    // The heartbeat traffic is the point. `onHeartbeat` does compare the
+    // peer's head against its own and asks for a sync when the peer is
+    // ahead - the claim that nothing compares it, carried here and in PRD
+    // 0003's status, was wrong. What this pins is that the comparison and
+    // the sync it triggers do not carry the divergence through to a merge:
+    // until a record fails `prev_slot_hash`, the two branches sit there.
+    //
+    // At the 1000 ms default the window proved nothing at all, because no
+    // heartbeat was ever due inside it (investigation
+    // 2026-08-31-no-writer-heal-window-proved-nothing).
+    var converged_without_a_write = false;
+    for (0..200) |_| {
+        try world.tick();
+        if (try world.convergedAmong(&.{ 0, 1, 2 })) {
+            converged_without_a_write = true;
+            break;
+        }
+    }
+    try std.testing.expect(!converged_without_a_write);
     try std.testing.expectEqual(
         @as(u64, 1),
         world.nodes.items[0].cn.node.control.epoch.?.number,
