@@ -1226,7 +1226,15 @@ pub const ClusterNode = struct {
         // slots it awaits come from the leader, and the leader is now this
         // member (sendForward has no leader connection to send to). Slot
         // what is queued before the checkpoint cadence measures anything.
-        if (self.isLeader()) try self.slotQueuedEntries();
+        //
+        // Not while the mode elects nobody: the fold goes on naming this
+        // member as leader through a stall - that is what keeps the view
+        // stable - so `isLeader` alone would let it sequence the entries a
+        // stall exists to hold back, including ones queued before the
+        // authority went away (PRD 0003 *Failure modes*).
+        if (self.isLeader() and !(self.electsNobody() catch false)) {
+            try self.slotQueuedEntries();
+        }
         try self.driveCheckpoints();
         try self.driveBackfill();
         // Seed dials retry until a peer at that address is connected.
@@ -1598,6 +1606,35 @@ pub const ClusterNode = struct {
         return if (self.node.control.epoch) |e| e.number else 0;
     }
 
+    /// Whether the leadership mode currently elects nobody - PRD 0003's
+    /// `fallback = stall`, the CP answer, which "refuses writes instead" of
+    /// letting two leaders sequence two branches.
+    ///
+    /// `election.leader` returns null only there: `seniority` always elects
+    /// among the live members (this member included), and
+    /// `fallback = seniority` degrades to it rather than stalling, so a null
+    /// answer means `configured` or `combined` with no live authority. It is
+    /// deliberately *not* the same question as `isLeader`, which reads the
+    /// fold's epoch: the fold keeps naming the last leader it was told
+    /// about, which is what makes the view stable across a blip, and is why
+    /// the stall has to be asked for separately on the write path.
+    ///
+    /// A member with no chain, or one still backfilling, is not stalled - it
+    /// has no standing to judge liveness yet, and its writes are refused or
+    /// queued on other grounds.
+    fn electsNobody(self: *ClusterNode) !bool {
+        if (self.node.control.epoch == null) return false;
+        if (self.syncing) return false;
+        const inputs = self.electionInputs();
+        const views = try self.viewsFor();
+        defer self.allocator.free(views);
+        return election.leader(inputs, views) == null;
+    }
+
+    /// The refusal name PRD 0003 *Failure modes* gives for a write while the
+    /// mode elects nobody. Reads, follows and backfill are unaffected.
+    const no_leader_refusal = "no_leader";
+
     fn leaderId(self: *ClusterNode) [16]u8 {
         return if (self.node.control.epoch) |e| e.leader else [_]u8{0} ** 16;
     }
@@ -1847,6 +1884,15 @@ pub const ClusterNode = struct {
             refuse(self, a.completion, "too_large");
             return;
         }
+        // The host's write gets the same answer the wire's does: a stall is
+        // a refusal, not a block (PRD 0003 *Failure modes*).
+        if (self.electsNobody() catch |err| {
+            refuse(self, a.completion, clientRefusalName(err));
+            return;
+        }) {
+            refuse(self, a.completion, no_leader_refusal);
+            return;
+        }
         const en = self.signedEntry(.data, jid, a.payload, a.ttl_ms) catch |err| {
             refuse(self, a.completion, clientRefusalName(err));
             return;
@@ -1932,6 +1978,15 @@ pub const ClusterNode = struct {
         const max_bytes = fold.settings.getU64(schema.keyIndex("journal.max_entry_bytes").?);
         if (a.payload.len > max_bytes) {
             try self.ackClient(conn_id, null, "too_large");
+            return;
+        }
+        // Refused before anything is durable: the entry must not sit in the
+        // queue waiting for a leader the mode has decided not to elect.
+        if (self.electsNobody() catch |err| {
+            try self.ackClient(conn_id, null, clientRefusalName(err));
+            return;
+        }) {
+            try self.ackClient(conn_id, null, no_leader_refusal);
             return;
         }
         const en = self.signedEntry(.data, jid, a.payload, a.ttl_ms) catch |err| {
@@ -3234,6 +3289,18 @@ pub const ClusterNode = struct {
             try self.ackClient(conn_id, null, "not_leader");
             return;
         }
+        // A settings change is a write, so the stall covers it too -
+        // including the one an operator would reach for to end the stall.
+        // That is the recorded cost of `reconfigurable` living in the chain:
+        // only a leader can author it, and the offline procedure exists for
+        // exactly this ([RFC 0014](../../docs/rfcs/0014-offline-reconfigure.md)).
+        if (self.electsNobody() catch |err| {
+            try self.ackClient(conn_id, null, clientRefusalName(err));
+            return;
+        }) {
+            try self.ackClient(conn_id, null, no_leader_refusal);
+            return;
+        }
         const changes = settings_fold.decodeChanges(self.allocator, s.changes, null) catch {
             try self.ackClient(conn_id, null, "invalid_settings");
             return;
@@ -4122,6 +4189,39 @@ test "e2e (c): configured leadership with a stall fallback never elects without 
         try std.testing.expect(std.mem.eql(u8, &hb.leader, &a.node.member_id));
         try std.testing.expectEqual(@as(u64, 1), hc.epoch);
         try std.testing.expect(std.mem.eql(u8, &hc.leader, &a.node.member_id));
+    }
+
+    // The other half of G4: the non-authority side *refuses writes*. Both
+    // B and C still name A as leader - the fold does, which is what keeps
+    // the view stable - but neither may sequence anything, and neither may
+    // queue a write against a leader the mode has decided not to elect. PRD
+    // 0003 *Failure modes* names the refusal: `no_leader`.
+    {
+        const rb = try b.client.append("main", "stalled", 0);
+        try std.testing.expectEqualStrings("no_leader", rb.refusal);
+        const rc = try c.client.append("main", "stalled", 0);
+        try std.testing.expectEqualStrings("no_leader", rc.refusal);
+        // A settings change is a write too, including the one that would
+        // end the stall: the offline procedure (OQ 5) exists for that.
+        const mode_key = schema.keyIndex("leadership.mode").?;
+        const changes = [_]validate.Change{.{
+            .key = mode_key,
+            .value = .{ .enum_value = schema.enumValue(mode_key, "seniority").? },
+        }};
+        const len = settings_fold.changesLen(&changes);
+        const buf = try test_alloc.alloc(u8, len);
+        defer test_alloc.free(buf);
+        try settings_fold.encodeChanges(&changes, buf);
+        const rs = try b.client.settings("__cluster__", buf);
+        try std.testing.expect(rs.refusal.len > 0);
+    }
+
+    // The authority's own side is not stalled: A elects itself and its
+    // writes are slotted, so the refusal is the mode's answer about
+    // liveness and not a blanket stop.
+    {
+        const ra = try a.client.append("main", "authority side", 0);
+        try std.testing.expectEqualStrings("", ra.refusal);
     }
 
     // Heal: the same leader holds and everyone converges on it.
