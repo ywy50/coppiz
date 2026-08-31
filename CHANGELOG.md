@@ -50,6 +50,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   disagreeing, and the reopen is clean. Every sibling method already returned
   `unknown_journal` for the same lookup. The same unwrap on the wire path
   (`onSettings`) is recorded in the report and not yet fixed.
+- A member re-arms its heartbeat when the interval it was scheduled under
+  turns out to be longer than the current one. `onTick` read
+  `cluster.heartbeat_ms` from the fold at the moment it sent and honoured the
+  answer only when that instant arrived, so a joiner - which has no chain on
+  its first tick, and therefore no folded settings - armed a beat from the
+  schema default of 1000 ms and stayed silent for it. A cluster whose
+  `cluster.suspect_after_ms` is under a second suspected and disconnected
+  every member it admitted, before the newcomer could finish backfilling, and
+  evicted it where `membership.evict_after_ms` was set. Lowering
+  `cluster.heartbeat_ms` live had the same lag for every member.
 
 - A refused `Store.open` closes the data directory handle it was given. The
   call documents that it takes ownership, but only `deinit` closed the
