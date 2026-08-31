@@ -404,6 +404,10 @@ join-order mechanism), clanker PRD 0011 (admission modes, reused as design).
   non-authority side queued the write and left the caller waiting for an
   unreachable leader, and a leader the new authority list no longer named
   went on sequencing.
+  Not covered: the forward path has no refusal reply at all, so an entry a
+  member queued and forwarded *before* the stall began stays in its queue
+  with its caller waiting. Closing that needs a refusal on the `forward`
+  message, which is a wire change.
 - [ ] (G5) A `syncing` member is never returned by `leader(...)` in any
   liveness subset (table test).
 - [ ] (G6) E2E (d) in both `reconfigurable` states.
