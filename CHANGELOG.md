@@ -85,6 +85,21 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- `Hub` no longer destroys a listener under an in-flight accept.
+  `HubListener.closeFn` retired the listener's `Endpoint` rather than
+  destroying it - a dial may still be inside `pushConn` - but then ran
+  `destroy(self)` on the listener itself, and `acceptFn` dereferences the
+  listener to reach that endpoint. An accept already scheduled on another
+  thread therefore read freed memory, segfaulting inside `acceptFn`: the
+  unmodified parent crashed 2 times in 200 runs of the transport tests, which
+  is how it reached `main` past several green gates. The listener is now
+  retired into `hub.retired_listeners` and freed at `Hub.deinit`, with the slot
+  reserved in `listen` so the append at close cannot fail, and `Listener.close`
+  documents that no implementation may free the listener out from under an
+  accept in flight. `Hub` is the in-memory transport for the tests and the
+  simulator, so the effect was on the gate rather than on production, whose
+  path is `TcpConn`/`TcpListener`.
+
 - `ClusterNode.syncing` is a `std.atomic.Value(bool)` rather than a plain
   `bool`, read and written through `isSyncing`/`setSyncing` with `monotonic`
   ordering. The suite's backfill waits poll it from the test thread while the

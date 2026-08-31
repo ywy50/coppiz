@@ -68,7 +68,12 @@ pub const Listener = struct {
         return self.accept_fn(self.ctx, io);
     }
 
-    /// The sole destructor, and safe exactly once: it frees the listener.
+    /// The sole destructor, and safe exactly once. An implementation may
+    /// not free the listener out from under an `accept` that is already in
+    /// flight: `accept_fn` dereferences `ctx` before it reaches anything
+    /// else, so a close racing a blocked accept would hand that read freed
+    /// memory. The accept must instead observe the close and refuse
+    /// (bug 2026-08-31-hub-listener-freed-under-accept).
     pub fn close(self: *const Listener, io: std.Io) void {
         self.close_fn(self.ctx, io);
     }
@@ -545,6 +550,12 @@ pub const Hub = struct {
     /// dial that looked one up a moment earlier may still be inside it.
     /// The hub outlives every dial, so it frees them at `deinit`.
     retired: std.ArrayListUnmanaged(*Endpoint) = .empty,
+    /// Listeners that have closed, for the same reason as `retired`, one
+    /// hop earlier: `HubListener.acceptFn` dereferences the listener before
+    /// it reaches the endpoint, so destroying it in `closeFn` freed the
+    /// object an in-flight accept was about to read. `listen` reserves the
+    /// slot, so retiring one at close cannot fail.
+    retired_listeners: std.ArrayListUnmanaged(*HubListener) = .empty,
 
     pub const Endpoint = struct {
         allocator: std.mem.Allocator,
@@ -609,6 +620,11 @@ pub const Hub = struct {
             self.allocator.destroy(ep);
         }
         self.retired.deinit(self.allocator);
+        for (self.retired_listeners.items) |l| {
+            self.allocator.free(l.address);
+            self.allocator.destroy(l);
+        }
+        self.retired_listeners.deinit(self.allocator);
         var dit = self.dropped.keyIterator();
         while (dit.next()) |key| self.allocator.free(key.*);
         self.dropped.deinit(self.allocator);
@@ -660,6 +676,11 @@ pub const Hub = struct {
         };
         const key = try self.allocator.dupe(u8, address);
         errdefer self.allocator.free(key);
+        // Reserve the retirement slot now: `closeFn` returns void and has
+        // no way to report a failed append, and falling back to destroying
+        // the listener there is the use-after-free this list exists to
+        // prevent.
+        try self.retired_listeners.ensureUnusedCapacity(self.allocator, 1);
         // Last fallible step: once the map owns `ep` no errdefer above may
         // fire, or `Hub.deinit` would destroy an endpoint already freed.
         try self.endpoints.put(self.allocator, key, ep);
@@ -793,17 +814,26 @@ const HubListener = struct {
             _ = self.hub.endpoints.remove(self.address);
             self.hub.allocator.free(key);
         }
+        // Retire the listener rather than destroy it. `acceptFn` reads
+        // `self.endpoint` off this object, so a concurrent accept that has
+        // been scheduled but has not yet taken that field would read freed
+        // memory - the endpoint retirement above protects the second hop of
+        // the accept path and this protects the first. The slot was reserved
+        // in `listen`, so the append cannot fail.
+        {
+            self.hub.mutex.lockUncancelable(io);
+            defer self.hub.mutex.unlock(io);
+            self.hub.retired_listeners.appendAssumeCapacity(self);
+        }
         // The endpoint's `closed` is read under the endpoint mutex by pushConn and
         // acceptConn; a close racing an accept/dial must not be a data race.
-        // Capture the mutex before `self` is destroyed below. The hub lock is
-        // released above: it is never held across an `Endpoint` call.
+        // The hub lock is released above: it is never held across an
+        // `Endpoint` call.
         const ep_mutex = &self.endpoint.mutex;
         ep_mutex.lockUncancelable(io);
         defer ep_mutex.unlock(io);
         self.endpoint.closed = true;
         self.endpoint.sem.post(io);
-        self.hub.allocator.free(self.address);
-        self.hub.allocator.destroy(self);
     }
 };
 
@@ -1117,6 +1147,38 @@ fn hubRound(failing: std.mem.Allocator) !void {
     if (dialer.connect(tio, failing, "node-a")) |conn| {
         conn.close(tio);
     } else |_| {}
+}
+
+test "a closed hub listener is still readable by an accept that races the close" {
+    // Bug 2026-08-31-hub-listener-freed-under-accept: `closeFn` retired the
+    // endpoint but ran `destroy(self)` on the listener, and `acceptFn`
+    // dereferences the listener to reach that endpoint. A close racing a
+    // scheduled-but-not-yet-running accept therefore freed the object the
+    // accept was about to read, segfaulting in `acceptFn`.
+    //
+    // The race itself is not schedulable from a test - `Io.Group.async` may
+    // run the task eagerly on the calling thread, which serialises it. The
+    // invariant is the testable part: after `close`, the listener is still
+    // live memory and `accept` observes the close and refuses.
+    var hub = Hub.init(test_alloc);
+    defer hub.deinit(tio);
+    var listener = try hub.listen(tio, test_alloc, "node-a");
+    listener.close(tio);
+    try std.testing.expectError(error.ConnectionRefused, listener.accept(tio));
+}
+
+test "a retired hub listener is freed once, at hub deinit" {
+    // The retirement must not turn the old free into a leak: `test_alloc`
+    // reports one if the listener or its address outlives `hub.deinit`.
+    var hub = Hub.init(test_alloc);
+    var l1 = try hub.listen(tio, test_alloc, "node-a");
+    var l2 = try hub.listen(tio, test_alloc, "node-b");
+    l1.close(tio);
+    l2.close(tio);
+    // The address is free to re-listen on once its listener has closed.
+    var l3 = try hub.listen(tio, test_alloc, "node-a");
+    l3.close(tio);
+    hub.deinit(tio);
 }
 
 test "hub connect and listen never double-free on allocation failure" {
