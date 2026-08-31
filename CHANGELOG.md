@@ -16,6 +16,18 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- An allocation failure while folding a `genesis` or a `create_journal` is
+  fatal again rather than a settings refusal. Three apply-side call sites
+  flattened every failure into `invalid_settings`, `OutOfMemory` included,
+  so one member short of memory rejected an entry every other member
+  accepted and diverged from them silently. The decode side of the same two
+  entry kinds was fixed for this in
+  `2026-08-28-sweep3-decode-oom-mapped-to-refusal`; the apply side now uses
+  the mapper that was already written for it.
+  The same fold no longer leaks the journal name when the registry insert
+  fails: the dupe was evaluated as an argument to `put`, so an allocation
+  failure in the map's own growth orphaned it.
+
 - An entry payload whose last 38 bytes spell a seal trailer no longer bricks
   the store. A segment record ends with its entry's payload, and the seal
   check read the file's last 38 bytes without cross-checking them against the
