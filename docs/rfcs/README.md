@@ -65,3 +65,4 @@ explores whether and how to build one (OQ 41).
 | [0037](0037-write-ack-layer.md) | Discussion | `write.ack`: the `local` variant and its layer (OQ 3) |
 | [0038](0038-sync-knobs-layer.md) | Discussion | The `sync.*` knobs: layer and values (OQ 56) |
 | [0039](0039-observability-metrics-logs.md) | Discussion | Observability: metrics format and log destination (OQ 29) |
+| [0040](0040-gating-record-accuracy-and-flaky-tests.md) | Discussion | Gating record accuracy and flaky tests: what the gate should assert about a `Resolved` report and a 1% race |
