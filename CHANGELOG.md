@@ -7,6 +7,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- Closing a listener on the in-memory hub transport now frees its address.
+  The close marked the endpoint closed - so it correctly refused dials and
+  woke its accept - but left it registered, and `listen` refuses an address
+  the registry still holds. An address could therefore be listened on once
+  per hub, which is what a restarting member needs to do twice. Affects the
+  test and simulator fabric only; a TCP listener gets its port back from the
+  operating system.
+
 - A malformed settings payload no longer sizes an allocation from a count
   nothing has checked. The change list begins with a u16 count, and the
   decoder allocated for it before establishing that the body could hold
