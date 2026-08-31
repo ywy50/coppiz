@@ -4,11 +4,21 @@
 
 - **What failed:** The merge re-slot stamps `slot_ts_ms = self.nowMs()` unclamped, while the normal slot path clamps to the fold's `last_slot_ts_ms`. A leader clock that regressed between the last write and the heal produces a re-slotted record older than the fold's head, refused by `checkChainContinuity`.
 - **Impact:** The heal stalls permanently under a backwards clock - the exact condition the clamp exists for.
-- **Resolution:** Still open. Statically validated.
+- **Resolution:** Fixed. Re-verified in the tree 2026-08-31: `reslot` clamps the slot timestamp to the target fold's last, like the live slot path.
 
 ## Status
 
 Resolved.
+
+**Verified in the tree 2026-08-31.** This record was one of the 29 flipped
+to `Resolved` by `8893ae1` ("docs(reports): mark the sweep fixes resolved
+(#116)"), a commit that touched 29 report files and no source file, and it
+kept a TL;DR reading "Still open" and a `Fix: none` reference line. Both
+were stale, not evidence: the fix is present.
+
+`reslot` (`src/cluster/node.zig`) sets `.slot_ts_ms = @max(self.nowMs(),
+last_ts)` and names this report in the comment, matching `slotFor`'s
+`@max(now_ms, fold.last_slot_ts_ms)`.
 
 ## Symptom and impact
 
@@ -37,4 +47,4 @@ None. Low priority (narrow trigger).
 ## References
 
 - Code: `src/cluster/node.zig:2397-2409` (`reslot`), `src/journal/journal.zig:479` (live clamp), `src/journal/chain.zig:427-429` (`BadTimestamp`)
-- Fix: none
+- Fix: in the tree - `src/cluster/node.zig` `reslot` (the `@max(self.nowMs(), last_ts)` clamp)

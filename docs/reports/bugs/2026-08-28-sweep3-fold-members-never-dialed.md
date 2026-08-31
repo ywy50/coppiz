@@ -4,11 +4,22 @@
 
 - **What failed:** `syncMembersFromFold` adds fold-learned members with `dial_at_ms = 0`, and the `onTick` dial branch requires `dial_at_ms != 0`. `bootstrapDial` covers only members present at startup. So no first dial is ever scheduled for a member that joined after this node started.
 - **Impact:** The topology is a star around each member's configured seeds, not the full mesh [PRD 0006](../../prds/0006-scaling-to-groups-sharding-and-parity.md) (2–32 members) describes. Pairs that never shared a connection never connect; when the founder dies, the healthy remaining members never see each other's heartbeats, self-elect independently (N divergent branches instead of one agreed leader), and heal only when the founder returns.
-- **Resolution:** Still open. Statically validated.
+- **Resolution:** Fixed. Re-verified in the tree 2026-08-31: `syncMembersFromFold` sets `ms.dial_at_ms` for a fold-learned member this node should dial, so the tick's dial branch reaches it.
 
 ## Status
 
 Resolved.
+
+**Verified in the tree 2026-08-31.** This record was one of the 29 flipped
+to `Resolved` by `8893ae1` ("docs(reports): mark the sweep fixes resolved
+(#116)"), a commit that touched 29 report files and no source file, and it
+kept a TL;DR reading "Still open" and a `Fix: none` reference line. Both
+were stale, not evidence: the fix is present.
+
+`syncMembersFromFold` (`src/cluster/node.zig`) creates a fold-learned member
+with `ms.dial_at_ms = self.elapsedMs() + ms.backoff_ms` when
+`shouldDial(member.id)`, and names this report in the comment. The `onTick`
+dial branch's `dial_at_ms != 0` precondition is therefore established.
 
 ## Symptom and impact
 
@@ -50,4 +61,4 @@ None beyond the fix. Availability/divergence defect; merges do converge once a c
 ## References
 
 - Code: `src/cluster/node.zig:486-506` (`syncMembersFromFold`), `:645-662` (`bootstrapDial`), `:864-868` (`onTick` dial branch)
-- Fix: none
+- Fix: in the tree - `src/cluster/node.zig` `syncMembersFromFold` (the `shouldDial` / `dial_at_ms` branch)

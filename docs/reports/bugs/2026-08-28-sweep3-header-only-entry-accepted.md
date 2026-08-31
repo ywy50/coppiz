@@ -4,7 +4,7 @@
 
 - **What failed:** Any record whose body is exactly `slot + header` with `payload_len > 0` decodes as the compacted shape, and nothing verifies that shape is a genuine checkpoint compaction: the payload hash is skipped for omitted payloads, the size guard checks `payload.len` (0), and the slot's `entry_hash` (which pins the true content) is never cross-checked against the entry.
 - **Impact:** A misbehaving peer can deliver payload-stripped records (or forge header-only entries with arbitrary `payload_len`/`payload_hash`) that every fold accepts as live: payloads silently vanish, and the `max_entry_bytes` cap is bypassed.
-- **Resolution:** Still open. Statically validated (corroborated by two independent reviews).
+- **Resolution:** Fixed. Re-verified in the tree 2026-08-31: `onForward` refuses a `payload_omitted` entry and `onSlot` refuses a non-re-slotted one, with the named regression test present.
 
 ## Status
 
@@ -15,6 +15,18 @@ exists in any apply path. Such a cross-check would in fact be wrong for
 legitimate compactions, whose slot `entry_hash` pins the pre-compaction
 bytes the header alone cannot reproduce; the correct boundary is the wire,
 where a live entry always has its payload.)
+
+**Verified in the tree 2026-08-31.** The Status above was amended on
+2026-08-30 and is accurate; the TL;DR and the References line were not, and
+still read "Still open" and `Fix: none` from `8893ae1` ("docs(reports): mark
+the sweep fixes resolved (#116)"), which touched 29 report files and no
+source file. Both are stale, not evidence: the fix is present.
+
+Both wire guards are in `src/cluster/node.zig` and name this report:
+`onForward` closes the connection on `en.payload_omitted`, and `onSlot`
+closes it on `!m.reslotted and en.payload_omitted`. The test "a
+compacted-shaped forward is refused: payload_omitted is never live" is
+present and passing.
 
 ## Symptom and impact
 
@@ -58,4 +70,4 @@ The same gap weakens the compaction invariant: a stripped record persisted as "l
 ## References
 
 - Code: `src/journal/segment.zig:151-156`, `src/journal/entry.zig:211-225`, `src/journal/chain.zig:413, 471-475`, `src/cluster/node.zig:1968, 1980-1986`, `src/journal/journal.zig:574`
-- Fix: none
+- Fix: in the tree - `src/cluster/node.zig` `onForward` and `onSlot` (the `payload_omitted` guards) and their regression test

@@ -4,11 +4,22 @@
 
 - **What failed:** `journal.max_entry_bytes` defaults to 16 MB but the wire frame cap is 8 MB (`framing.max_body_bytes`). A payload in (≈8 MB, 16 MB] is accepted and slotted, then every replication path fails: the slot broadcast is dropped, sync pages and wire reads close the connection, and a joiner's backfill never completes.
 - **Impact:** Accepted appends that no member ever receives (leader-side acked but replicated to nobody; follower-side clients hang unacked); a follower that misses the broadcast enters an infinite reconnect loop; backfill never terminates; `coppiz read` over the wire fails while the local read works.
-- **Resolution:** Still open. Statically validated.
+- **Resolution:** Fixed. Re-verified in the tree 2026-08-31: the frame cap clears the 16 MiB `max_entry_bytes` default by 1 MiB, and `validateState` refuses a setting that would not fit a frame.
 
 ## Status
 
 Resolved.
+
+**Verified in the tree 2026-08-31.** This record was one of the 29 flipped
+to `Resolved` by `8893ae1` ("docs(reports): mark the sweep fixes resolved
+(#116)"), a commit that touched 29 report files and no source file, and it
+kept a TL;DR reading "Still open" and a `Fix: none` reference line. Both
+were stale, not evidence: the fix is present.
+
+`framing.max_body_bytes` is `16 * 1024 * 1024 + 1024 * 1024` and names this
+report in its doc comment; `validate.zig` refuses `journal.max_entry_bytes >
+max_body_bytes - 4096`, with the test "max_entry_bytes must leave room for
+the record in a frame" naming this report.
 
 ## Symptom and impact
 
@@ -43,4 +54,4 @@ The frame cap is also the floor for the sync-page "first record always encoded" 
 ## References
 
 - Code: `src/net/framing.zig:25,31,48`, `src/settings/schema.zig:66,174`, `src/cluster/node.zig:1115-1130, 1132-1141, 1552-1590`, `src/net/transport.zig:31` (`OversizedFrame`)
-- Fix: none
+- Fix: in the tree - `src/net/framing.zig` `max_body_bytes`; `src/settings/validate.zig` (the `max_entry_bytes` room check and its test)

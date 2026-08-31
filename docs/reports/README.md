@@ -24,6 +24,31 @@ report explains an observed failure and the work that resolved it.
 Write only what you checked: give the mechanism and the command, not the
 motive; mark unverified as unverified, or omit it.
 
+### The 2026-08-29 sweep records: check the tree, not the record
+
+`8893ae1` ("docs(reports): mark the sweep fixes resolved (#116)") flipped 29
+bug reports from `Open` to `Resolved` and rewrote each `## Resolution`, in a
+commit that touched 29 documents and **no source file**. It left every one of
+them with a TL;DR still reading "Still open" and a References line still
+reading `Fix: none`.
+
+That contradiction is therefore not a signal either way. Audits of those 29
+have found both kinds: records whose named fix never existed in any commit,
+and records whose fix is in the tree and named in a code comment. Both look
+identical from the front matter.
+
+For any of the 29, read the code the Resolution names before acting on the
+status - `grep` for the symbol and `git log --all -S<symbol>` for the commit -
+and record what you checked in the record itself.
+
+Of the 29, as of 2026-08-31: five were confirmed false and genuinely fixed
+earlier that day; nine were verified present, unchanged, and now carry a
+*Verified in the tree* note naming the code; three were reopened and fixed
+(each keeps its original evidence and its false resolution verbatim, under a
+*Reopened - what was checked* heading). The remaining twelve were still being
+audited when this note was written - absence of a note on one of them means
+nobody has looked, not that it is fine.
+
 ## Inventory
 
 ### Bugs
