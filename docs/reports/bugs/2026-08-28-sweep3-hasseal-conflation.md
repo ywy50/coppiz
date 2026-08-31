@@ -4,7 +4,7 @@
 
 - **What failed:** `hasSeal` returns `false` for *any* failure - including a present seal trailer whose hash does not verify. The caller then treats the segment as unsealed and the 38-byte trailer becomes part of the scanned record region.
 - **Impact:** A damaged final record (or damaged trailer) of a sealed segment silently truncates acknowledged, fsynced records - the exact case the mid-file corruption rule (G3) exists to refuse. Sealed records were acknowledged past `local`, so the module's own "torn tail = unacknowledged" invariant is violated.
-- **Resolution:** Still open. Statically validated.
+- **Resolution:** Fixed in `773af4d`; refined by `13d5a39`. Originally validated statically.
 
 ## Status
 
@@ -42,4 +42,15 @@ Related storage-path defects reported separately: `truncate`'s errdefer double-c
 ## References
 
 - Code: `src/journal/store.zig:748-761` (`hasSeal`), `:698-728` (`loadJournal`), `:984` (G3 test)
-- Fix: none
+- Fix: `773af4d` - `store.zig` gained the tri-state `sealStatus` (`absent` /
+  `valid` / `corrupt`), `loadJournal` refuses `error.Corrupt` on `.corrupt`,
+  and the test "a sealed segment whose seal hash does not verify refuses to
+  open" damages a sealed trailer.
+- Refined by `13d5a39` (`2026-08-31-payload-tail-mimics-seal-trailer`): a
+  trailer that does not verify is only damage if the records region excluding
+  it decodes as a whole number of records, because an entry payload's last 38
+  bytes are author-chosen and can spell a seal trailer.
+- Re-checked 2026-08-31: the code and the test are both present. The
+  "Still open" TL;DR line and the `Fix: none` reference above were left
+  behind by `8893ae1`, which flipped 29 reports to `Resolved.` in a docs-only
+  commit and did not update either line. The fix itself is real.

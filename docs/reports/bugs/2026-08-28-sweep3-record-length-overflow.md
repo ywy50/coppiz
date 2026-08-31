@@ -4,7 +4,7 @@
 
 - **What failed:** `segment.decodeRecord` computes `record_prefix_len + body_len` in u32; a `body_len ≥ 0xFFFFFFF8` wraps the sum, passes the bounds check, and produces a start > end slice - a panic in Debug/ReleaseSafe, an out-of-bounds read in ReleaseFast.
 - **Impact:** Remote crash/DoS from any TCP peer (the prefix is attacker-controlled and the 8 MiB frame cap does not constrain it), plus a local panic on a bit-flipped length prefix in a segment or queue file, instead of the intended `Truncated`/`Corrupt`.
-- **Resolution:** Still open. Statically validated; the u32 coercion was verified empirically.
+- **Resolution:** Fixed in `773af4d` (`decodeRecord`) and `1d89a56` (the u16 sibling). Originally validated statically; the u32 coercion was verified empirically.
 
 ## Status
 
@@ -49,4 +49,16 @@ None beyond the fix - this is the same class as the fuzz-test invariant ("untrus
 ## References
 
 - Code: `src/journal/segment.zig:143-147`, `src/journal/queue.zig:239-243`, `src/journal/store.zig:312`, `src/journal/chain.zig:999`, `src/net/message.zig:350`
-- Fix: none
+- Fix: `773af4d` - `segment.decodeRecord` computes
+  `@as(usize, body_len) + record_prefix_len` and slices against that, with
+  the test "a length prefix near max u32 is Truncated, not a wrap-around
+  slice". `queue.zig`, `store.read` and the wire decode sites all route
+  through `decodeRecord`, so they are covered by the same widening.
+- Fix, u16 sibling: `1d89a56` (merged as `dcd9c67`, PR #122) -
+  `decodeCreateJournalPayload` computes `@as(usize, name_len) + 18`, with the
+  test "a create_journal name_len near max u16 is refused, not an overflowing
+  sum". Filed there as `2026-08-29-entry-decode-payload-len-overflow`.
+- Re-checked 2026-08-31: both widenings and both tests are present. The
+  "Still open" TL;DR line and the `Fix: none` reference above were left
+  behind by `8893ae1`, which flipped 29 reports to `Resolved.` in a docs-only
+  commit and did not update either line. The fix itself is real.
