@@ -76,6 +76,14 @@ pub const Kind = enum(u16) {
 /// An entry id: `(author, author_seq)`, stable forever — across merges and
 /// restarts (glossary). A `stale` mark names its target by this, never by
 /// entry hash, because the id carries the author.
+///
+/// It identifies an entry *within one journal*, and only there: `author_seq`
+/// is a dense per-(author, journal) counter starting at 1 (PRD 0001), so one
+/// author's first entry in every journal shares the id `(author, 1)`. Every
+/// use in this module and in `chain.zig` is inside a single journal's fold,
+/// where that is exactly the identity wanted. Anything that spans journals -
+/// the node's pending-ack and pending-completion maps, a lookup that walks
+/// every fold - must carry the journal too: `ScopedId`.
 pub const Id = struct {
     author: [16]u8,
     author_seq: u64,
@@ -89,6 +97,16 @@ pub const Id = struct {
             .eq => a.author_seq < b.author_seq,
         };
     }
+};
+
+/// An entry id with the journal it belongs to: the identity that is unique
+/// across a member's journals, where `Id` alone is not. Nothing on the wire
+/// or on disk carries it - both already name the journal beside the id - so
+/// it exists for in-memory maps and lookups whose scope is the member rather
+/// than one chain (bug 2026-08-31-entry-id-not-journal-scoped).
+pub const ScopedId = struct {
+    journal: [16]u8,
+    id: Id,
 };
 
 /// A decoded entry. `payload` borrows from the bytes handed to `decode`; an
@@ -117,6 +135,11 @@ pub const Entry = struct {
 
     pub fn id(self: *const Entry) Id {
         return .{ .author = self.author, .author_seq = self.author_seq };
+    }
+
+    /// The id with this entry's journal: what a map spanning journals keys on.
+    pub fn scopedId(self: *const Entry) ScopedId {
+        return .{ .journal = self.journal, .id = self.id() };
     }
 
     pub fn isControl(self: *const Entry) bool {

@@ -14,7 +14,8 @@ record. When a PRD needs a new term, add it here in the same commit.
 | **genesis** | the control entry that creates the cluster and its first journal; carries the initial settings and the founder's key; its slot gives the founder seniority 0 | PRD 0001 |
 | **journal** | one named, append-only sequence of slots with its own settings ("schema"); a cluster holds many; a log of slots, not a financial ledger - consumers fold it into whatever view they need. Renamed from "ledger" 2026-08-27; the brief's word, kept there and in verbatim citations | PRD 0001 |
 | **entry** | what an author writes: a fixed, author-signed header plus an opaque payload; immutable; identified by `(author, author_seq)` | PRD 0001 |
-| **entry id** | `(author, author_seq)`; stable forever, across merges and restarts | PRD 0001 |
+| **entry id** | `(author, author_seq)`; stable forever, across merges and restarts. Unique within one journal, not across them: `author_seq` counts per (author, journal), so one author's first entry in every journal shares the id `(author, 1)` | PRD 0001 |
+| **journal-scoped entry id** | an entry id with the journal it belongs to; the identity anything spanning a member's journals must key on (`entry.ScopedId`). Nothing on the wire or on disk carries it - both already name the journal beside the id | PRD 0001 |
 | **author** | the member that signed an entry | PRD 0001 |
 | **author_seq** | the author's per-journal counter; gives the entry its id | PRD 0001 |
 | **payload** | the bytes a consumer stores; coppiz never interprets them | PRD 0001 |
