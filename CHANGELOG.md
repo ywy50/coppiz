@@ -16,6 +16,16 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A malformed `leadership.authorities` value no longer sizes an allocation
+  from a count nothing has checked. A `string_list` value begins with a u16
+  item count, and the value decoder allocated for it before establishing that
+  the value could hold that many items - so two bytes claiming 65,535 items
+  committed 65,535 slices for a decode that was refused on its first
+  iteration. This is the sibling of the change-list count fixed alongside it:
+  that bound is in `fold.decodeChanges`, this one in `schema.decodeValue`, and
+  the two are reached by every settings decode - a `settings` entry, a
+  genesis's initial settings, and a `create_journal`'s journal settings.
+
 - A frame's body is read and committed as it arrives rather than allocated
   from the length its header declares. A connection that announced a 17 MiB
   frame and then sent none of it held 17 MiB until it closed, and the header

@@ -487,6 +487,18 @@ pub fn decodeValue(
         .string_list => blk: {
             if (bytes.len < 2) return error.InvalidLength;
             const count = std.mem.readInt(u16, bytes[0..2], .little);
+            // Size the allocation against what the body could actually hold,
+            // not against the count it claims: every item carries at least
+            // its own u16 length prefix, so a body shorter than
+            // `2 + count * 2` is malformed however the rest of it decodes.
+            // The per-item bounds check below reaches that conclusion anyway
+            // - after committing up to 65,535 slices on the strength of two
+            // bytes. Same shape as bug
+            // 2026-08-31-settings-count-before-bounds one level up, which
+            // fixed only the change-list count (bug
+            // 2026-08-31-settings-value-count-before-bounds).
+            const min_bytes = 2 + @as(usize, count) * 2;
+            if (bytes.len < min_bytes) return error.InvalidLength;
             const items = try allocator.alloc([]const u8, count);
             // A refusal after some items were duped must free them too, not
             // just the outer array (bug 2026-08-29-decode-value-string-list-leak).
@@ -738,6 +750,28 @@ test "decodeValue string_list frees partially-duped items on refusal" {
     @memcpy(buf[4..12], "aaaaaaaa"); // item 0
     std.mem.writeInt(u16, buf[12..14], 100, .little); // item 1 length overruns
     try std.testing.expectError(error.InvalidLength, decodeValue(allocator, key, &buf));
+}
+
+test "a string_list item count is sized against the body, not trusted from it" {
+    // Bug 2026-08-31-settings-value-count-before-bounds: the item count was
+    // read out of the first two bytes and allocated for before anything
+    // established that the body could hold that many items. The failing
+    // allocator is what states the defect precisely - reaching it at all
+    // means memory was asked for before the input had earned any.
+    const key: u16 = keyIndex("leadership.authorities").?;
+    const body = [_]u8{ 0xff, 0xff };
+    try std.testing.expectError(
+        error.InvalidLength,
+        decodeValue(std.testing.failing_allocator, key, &body),
+    );
+    // One item's worth of length prefix is still not enough for two items.
+    var two: [4]u8 = undefined;
+    std.mem.writeInt(u16, two[0..2], 2, .little);
+    std.mem.writeInt(u16, two[2..4], 0, .little);
+    try std.testing.expectError(
+        error.InvalidLength,
+        decodeValue(std.testing.failing_allocator, key, &two),
+    );
 }
 
 test "unknown keys are not in the table" {
