@@ -420,10 +420,21 @@ pub const Node = struct {
         const buf = try self.allocator.alloc(u8, settings_fold.payloadLen(payload));
         defer self.allocator.free(buf);
         try settings_fold.encodePayload(payload, buf);
+        // A name resolves through `control.journals` (the folded registry)
+        // while the fold map is built from the store's directories, so the
+        // two can name different sets: `init` and `createJournal` append the
+        // `create_journal` control record before creating the directory, and
+        // `applyReplicated` folds it before `ensureJournalDir`. A crash or an
+        // I/O failure in that window leaves a journal the chain knows and the
+        // store does not - and the reopen is clean, because discovery
+        // enumerates directories. Unwrapping there aborted the process on
+        // ordinary input; every sibling (`append`, `markStale`,
+        // `checkpointForBroadcast`, `applyReplicated`) already refuses (bug
+        // 2026-08-31-change-settings-unwraps-a-missing-journal).
         const target: *chain.FoldState = if (is_control)
             &self.control
         else
-            &self.journals.get(journal_id).?.fold;
+            &(self.journals.get(journal_id) orelse return error.UnknownJournal).fold;
         try self.appendControl(.settings, buf, target);
     }
 
@@ -1454,6 +1465,47 @@ test "settings change live and fold identically across reopen" {
         node2.journalSettings(jid).?.getU64(ttl_default),
     );
     try std.testing.expectEqualSlices(u8, &before, &(try node2.control.hash(test_alloc)));
+}
+
+test "a journal the chain names but the store lost is refused, not unwrapped" {
+    // Bug 2026-08-31-change-settings-unwraps-a-missing-journal: a name
+    // resolves through the folded registry (`control.journals`) while the
+    // fold map is built from the store's directories, so the two can name
+    // different sets - `init` and `createJournal` append the
+    // `create_journal` control record before creating the directory, and
+    // `applyReplicated` folds it before `ensureJournalDir`. `changeSettings`
+    // was the one method that unwrapped the lookup instead of refusing, so
+    // it aborted the process where `append` and `markStale` return
+    // `UnknownJournal`.
+    var env = TestEnv.init();
+    defer env.deinit();
+    test_now = 1_700_000_000_000;
+
+    {
+        const data_dir = try env.dataDir();
+        try init(test_alloc, tio, data_dir, &.{}, "main", &fakeClock);
+    }
+    const jid = blk: {
+        const node = try openNode(&env);
+        defer node.deinit();
+        break :blk node.journalIdByName("main").?;
+    };
+
+    // The store loses the journal's directory; the control chain still names
+    // it. This is the shape a crash in the create window leaves behind, and
+    // the reopen is clean because discovery enumerates directories.
+    const dir_path = try std.fmt.allocPrint(test_alloc, "data/{x}", .{jid});
+    defer test_alloc.free(dir_path);
+    try env.tmp.dir.deleteTree(tio, dir_path);
+
+    const node = try openNode(&env);
+    defer node.deinit();
+    try std.testing.expect(node.journalIdByName("main") != null);
+    try std.testing.expectError(error.UnknownJournal, node.append(jid, "x", 0));
+
+    const ttl_default = schema.keyIndex("ttl.default_ms").?;
+    const changes = [_]validate.Change{.{ .key = ttl_default, .value = .{ .u64 = 5000 } }};
+    try std.testing.expectError(error.UnknownJournal, node.changeSettings(jid, &changes));
 }
 
 test "stale marks hide the entry from default reads; include_stale shows it (G5, G7)" {
