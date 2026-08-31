@@ -67,6 +67,18 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A member appending to two journals no longer loses one of the two writes'
+  answers. `author_seq` is a per-(author, journal) counter, so an entry id
+  `(author, author_seq)` repeats across journals - a member's first entry in
+  every journal it writes to is `(author, 1)`. The node's pending-ack and
+  pending-completion maps were keyed on that id alone, so the second journal's
+  append replaced the first journal's waiter: an embedded host's `localAppend`
+  blocked until shutdown while the other host woke naming the wrong entry, and
+  a wire client's ack went to the other client's connection. Both maps, and
+  the ack's position lookup, now key on the journal and the id together.
+  Nothing on the wire or on disk changes - the `ack` still carries the bare
+  id, and every encoded form already names the journal beside it.
+
 - A cancelled `localReadRange` frees the range the loop copied for it. The
   embedded host's read blocks on its completion while the loop copies every
   visible record in, and those copies - the record list plus one allocation
