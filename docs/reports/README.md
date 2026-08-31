@@ -149,6 +149,8 @@ motive; mark unverified as unverified, or omit it.
 - [2026-08-31 - an allocation failure while folding genesis or create_journal is read as a settings refusal](bugs/2026-08-31-apply-side-oom-read-as-a-refusal.md)
 - [2026-08-31 - a `create_journal` fold leaks the journal name when the registry insert fails](bugs/2026-08-31-create-journal-name-leaks-on-put-failure.md)
 - [2026-08-31 - a refused `Store.open` leaks the data directory descriptor it was handed](bugs/2026-08-31-store-open-leaks-the-data-dir-on-refusal.md)
+- [2026-08-31 - `changeSettings` unwraps a journal the chain names and the store lost](bugs/2026-08-31-change-settings-unwraps-a-missing-journal.md)
+- [2026-08-31 - a `join` entry's address length is added in its own u16, so a large value panics every member](bugs/2026-08-31-join-payload-len-overflow.md)
 - [2026-08-31 - a joiner heartbeats at the schema default, so a cluster with a short suspect window disconnects every member it admits](bugs/2026-08-31-heartbeat-schedule-stale-interval.md)
 
 ### Investigations

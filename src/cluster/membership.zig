@@ -56,7 +56,13 @@ pub fn decodeJoinPayload(
     bytes: []const u8,
 ) error{ InvalidLength, OutOfMemory }!JoinPayload {
     if (bytes.len < 16 + 32 + 2) return error.InvalidLength;
-    const addr_len = std.mem.readInt(u16, bytes[48..50], .little);
+    // The sum is computed in `usize`, not in the prefix's own `u16`: a
+    // length field near the type's maximum makes `50 + addr_len` overflow
+    // and panic before it is ever compared against the record's real size
+    // (bug 2026-08-31-join-payload-len-overflow, the sibling
+    // `decodeCreateJournalPayload` fixed as
+    // 2026-08-29-entry-decode-payload-len-overflow named and did not fix).
+    const addr_len: usize = std.mem.readInt(u16, bytes[48..50], .little);
     if (50 + addr_len != bytes.len) return error.InvalidLength;
     return .{
         .member_id = bytes[0..16].*,
@@ -851,6 +857,36 @@ test "membership payload codecs round-trip" {
     encodeLeavePayload(.{ .member_id = [_]u8{3} ** 16 }, &leave_buf);
     const leave = try decodeLeavePayload(&leave_buf);
     try std.testing.expectEqualSlices(u8, &[_]u8{3} ** 16, &leave.member_id);
+}
+
+test "a join payload's address length is refused, not added in its own u16" {
+    // Bug 2026-08-31-join-payload-len-overflow: the length check read
+    // `50 + addr_len` with `addr_len` a u16, so the header overhead pushed
+    // the sum past the type and panicked in Debug and ReleaseSafe instead
+    // of refusing the record. Every member folds the same bytes, including
+    // on replay from disk, so a record that panics one member panics all of
+    // them and the chain cannot be reopened.
+    var buf: [50]u8 = undefined;
+    @memset(&buf, 0);
+
+    // The largest value the field can hold.
+    std.mem.writeInt(u16, buf[48..50], std.math.maxInt(u16), .little);
+    try std.testing.expectError(error.InvalidLength, decodeJoinPayload(test_alloc, &buf));
+
+    // The first value whose sum with the 50-byte header leaves the type.
+    std.mem.writeInt(u16, buf[48..50], 65_486, .little);
+    try std.testing.expectError(error.InvalidLength, decodeJoinPayload(test_alloc, &buf));
+
+    // The last value that fits, so the check is still a comparison and not
+    // an unconditional refusal.
+    std.mem.writeInt(u16, buf[48..50], 65_485, .little);
+    try std.testing.expectError(error.InvalidLength, decodeJoinPayload(test_alloc, &buf));
+
+    // And a payload whose field matches its own size still decodes.
+    std.mem.writeInt(u16, buf[48..50], 0, .little);
+    var decoded = try decodeJoinPayload(test_alloc, &buf);
+    defer decoded.deinit(test_alloc);
+    try std.testing.expectEqual(@as(usize, 0), decoded.address.len);
 }
 
 test "re-slots validate like live entries: join bad id refused, leave idempotent" {

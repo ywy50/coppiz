@@ -31,6 +31,14 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- `Node.changeSettings` refuses a journal the chain names and the store lost,
+  instead of aborting. A journal name resolves through the folded registry
+  while the fold map is built from the store's directories, and `init`,
+  `createJournal` and `applyReplicated` all record the `create_journal`
+  before creating the directory - so a crash in that window leaves the two
+  disagreeing, and the reopen is clean. Every sibling method already returned
+  `unknown_journal` for the same lookup. The same unwrap on the wire path
+  (`onSettings`) is recorded in the report and not yet fixed.
 - A member re-arms its heartbeat when the interval it was scheduled under
   turns out to be longer than the current one. `onTick` read
   `cluster.heartbeat_ms` from the fold at the moment it sent and honoured the
@@ -48,6 +56,11 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   decides to fall back to the wire - returned with the caller's descriptor
   open and nobody left to close it. `openPath`'s compensating errdefer and
   `init`'s ownership handover moved with the fix, so nothing closes it twice.
+- A `join` control entry's address length is checked in `usize` rather than
+  in the `u16` the prefix was read into. `50 + addr_len` overflowed for any
+  value within 50 of the type's maximum, so the record panicked the fold in
+  Debug and ReleaseSafe instead of being refused - on every member, and again
+  on replay from disk, leaving the control chain unopenable.
 
 - An allocation failure while folding a `genesis` or a `create_journal` is
   fatal again rather than a settings refusal. Three apply-side call sites
