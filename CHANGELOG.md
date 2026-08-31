@@ -16,6 +16,13 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
 
 ### Fixed
 
+- A refused `Store.open` closes the data directory handle it was given. The
+  call documents that it takes ownership, but only `deinit` closed the
+  handle, so every refusal - including `AlreadyOpen`, which is how the CLI
+  decides to fall back to the wire - returned with the caller's descriptor
+  open and nobody left to close it. `openPath`'s compensating errdefer and
+  `init`'s ownership handover moved with the fix, so nothing closes it twice.
+
 - An allocation failure while folding a `genesis` or a `create_journal` is
   fatal again rather than a settings refusal. Three apply-side call sites
   flattened every failure into `invalid_settings`, `OutOfMemory` included,
