@@ -377,6 +377,24 @@ numbers follow the policy in [RELEASES.md](RELEASES.md).
   rather than `error.Refused`: the cluster refused nothing, and the entry
   may still be in the durable queue.
 
+- A read on the in-memory hub can no longer wait forever. `Direction.readInto`
+  blocked on an untimed `Io.Semaphore.wait` when its queue was empty and the
+  peer had not closed, and nothing on that path carried a deadline - so a
+  frame that never arrived parked the caller for good. The hub is what the
+  unit tests and the simulator's transport run on, so the casualty was `zig
+  build test`: the suite stopped at 0% CPU with nothing in the log naming the
+  test, and the `e2e (b)` convergence poll's own 20 s deadline could not save
+  it, because that deadline is checked between reads and never during one.
+  The semaphore is replaced by a sequence counter waited on with
+  `io.futexWaitTimeout` against a deadline fixed once on entry, snapshotted
+  under the mutex so a push between the unlock and the wait cannot be lost;
+  a read that finds neither data nor a close within `read_timeout_ms`
+  (default 120 s) returns `error.Timeout`, which the pipe conn reports to its
+  caller as `error.ReadFailed`. The number is a backstop rather than an SLA.
+  `Hub.Endpoint.acceptConn` keeps its untimed wait on purpose: blocking until
+  a dialer arrives is what an accept is for. Test-facing and simulator-facing
+  only; the production TCP path is `TcpConn` and was not affected.
+
 ### Added
 
 - Journals can be frozen. `journal.allow_append = false` stops a journal

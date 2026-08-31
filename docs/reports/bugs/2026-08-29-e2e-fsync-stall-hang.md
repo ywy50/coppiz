@@ -99,6 +99,13 @@ silent peer can never hang a caller) is left as a follow-up: the CLI's
 long-lived reads (follow mode) legitimately block, so a deadline needs an
 opt-in policy rather than a blanket timeout.
 
+That follow-up is half done. The in-memory hub's read now carries its own
+deadline, which is the path every test and the simulator take -
+[`Direction.readInto` waits for a frame with no deadline](2026-08-31-hub-read-has-no-deadline.md),
+where the untimed wait named above hung a suite again on 2026-08-31, this
+time with no fsync involved. Over TCP `recvMessage` is still unbounded, and
+the opt-in-policy reasoning above still stands for it.
+
 ## Verification
 
 - Re-ran the previously-hanging reproduction
@@ -109,6 +116,7 @@ opt-in policy rather than a blanket timeout.
 
 ## References
 
+- Follow-up, hub half: [`Direction.readInto` waits for a frame with no deadline](2026-08-31-hub-read-has-no-deadline.md)
 - Code: `src/cluster/node.zig` (`triNodeInit`, `ttlTrioInit`, `e2e (b)`),
   `src/net/client.zig` (`recvMessage`), `src/journal/store.zig` (fsync
   default), std/testing.zig (`tmpDir` → `.zig-cache/tmp`)
